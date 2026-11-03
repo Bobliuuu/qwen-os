@@ -3,15 +3,15 @@
  * using the guest disk API; it is NOT yet the Chocolate-Doom game engine.
  * The fixed-capacity cache is intentional: 32KB of Qwenputer RAM total.
  */
-#define MAX_VERT 64u
-#define MAX_LINES 96u
+#define MAX_VERT 768u
+#define MAX_LINES 1024u
 #define MAX_ENTRIES 8192u /* bound corrupt WAD scans; no directory RAM allocation */
 #define FB_W QOS_FB_W
 #define FB_H QOS_FB_H
 static struct {int16_t x,y;} vertices[MAX_VERT];
 static struct {uint16_t a,b;uint16_t front,back;} lines[MAX_LINES];
-#define MAX_SIDES 96u
-#define MAX_SECTORS 24u
+#define MAX_SIDES 1024u
+#define MAX_SECTORS 192u
 static struct {uint16_t sector;} sides[MAX_SIDES];
 static struct {int16_t floor,ceiling; uint16_t light;} sectors[MAX_SECTORS];
 static unsigned side_count,sector_count;

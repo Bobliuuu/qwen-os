@@ -1,4 +1,4 @@
-# QwenOS v0.8 — a RISC-V operating system experiment for Qwenputer
+# QwenOS v0.10 — a RISC-V operating system experiment for Qwenputer
 
 QwenOS targets the **RV32IM CPU compiled into Qwenputer's transformer layers**:
 https://github.com/divagr18/qwenputer. The long-term goal is to run a genuine
@@ -14,13 +14,13 @@ https://github.com/Bobliuuu/bobliu-os, but the CPU and memory limits differ.
   shell, paint, raycast, asset test, WAD-map renderer) within Qwenputer's
   256-KiB read-only executable ROM. These are static guest entry points, not
   protected or dynamically loaded Unix processes.
-- Per-invocation guest stacks, small writable RAMFS, file descriptors,
+- Two bounded, independent application stacks (the current maximum nesting), small writable RAMFS, file descriptors,
   keyboard mailbox, and 32x24 framebuffer/scanline syscall interface.
 - A 256-byte request/response block device. The **host is storage hardware**;
   it does not interpret game logic. For an entirely self-contained model,
   storage would also need to be implemented inside Qwenputer's state.
 - WAD directory scanner with up to 8192 lumps; THINGS, VERTEXES, LINEDEFS,
-  SIDEDEFS, and SECTORS parsing. On small maps it caches geometry. For larger
+  SIDEDEFS, and SECTORS parsing. On maps fitting 768 vertices, 1024 linedefs, 1024 sidedefs, and 192 sectors it caches geometry. For larger
   maps (up to 8192 vertices and 8192 linedefs) it streams line and vertex
   records from the virtual disk without caching all geometry in 32 KiB RAM.
 - A **DOOM-WAD map viewer**, with sector floor/ceiling-height-sensitive wall
@@ -183,9 +183,31 @@ notification, copies the guest framebuffer, and serves read-only WAD bytes.
 This is a deterministic **headless reference emulator** demo, not interactive
 realtime Qwen3.5 inference and not the actual DOOM gameplay renderer.
 
-The cached geometry path is much faster than the streaming path. In a test
-with 100 vertices and 140 linedefs, the guest needed 438 virtual disk
-requests and 363,298 instructions for one boot and frame. This is likely
+The cached geometry path is much faster than the streaming path. The
+regression fixture with 800 vertices and 140 linedefs exceeds the cache and
+uses the streaming path. This is likely
 prohibitively costly for full levels under present transformer inference.
 A proper BSP traversal and asset-cache/paging strategy are required before
 production maps can be efficient.
+
+## 32-KiB RAM budgeting (v0.10)
+
+The kernel originally reserved 8 * 1536 = 12,288 bytes for application stacks,
+although this firmware has no preemption and currently runs only the shell and
+one child at a time. It now reserves 2 * 1536 = 3072 bytes, returning 9216
+bytes to the memory budget. A linker assertion confines all kernel static
+memory to RAM below `0x1800` (the actual last symbol is checked at build).
+
+The WAD application now has `0x1800..0x6fff` (22 KiB) for static data, and the
+kernel stack is reserved at `0x7000..0x7fff`. Kernel RAM occupancy and ELF
+segment overlap are checked by the build and regression tests. This increases
+the normal geometry cache substantially, but **does not make a full DOOM
+engine fit automatically**: the port still needs asset streaming, heap
+budgeting, executable ROM repacking, and possibly a larger compiled RAM.
+
+A candidate upstream engine is `ArturBieniek4/DMC100-Doom`, a genuine GPL
+DOOM-derived engine optimized for a 32-KiB-RAM embedded system. Its current
+firmware architecture uses externally loaded overlays and several megabytes
+of flash. It cannot simply be linked into our current 16-KiB `doom` ROM slot
+or loaded as runtime code on stock Qwenputer, whose ROM is immutable. Porting
+it requires rebuilding its platform layer and repacking the ROM/overlays.

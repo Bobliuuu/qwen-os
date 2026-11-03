@@ -11,5 +11,5 @@ SECTIONS {
  __data_start = ADDR(.data); __data_end = ADDR(.data) + SIZEOF(.data);
  .bss (NOLOAD) : { __bss_start = .; *(.bss*) *(.sbss*) *(COMMON) __bss_end = .; } > RAM
  __stack_top = 0x8000;
- ASSERT(__bss_end < 0x6000, "no room for kernel stack")
+ ASSERT(__bss_end <= 0x1800, "kernel encroaches on application RAM")
 }

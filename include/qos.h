@@ -16,7 +16,7 @@
 #define QOS_FB_W 32u
 #define QOS_FB_H 24u
 #define QOS_MAX_FD 12u
-#define QOS_MAX_PROC 8u
+#define QOS_MAX_PROC 2u /* one shell plus one guest; bounded for 32 KiB RAM */
 #define QOS_SYS_PUTC 1u
 #define QOS_SYS_OPEN 2u
 #define QOS_SYS_READ 3u

@@ -21,10 +21,10 @@ class MergeTests(unittest.TestCase):
         entry,segments=parse((ROOT/'build/doom.elf').read_bytes())
         writes=[(va,len(blob)) for va,blob,flags in segments if flags & 2]
         self.assertTrue(writes)
-        self.assertTrue(all(0x4000<=a and a+n<=0x5000 for a,n in writes))
+        self.assertTrue(all(0x1800<=a and a+n<=0x7000 for a,n in writes))
         kent,ksegments=parse((ROOT/'build/kernel.elf').read_bytes())
         kernel_ram=[(va,len(blob)) for va,blob,flags in ksegments if flags & 2]
-        self.assertTrue(all(a+n<=0x4000 for a,n in kernel_ram))
+        self.assertTrue(all(a+n<=0x1800 for a,n in kernel_ram))
 
     def test_bad_elf_rejected(self):
         with self.assertRaises(ValueError):parse(b'not ELF')

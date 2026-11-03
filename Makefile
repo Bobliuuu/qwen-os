@@ -2,7 +2,7 @@ CC ?= clang
 # GNU Make has built-in CC=cc; explicitly override for the cross compiler.
 CC := clang
 CFLAGS = --target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -Os -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -msmall-data-limit=0 -Iinclude
-LINK = -fuse-ld=lld -nostdlib -Wl,--no-relax
+LINK = -fuse-ld=lld -nostdlib -Wl,--no-relax -Wl,-z,max-page-size=4
 OUT = build/qwenos.elf
 all: $(OUT)
 build/kernel.elf: kernel/start.S kernel/app_call.S kernel/main.c include/qos.h linker/kernel.ld

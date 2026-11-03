@@ -104,7 +104,7 @@ class DoomMapTests(unittest.TestCase):
     def test_large_map_streams_geometry_without_loading_full_level(self):
         data=bytearray(doom_fixture())
         vertices=[(-64,-64),(128,-64),(128,64),(-64,64)] + [
-            (300+i,300+i) for i in range(96)]
+            (300+i,300+i) for i in range(796)]
         lines=[(0,1),(1,2),(2,3),(3,0)] + [
             (4+i%95,5+i%95) for i in range(136)]
         vb=b''.join(struct.pack('<hh',*v) for v in vertices)
