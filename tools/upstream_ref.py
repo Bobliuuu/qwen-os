@@ -14,7 +14,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from wad_device import fixture
+from wad_device import doom_fixture
 
 
 def symbols(kernel_elf):
@@ -66,7 +66,7 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument('elf',nargs='?',default='build/qwenos.elf')
     p.add_argument('--kernel-elf',default=None)
-    p.add_argument('--max-instructions',type=int,default=250000)
+    p.add_argument('--max-instructions',type=int,default=1500000)
     p.add_argument('--json',action='store_true')
     p.add_argument('--wad-device',action='store_true')
     p.add_argument('--wad',default=None)
@@ -79,7 +79,7 @@ def main():
     dev=None
     if a.wad_device or a.wad:
         kelf=a.kernel_elf or str(Path(a.elf).with_name('kernel.elf'))
-        dev=ReferenceDiskDevice(m,symbols(kelf)['qos_disk_mailbox'],Path(a.wad).read_bytes() if a.wad else fixture())
+        dev=ReferenceDiskDevice(m,symbols(kelf)['qos_disk_mailbox'],Path(a.wad).read_bytes() if a.wad else doom_fixture())
     records=0
     toks=1
     while not m.halted and m.steps<a.max_instructions:

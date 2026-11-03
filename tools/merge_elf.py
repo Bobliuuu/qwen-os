@@ -42,7 +42,7 @@ def merge(output, inputs):
                     raise ValueError(f'overlapping segments {va:#x} and {prev:#x}')
             collected.append((va,data,flags))
     # Independently linked applications must have executable code at their ABI addresses.
-    for expected in (0x60000,0x68000,0x70000,0x78000):
+    for expected in (0x60000,0x68000,0x70000,0x78000,0x7c000):
         if not any(va<=expected<va+len(data) and flags&1 for va,data,flags in collected):
             raise ValueError(f'missing app ROM at {expected:#x}')
     collected.sort()

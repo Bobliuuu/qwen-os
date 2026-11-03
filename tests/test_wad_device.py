@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
-from wad_device import run,fixture,DEMO_LUMP_OFFSET,DEMO_DIRECTORY_OFFSET,DEMO_DATA,WadDevice
+from wad_device import run,fixture,DEMO_LUMP_OFFSET,DEMO_DIRECTORY_OFFSET,DEMO_DATA,WadDevice,doom_fixture
 from rv32_qwenputer import CPU
 
 class WadDeviceTests(unittest.TestCase):
@@ -12,7 +12,8 @@ class WadDeviceTests(unittest.TestCase):
         self.assertEqual(cpu.exitcode,0)
         self.assertIn('asset: WAD read and verified',out)
         self.assertIn('QWENOS_BOOT_OK',out)
-        self.assertEqual(device.reads,[(0,12,True),(DEMO_DIRECTORY_OFFSET,16,True),(DEMO_LUMP_OFFSET,32,True)])
+        self.assertEqual(device.reads[:3],[(0,12,True),(DEMO_DIRECTORY_OFFSET,16,True),(DEMO_LUMP_OFFSET,32,True)])
+        self.assertIn('doom: WAD map geometry rendered',out)
         self.assertGreater(len(fixture()),0x300000)
         self.assertEqual(len(DEMO_DATA),32)
     def test_out_of_bounds_disk_request_reports_failure(self):

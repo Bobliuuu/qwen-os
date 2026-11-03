@@ -11,8 +11,10 @@ build/kernel.elf: kernel/start.S kernel/app_call.S kernel/main.c include/qos.h l
 build/%.elf: apps/%.c include/qos.h linker/%.ld
 	mkdir -p build
 	$(CC) $(CFLAGS) $(LINK) -Wl,-T,linker/$*.ld $< -o $@
-$(OUT): build/kernel.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf tools/merge_elf.py
-	python3 tools/merge_elf.py $@ build/kernel.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf
+$(OUT): build/kernel.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf tools/merge_elf.py
+	python3 tools/merge_elf.py $@ build/kernel.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf
+doom-frame: all
+	python3 tools/export_doom_frame.py --elf $(OUT)
 asset: all
 	python3 tools/wad_device.py $(OUT)
 frame: all
@@ -23,4 +25,4 @@ check: all
 	python3 -m unittest discover -s tests -v
 clean:
 	rm -rf build
-.PHONY: all check clean frame asset
+.PHONY: all check clean frame asset doom-frame

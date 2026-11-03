@@ -26,6 +26,36 @@ def fixture() -> bytes:
     disk[DEMO_DIRECTORY_OFFSET:DEMO_DIRECTORY_OFFSET+16]=struct.pack('<II8s',DEMO_LUMP_OFFSET,len(DEMO_DATA),DEMO_NAME)
     return bytes(disk)
 
+def doom_fixture() -> bytes:
+    """A genuine-format E1M1 lump layout (tiny synthetic square room).
+
+    This is deliberately NOT a stock DOOM asset and doesn't contain id Software
+    textures or game logic. It exercises standard THINGS/LINEDEFS/VERTEXES.
+    """
+    disk=bytearray(fixture())
+    things=struct.pack('<hhhhh',0,0,0,1,7)  # player 1 in center
+    vertices=b''.join(struct.pack('<hh',x,y) for x,y in
+                      [(-64,-64),(128,-64),(128,64),(-64,64)])
+    linedefs=b''.join(struct.pack('<7H',a,b,1,0,0,0,0xffff)
+                       for a,b in [(0,1),(1,2),(2,3),(3,0)])
+    lumps=[(b'QOSDEMO\0',DEMO_LUMP_OFFSET,DEMO_DATA),
+           (b'E1M1\0\0\0\0',0,b''),
+           (b'THINGS\0\0',0x210100,things),
+           (b'LINEDEFS',0x210200,linedefs),
+           (b'SIDEDEFS',0,b''),
+           (b'VERTEXES',0x210300,vertices),
+           (b'SEGS\0\0\0\0',0,b''),
+           (b'SSECTORS',0,b''),
+           (b'NODES\0\0\0',0,b''),
+           (b'SECTORS\0',0,b''),
+           (b'REJECT\0\0',0,b''),
+           (b'BLOCKMAP',0,b'')]
+    disk[:12]=struct.pack('<4sII',b'IWAD',len(lumps),DEMO_DIRECTORY_OFFSET)
+    for i,(name,off,body) in enumerate(lumps):
+        if body:disk[off:off+len(body)]=body
+        disk[DEMO_DIRECTORY_OFFSET+i*16:DEMO_DIRECTORY_OFFSET+(i+1)*16]=struct.pack('<II8s',off,len(body),name)
+    return bytes(disk)
+
 class WadDevice:
     def __init__(self,cpu:CPU,data:bytes):
         self.cpu=cpu
@@ -63,9 +93,9 @@ class WadDevice:
         self.reads.append((offset,length,good))
 
 
-def run(elf,wad=None,max_steps=450000):
+def run(elf,wad=None,max_steps=1500000):
     cpu=CPU(elf)
-    device=WadDevice(cpu,Path(wad).read_bytes() if wad else fixture())
+    device=WadDevice(cpu,Path(wad).read_bytes() if wad else doom_fixture())
     for _ in range(max_steps):
         if cpu.halted:
             break
@@ -78,13 +108,13 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('elf',nargs='?',default='build/qwenos.elf')
     ap.add_argument('--wad')
-    ap.add_argument('--max-steps',type=int,default=450000)
+    ap.add_argument('--max-steps',type=int,default=1500000)
     args=ap.parse_args()
     cpu,dev,out=run(args.elf,args.wad,args.max_steps)
     print(out,end='')
     print(f'[rv32 instructions={cpu.steps} exit={cpu.exitcode} disk reads={dev.reads}]')
     if cpu.exitcode!=0 or not cpu.halted:
         raise SystemExit(1)
-    if not args.wad and 'asset: WAD read and verified' not in out:
+    if not args.wad and ('asset: WAD read and verified' not in out or 'doom: WAD map geometry rendered' not in out):
         raise SystemExit(2)
 if __name__=='__main__':main()

@@ -3,7 +3,7 @@ int app_main(const qos_api *a){
  if(a->abi_version!=1)return 1;
  unsigned key=qcall(a,QOS_SYS_KEY_POLL,0,0,0);
  if(key){qputs(a,"QwenOS input: ");qcall(a,QOS_SYS_PUTC,key&255,0,0);qputs(a,"\n");}
- qputs(a,"QwenOS /bin/sh: pid ");qcall(a,QOS_SYS_PUTC,'0'+qcall(a,QOS_SYS_GETPID,0,0,0),0,0);qputs(a,"\n$ ls\n/README\n/bin/sh\n/bin/paint\n/bin/raycast\n/bin/asset\n/tmp/note\n/tmp/log\n");
+ qputs(a,"QwenOS /bin/sh: pid ");qcall(a,QOS_SYS_PUTC,'0'+qcall(a,QOS_SYS_GETPID,0,0,0),0,0);qputs(a,"\n$ ls\n/README\n/bin/sh\n/bin/paint\n/bin/raycast\n/bin/asset\n/bin/doom\n/tmp/note\n/tmp/log\n");
  qputs(a,"$ cat /README\n");
  unsigned fd=qcall(a,QOS_SYS_OPEN,(uintptr_t)"/README",QOS_O_READ,0);
  if(fd>QOS_MAX_FD)return 2;
@@ -23,6 +23,7 @@ int app_main(const qos_api *a){
  qcall(a,QOS_SYS_CLOSE,fd,0,0);
  qputs(a,"$ run /bin/paint\n");if(qcall(a,QOS_SYS_EXEC,(uintptr_t)"/bin/paint",0,0))return 7;
  qputs(a,"$ run /bin/raycast\n");if(qcall(a,QOS_SYS_EXEC,(uintptr_t)"/bin/raycast",0,0))return 8;
- qputs(a,"$ run /bin/asset\n");if(qcall(a,QOS_SYS_EXEC,(uintptr_t)"/bin/asset",0,0))return 9;
+ qputs(a,"$ run /bin/asset\n");(void)qcall(a,QOS_SYS_EXEC,(uintptr_t)"/bin/asset",0,0);
+ qputs(a,"$ run /bin/doom\n");if(qcall(a,QOS_SYS_EXEC,(uintptr_t)"/bin/doom",0,0))return 10;
  qputs(a,"QwenOS shell finished\n");return 0;
 }

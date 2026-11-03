@@ -16,7 +16,7 @@ static uint32_t rd32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(
 int app_main(const qos_api *a){
  uint8_t h[12],d[16],payload[32];
  if(!load(a,0,h,sizeof(h))){qputs(a,"asset: no disk device\n");return 0;}
- if(h[0]!='I'||h[1]!='W'||h[2]!='A'||h[3]!='D'||rd32(h+4)!=1){qputs(a,"asset: bad WAD header\n");return 1;}
+ if(h[0]!='I'||h[1]!='W'||h[2]!='A'||h[3]!='D'||rd32(h+4)<1){qputs(a,"asset: bad WAD header\n");return 1;}
  uint32_t directory=rd32(h+8);
  if(!load(a,directory,d,sizeof(d))){qputs(a,"asset: directory unavailable\n");return 2;}
  uint32_t pos=rd32(d),sz=rd32(d+4);

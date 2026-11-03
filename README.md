@@ -103,3 +103,33 @@ still needs integration with Qwenputer's runner. The external WAD storage is
 5. If the goal is *all state inside the model*, add in-model WAD storage and
    paging. An external read-only block device is an ordinary OS boundary,
    but is not an entirely in-weights game.
+
+## v0.9: WAD-backed wall rendering from a separate guest executable
+
+- Added `/bin/doom` (ROM `0x7c000`), independently linked from the kernel,
+  with its own writable scratch section in RAM `0x4000..0x4fff`.
+- Guest code reads `IWAD`/`PWAD` headers, finds `E1M1` or `MAP01`, walks the
+  16-byte lump directory, decodes standard 4-byte `VERTEXES`, 14-byte
+  `LINEDEFS`, and 10-byte `THINGS` entries, including the player-1 start.
+- Casts rays against WAD linedef segments and paints a **32x24 untextured
+  first-person wall projection**, using the kernel framebuffer syscalls.
+  One keyboard event can change viewing direction.
+- The included `doom_fixture()` has a synthetic E1M1 room at offsets above
+  2 MiB and its directory above 3 MiB. This is a minimal *format-compatible
+  map fixture*, not a complete playable IWAD or original DOOM assets.
+- `make doom-frame` runs all of this as guest RV32 instructions and saves
+  `build/doom-frame.pgm`. The artifact can be enlarged with nearest-neighbor
+  scaling for inspection.
+- The boot remains healthy when no disk device is available or map geometry
+  is malformed. Tests include corrupt linedefs, missing valid header,
+  rendered pixels and keyboard-driven frame differences.
+
+**Still NOT the DOOM engine:** there is no BSP/sector-height handling, textures,
+collision, sprites, sound, game simulation, or continuous input loop. The
+bounded in-RAM geometry cache currently supports up to 64 vertices and 96
+linedefs, and thus does not yet support ordinary large stock DOOM maps.
+The next required work is a real DOOM engine integration or an incremental
+streaming renderer large enough for real maps; do not claim playable DOOM.
+
+No test here executes the model checkpoint itself. The `upstream_ref.py` path
+also remains unverified until the Qwenputer source dependency is installed.

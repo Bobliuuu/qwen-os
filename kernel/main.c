@@ -2,7 +2,7 @@
 /* Qwenputer has no S-mode, MMU or kernel traps. Guest software uses a fixed
    function-pointer ABI and all guests share a single physical address space.
    Applications are separate ROM-linked ELFs, not isolated processes. */
-#define FILES 7
+#define FILES 8
 #define FILE_SIZE 512
 #define APP_STACK_BYTES 1536u
 static uint8_t app_stacks[QOS_MAX_PROC][APP_STACK_BYTES] __attribute__((aligned(16)));
@@ -24,7 +24,7 @@ static uint32_t disk_active,disk_dest,disk_length,disk_seq;
 static uint32_t key_seq_seen;
 static uint32_t last_present_checksum;
 static const char readme[]="QwenOS: RV32IM kernel, ROM apps, RAMFS, framebuffer, ABI v1.\n";
-static const char * const file_names[FILES]={"/README","/bin/sh","/bin/paint","/bin/raycast","/bin/asset","/tmp/note","/tmp/log"};
+static const char * const file_names[FILES]={"/README","/bin/sh","/bin/paint","/bin/raycast","/bin/asset","/bin/doom","/tmp/note","/tmp/log"};
 static char writable[2][FILE_SIZE];
 static unsigned lengths[2];
 typedef struct {unsigned used,owner,file,pos,write;} fd_t;
@@ -49,6 +49,7 @@ static int spawn(const char *name){
  else if(which==2)addr=QOS_PAINT_ENTRY;
  else if(which==3)addr=QOS_RAY_ENTRY;
  else if(which==4)addr=QOS_ASSET_ENTRY;
+ else if(which==5)addr=QOS_DOOM_ENTRY;
  else return -1;
  if(proc_top>=QOS_MAX_PROC)return -2;
  unsigned old=current_pid,slot=proc_top++,pid=next_pid++;
@@ -66,28 +67,28 @@ static unsigned sys(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
  switch(n){
  case QOS_SYS_PUTC:hw_putc((uint8_t)a);return 0;
  case QOS_SYS_OPEN: {int file=file_number((const char*)a);if(file<0)return (unsigned)-1;
-  if(b==QOS_O_WRITE&&file<5)return (unsigned)-2;
+  if(b==QOS_O_WRITE&&file<6)return (unsigned)-2;
   for(unsigned i=0;i<QOS_MAX_FD;i++)if(!fds[i].used){fds[i]=(fd_t){1,current_pid,(unsigned)file,0,(unsigned)b};return i;}return (unsigned)-3;}
  case QOS_SYS_READ: {unsigned fd=(unsigned)a,len=(unsigned)c;if(!getfd(fd)||!writable_addr(b,len))return (unsigned)-1;
   fd_t *f=&fds[fd];if(f->write)return (unsigned)-2;
   const char *data=0;unsigned total=0;
   if(f->file==0){data=readme;total=sizeof(readme)-1;}
-  if(f->file>=5){unsigned k=f->file-5;data=writable[k];total=lengths[k];}
+  if(f->file>=6){unsigned k=f->file-6;data=writable[k];total=lengths[k];}
   if(!data)return 0;
   if(f->pos>=total)return 0;unsigned avail=total-f->pos;if(len>avail)len=avail;
   for(unsigned i=0;i<len;i++)((char*)b)[i]=data[f->pos+i];f->pos+=len;return len;}
  case QOS_SYS_CLOSE:if(!getfd((unsigned)a))return (unsigned)-1;fds[a].used=0;return 0;
- case QOS_SYS_CREATE: {int file=file_number((const char*)a);if(file<5)return (unsigned)-1;lengths[file-5]=0;return 0;}
+ case QOS_SYS_CREATE: {int file=file_number((const char*)a);if(file<6)return (unsigned)-1;lengths[file-6]=0;return 0;}
  case QOS_SYS_WRITE:{unsigned fd=(unsigned)a,len=(unsigned)c;if(!getfd(fd)||!readable(b,len))return (unsigned)-1;
-  fd_t *f=&fds[fd];if(!f->write||f->file<5)return (unsigned)-2;
-  unsigned k=f->file-5;if(f->pos>FILE_SIZE)return (unsigned)-3;
+  fd_t *f=&fds[fd];if(!f->write||f->file<6)return (unsigned)-2;
+  unsigned k=f->file-6;if(f->pos>FILE_SIZE)return (unsigned)-3;
   if(len>FILE_SIZE-f->pos)len=FILE_SIZE-f->pos;
   for(unsigned i=0;i<len;i++)writable[k][f->pos+i]=((const char*)b)[i];f->pos+=len;
   if(f->pos>lengths[k])lengths[k]=f->pos;return len;}
  case QOS_SYS_EXEC:if(!name_ok((const char*)a))return (unsigned)-1;return (unsigned)spawn((const char*)a);
  case QOS_SYS_FB_SET:if(a>=QOS_FB_W||b>=QOS_FB_H)return (unsigned)-1;framebuffer[b*QOS_FB_W+a]=(uint8_t)c;return 0;
  case QOS_SYS_FB_CLEAR:for(unsigned i=0;i<sizeof(framebuffer);i++)framebuffer[i]=(uint8_t)a;return 0;
- case QOS_SYS_STAT:{int f=file_number((const char*)a);if(f<0)return (unsigned)-1;if(f==0)return sizeof(readme)-1;if(f>=5)return lengths[f-5];return 0;}
+ case QOS_SYS_STAT:{int f=file_number((const char*)a);if(f<0)return (unsigned)-1;if(f==0)return sizeof(readme)-1;if(f>=6)return lengths[f-6];return 0;}
  case QOS_SYS_GETPID:return current_pid;
  case QOS_SYS_YIELD:return 0; /* No hardware timer: cooperative execution only. */
  case QOS_SYS_FB_GET:if(a>=QOS_FB_W||b>=QOS_FB_H)return (unsigned)-1;return framebuffer[b*QOS_FB_W+a];
@@ -133,7 +134,7 @@ static unsigned sys(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
 int qos_main(void){
  const char *s="QwenOS: Qwenputer RV32IM kernel\n";while(*s)hw_putc(*s++);
  int rc=spawn("/bin/sh");
- if(rc||executions!=4||framebuffer[0]!=1||framebuffer[15+12*QOS_FB_W]!=9)return 8;
+ if(rc||executions!=5||last_present_checksum==0)return 8;
  s="QWENOS_BOOT_OK\n";while(*s)hw_putc(*s++);
  return 0;
 }

@@ -12,6 +12,7 @@
 #define QOS_PAINT_ENTRY 0x68000u
 #define QOS_RAY_ENTRY   0x70000u
 #define QOS_ASSET_ENTRY 0x78000u
+#define QOS_DOOM_ENTRY 0x7c000u
 #define QOS_FB_W 32u
 #define QOS_FB_H 24u
 #define QOS_MAX_FD 12u
