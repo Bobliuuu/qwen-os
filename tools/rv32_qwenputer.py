@@ -17,7 +17,7 @@ class CPU:
   from pathlib import Path
   data=Path(elf).read_bytes()
   assert data[:4]==b'\x7fELF' and data[4]==1 and data[5]==1
-  self.output=[];self.exitcode=None;self.halted=False
+  self.output=[];self.byte_events=[];self.exitcode=None;self.halted=False
   self.pc=struct.unpack_from('<I',data,24)[0]
   phoff=struct.unpack_from('<I',data,28)[0]
   entsize,count=struct.unpack_from('<HH',data,42)
@@ -97,6 +97,7 @@ class CPU:
   elif op==0x0f:pass
   elif op==0x73:
    if self.reg[17]==1:
+    self.byte_events.append(self.reg[10]&511)
     self.output.append(chr(self.reg[10]&255))
    elif self.reg[17]==93:
     self.exitcode=self.reg[10];self.halted=True

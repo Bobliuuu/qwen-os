@@ -32,7 +32,7 @@ static fd_t fds[QOS_MAX_FD];
 typedef struct {unsigned pid,parent,state,exitcode;} proc_t;
 static proc_t procs[QOS_MAX_PROC];
 static unsigned next_pid=1,current_pid=0,proc_top=0,executions=0;
-static void hw_putc(uint8_t c){register unsigned a0 asm("a0")=c;register unsigned a7 asm("a7")=1;asm volatile("ecall" : "+r"(a0):"r"(a7):"memory");}
+static void hw_putc(uint32_t c){register unsigned a0 asm("a0")=c;register unsigned a7 asm("a7")=1;asm volatile("ecall" : "+r"(a0):"r"(a7):"memory");}
 static int streq(const char *a,const char *b){while(*a&&*a==*b){a++;b++;}return *a==*b;}
 static int inside(uintptr_t a,uintptr_t n,uintptr_t lo,uintptr_t hi){return a>=lo&&a<hi&&n<=hi-a;}
 static int readable(uintptr_t a,uintptr_t n){return inside(a,n,QOS_RAM_BEGIN,QOS_RAM_END)||inside(a,n,QOS_DROM_BEGIN,QOS_DROM_END);}
@@ -131,6 +131,31 @@ static unsigned sys(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
  default:return (unsigned)-1;
  }
 }
+#ifdef QOS_MODEL_BRIDGE
+/* Qwenputer's merged model starts with the firmware PARKED at its first exit
+ * ecall. When a Qwen tool call produces GO, the instruction immediately after
+ * that ecall resumes. This probe uses the SAME kernel syscalls as the full OS,
+ * but intentionally avoids its expensive and asynchronous disk workload.
+ * a0=256/257 emits bridge-special <tool_response> tags, not ordinary bytes.
+ */
+int qos_main(void){
+ register uint32_t a0 asm("a0")=0, a7 asm("a7")=93;
+ asm volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
+ hw_putc(256u);
+ if(api.abi_version!=1u || sys(QOS_SYS_FB_SET,3,4,7)!=0u ||
+    sys(QOS_SYS_FB_GET,3,4,0)!=7u ||
+    sys(QOS_SYS_GETPID,0,0,0)!=0u){
+  const char *p="QWENOS_MODEL_PROBE_FAIL\n";
+  while(*p)hw_putc((uint8_t)*p++);
+  hw_putc(257u);
+  return 5;
+ }
+ const char *p="QWENOS_MODEL_PROBE_OK\n";
+ while(*p)hw_putc((uint8_t)*p++);
+ hw_putc(257u);
+ return 0;
+}
+#else
 int qos_main(void){
  const char *s="QwenOS: Qwenputer RV32IM kernel\n";while(*s)hw_putc(*s++);
  int rc=spawn("/bin/sh");
@@ -138,3 +163,5 @@ int qos_main(void){
  s="QWENOS_BOOT_OK\n";while(*s)hw_putc(*s++);
  return 0;
 }
+
+#endif /* QOS_MODEL_BRIDGE */

@@ -1,4 +1,4 @@
-# QwenOS v0.10 — a RISC-V operating system experiment for Qwenputer
+# QwenOS v0.11 — a RISC-V operating system experiment for Qwenputer
 
 QwenOS targets the **RV32IM CPU compiled into Qwenputer's transformer layers**:
 https://github.com/divagr18/qwenputer. The long-term goal is to run a genuine
@@ -6,7 +6,7 @@ DOOM executable **as an application of an operating system**, rather than as
 standalone DOOM firmware. Architecture is inspired by
 https://github.com/Bobliuuu/bobliu-os, but the CPU and memory limits differ.
 
-## Current implementation (v0.10, November 2026)
+## Current implementation (v0.11, November 2026)
 
 **Verified locally on the independent RV32 emulator, not inside Qwen's model:**
 
@@ -28,7 +28,7 @@ https://github.com/Bobliuuu/bobliu-os, but the CPU and memory limits differ.
   simple wall-crossing collision, and repeatable interactive frames. Draws
   are performed by guest RV32 instructions, with scanline framebuffer copies.
 - A synthetic WAD regression fixture, not commercial game content.
-- **27 regression tests pass locally** (`make check`). The multi-frame emulator
+- **29 regression tests pass locally** (`make check`). The multi-frame emulator
   produces three independent guest-rendered frames (`--keys wd`).
 
 **Not implemented:** a genuine DOOM engine (BSP rendering, real textures,
@@ -80,6 +80,62 @@ to supply a real WAD. The tool uses upstream `chipformer.rv.elf.program` and
 machine's RAM word array. The adapter's memory logic is locally tested;
 **we could not run the upstream package here** because it is not installed
 and network fetching is unavailable.
+
+## DOOM platform HAL and genuine-engine status
+
+The `ports/doom/hal.{h,c}` layer now implements the actual QwenOS device
+contract required by a native DOOM engine: 256-byte paged WAD reads,
+8-bit framebuffer scanline presents, and guest keyboard polls. The existing
+WAD geometry application now uses this shared layer. This gives us a real
+OS-device integration point instead of duplicating syscalls inside the viewer.
+
+**This is NOT a genuine DOOM engine port.** The required engine gameplay,
+BSP, textures, sprites, and sector machinery from id's GPL source or the
+DMC100 memory-constrained port are absent. DMC100-Doom uses external code
+overlays and preconverted assets; Qwenputer does not execute from RAM. A
+real port must prelink code into the ROM, or modify Qwenputer's compiled
+CPU. Model-side WAD device servicing also requires pausing and updating
+DeltaNet RAM snapshots between generated trace bursts. Neither of those
+features has yet been verified on the merged model.
+
+## v0.11 model-side handshake
+
+The firmware `build/qwenos-model-probe.elf` is compiled directly from the
+**same QwenOS kernel implementation** with `QOS_MODEL_BRIDGE`. It runs the
+kernel startup, then intentionally parks at `ecall a7=93`, without output.
+When a Qwenputer tool call resumes it, it executes `QOS_SYS_FB_SET`,
+`QOS_SYS_FB_GET`, validates the ABI and PID, and emits the special Qwenputer
+`<tool_response>` and `</tool_response>` tokens (BYTE payloads 256/257)
+surrounding `QWENOS_MODEL_PROBE_OK`. The second exit parks it again.
+
+Build and test park/resume **on an independent CPU**:
+
+```sh
+make model-probe
+```
+
+Run it against **upstream's official reference CPU** (not Qwen's weights):
+
+```sh
+PYTHONPATH=/path/to/qwenputer/experimental/riscv \
+  python3 tools/upstream_probe.py build/qwenos-model-probe.elf
+```
+
+Run it **inside Qwenputer's actual merged checkpoint** (GPU and Qwenputer
+Python environment required):
+
+```sh
+PYTHONPATH=/path/to/qwenputer/experimental/riscv \
+  python3 tools/model_probe_qwen.py /path/to/Qwen3.5-4B-Qwenputer \
+  --elf build/qwenos-model-probe.elf
+```
+
+The model test uses Qwenputer's own `RvChat.generate`, its compiled layers
+and an upstream reference lockstep oracle. It checks for marker, zero
+lockstep divergence, and zero compiled-circuit head mismatches. It is **not**
+a full OS/model boot (no process or WAD disk on this path yet), and cannot
+be verified without the checkpoint and GPU. Never confuse `make model-probe`
+with neural execution.
 
 ## Actual Qwen model execution
 

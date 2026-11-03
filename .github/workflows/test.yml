@@ -27,10 +27,14 @@ jobs:
       - name: Install build/runtime tools
         run: sudo apt-get update && sudo apt-get install -y clang lld binutils make python3
       - name: Build the EXACT firmware tested independently
-        run: make all
+        run: make all model-probe
       - name: Fetch upstream Qwenputer CPU implementation
         run: git clone --depth 1 https://github.com/divagr18/qwenputer.git /tmp/qwenputer
       - name: Run Qwenputer's own instruction-tracing reference machine
         env:
           PYTHONPATH: /tmp/qwenputer/experimental/riscv
         run: python3 tools/upstream_ref.py build/qwenos.elf --wad-device --max-instructions 2000000 --json
+      - name: QwenOS bridge firmware on official Qwenputer reference CPU
+        env:
+          PYTHONPATH: /tmp/qwenputer/experimental/riscv
+        run: python3 tools/upstream_probe.py build/qwenos-model-probe.elf

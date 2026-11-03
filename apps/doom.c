@@ -1,4 +1,5 @@
 #include "qos.h"
+#include "hal.h"
 /* QwenOS's first WAD-driven renderer. This reads real DOOM-format MAP geometry
  * using the guest disk API; it is NOT yet the Chocolate-Doom game engine.
  * The fixed-capacity cache is intentional: 32KB of Qwenputer RAM total.
@@ -26,21 +27,7 @@ static int32_t player_x,player_y;
 static uint32_t rd32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 static uint16_t rd16(const uint8_t *p){return (uint16_t)(p[0]|p[1]<<8);}
 static int16_t signed16(const uint8_t *p){return (int16_t)rd16(p);}
-static int read_disk(const qos_api *a,uint32_t off,uint8_t *dst,unsigned n){
- while(n){
-  unsigned count=n>256u?256u:n;
-  if(qcall(a,QOS_SYS_DISK_REQUEST,off,(uintptr_t)dst,count))return 0;
-  unsigned ok=0;
-  for(unsigned j=0;j<16;j++){
-   uint32_t r=qcall(a,QOS_SYS_DISK_POLL,0,0,0);
-   if(r==count){ok=1;break;}
-   if(r)return 0;
-  }
-  if(!ok){qcall(a,QOS_SYS_DISK_CANCEL,0,0,0);return 0;}
-  off+=count;dst+=count;n-=count;
- }
- return 1;
-}
+#define read_disk qos_doom_wad_read
 static int match8(const uint8_t *p,const char *s){
  for(unsigned i=0;i<8;i++)if(p[i]!=(uint8_t)s[i])return 0;
  return 1;
@@ -243,9 +230,7 @@ static int draw(const qos_api *a,unsigned direction){
   unsigned top=(FB_H-(unsigned)height)/2;
   for(unsigned y=top;y<top+(unsigned)height;y++)frame[y*FB_W+col]=shades[col];
  }
- for(unsigned y=0;y<FB_H;y++)
-  qcall(a,QOS_SYS_FB_ROW,y,(uintptr_t)&frame[y*FB_W],FB_W);
- qcall(a,QOS_SYS_FB_PRESENT,0,0,0);
+ if(!qos_doom_present8(a,frame))return 0;
  return 1;
 }
 int app_main(const qos_api *a){
@@ -257,7 +242,7 @@ int app_main(const qos_api *a){
   * frame may take tens of thousands of guest instructions. The host only
   * supplies key events and WAD pages; all rendering executes in RV32. */
  for(unsigned tick=0;tick<4;tick++){
-  unsigned key=qcall(a,QOS_SYS_KEY_POLL,0,0,0);
+  unsigned key=qos_doom_key(a);
   if(!key)break;
   if(key=='d')dir=(dir+1)&3u;
   else if(key=='a')dir=(dir+3)&3u;
