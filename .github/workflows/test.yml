@@ -1,0 +1,13 @@
+name: QwenOS reference boot
+on:
+  push:
+  pull_request:
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang lld binutils make python3
+      - name: Build and execute RV32 reference tests
+        run: make check
