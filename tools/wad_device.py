@@ -36,18 +36,20 @@ def doom_fixture() -> bytes:
     things=struct.pack('<hhhhh',0,0,0,1,7)  # player 1 in center
     vertices=b''.join(struct.pack('<hh',x,y) for x,y in
                       [(-64,-64),(128,-64),(128,64),(-64,64)])
-    linedefs=b''.join(struct.pack('<7H',a,b,1,0,0,0,0xffff)
-                       for a,b in [(0,1),(1,2),(2,3),(3,0)])
+    linedefs=b''.join(struct.pack('<7H',a,b,1,0,0,i,0xffff)
+                       for i,(a,b) in enumerate([(0,1),(1,2),(2,3),(3,0)]))
+    sidedefs=b''.join(struct.pack('<hh8s8s8sH',0,0,b'-\0'*4,b'-\0'*4,b'WALL\0\0\0\0',0) for _ in range(4))
+    sectors=struct.pack('<hh8s8sHHH',0,128,b'FLOOR\0\0\0',b'CEIL\0\0\0\0',192,0,0)
     lumps=[(b'QOSDEMO\0',DEMO_LUMP_OFFSET,DEMO_DATA),
            (b'E1M1\0\0\0\0',0,b''),
            (b'THINGS\0\0',0x210100,things),
            (b'LINEDEFS',0x210200,linedefs),
-           (b'SIDEDEFS',0,b''),
+           (b'SIDEDEFS',0x210500,sidedefs),
            (b'VERTEXES',0x210300,vertices),
            (b'SEGS\0\0\0\0',0,b''),
            (b'SSECTORS',0,b''),
            (b'NODES\0\0\0',0,b''),
-           (b'SECTORS\0',0,b''),
+           (b'SECTORS\0',0x210400,sectors),
            (b'REJECT\0\0',0,b''),
            (b'BLOCKMAP',0,b'')]
     disk[:12]=struct.pack('<4sII',b'IWAD',len(lumps),DEMO_DIRECTORY_OFFSET)

@@ -1,13 +1,36 @@
-name: QwenOS reference boot
+name: QwenOS RISC-V compatibility
 on:
   push:
   pull_request:
 jobs:
-  build-and-test:
+  independent-reference:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install cross toolchain
+      - name: Install RV32 compiler dependencies
         run: sudo apt-get update && sudo apt-get install -y clang lld binutils make python3
-      - name: Build and execute RV32 reference tests
-        run: make check
+      - name: Compile and test independent reference CPU
+        run: make clean check
+      - name: Test guest WAD graphics and frame input
+        run: |
+          make doom-frame
+          python3 tools/interactive_frames.py --keys wd
+      - name: Upload guest-rendered frames
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwenos-guest-frames
+          path: build/*.pgm
+  upstream-qwenputer-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build/runtime tools
+        run: sudo apt-get update && sudo apt-get install -y clang lld binutils make python3
+      - name: Build the EXACT firmware tested independently
+        run: make all
+      - name: Fetch upstream Qwenputer CPU implementation
+        run: git clone --depth 1 https://github.com/divagr18/qwenputer.git /tmp/qwenputer
+      - name: Run Qwenputer's own instruction-tracing reference machine
+        env:
+          PYTHONPATH: /tmp/qwenputer/experimental/riscv
+        run: python3 tools/upstream_ref.py build/qwenos.elf --wad-device --max-instructions 2000000 --json

@@ -6,30 +6,48 @@ DOOM executable **as an application of an operating system**, rather than as
 standalone DOOM firmware. Architecture is inspired by
 https://github.com/Bobliuuu/bobliu-os, but the CPU and memory limits differ.
 
-## Verified now
+## Current implementation (v0.10, November 2026)
 
-- A freestanding C RV32IM kernel, booted as a Qwenputer-layout ELF on an
-  **independent Python reference interpreter** (NOT a GPU model run).
-- Four independently linked ROM application ELFs: shell, paint, raycaster,
-  and WAD-asset test (plus the separate kernel ELF). All guest control flow executes as RISC-V
-  instructions; the guest raycaster is **not** DOOM.
-- Guest API v1 with file operations, basic RAMFS, nested application entry,
-  independent bounded invocation stacks, keyboard mailbox, 32×24 framebuffer,
-  scanline copies and a present/checksum function.
-- Read-only virtual disk mailbox (256 bytes per request, bounded guest buffer,
-  sequence-numbered request/response, cancellation and bounds/error checks).
-- Guest WAD file parser proof: reads 12-byte IWAD header, 16-byte directory
-  entry at 0x300000 and a 32-byte lump at 0x210000, through the **kernel API**.
-  The host only transfers requested bytes. This runs against a synthetic
-  4-MiB WAD fixture; it is NOT commercial DOOM game data.
-- **15 Python regression tests passing** including genuine RV32 guest execution,
-  disk requests, invalid reads and a Qwenputer-word-RAM mailbox adapter.
+**Verified locally on the independent RV32 emulator, not inside Qwen's model:**
+
+- Freestanding RV32IM kernel and six separately linked ELF regions (kernel,
+  shell, paint, raycast, asset test, WAD-map renderer) within Qwenputer's
+  256-KiB read-only executable ROM. These are static guest entry points, not
+  protected or dynamically loaded Unix processes.
+- Per-invocation guest stacks, small writable RAMFS, file descriptors,
+  keyboard mailbox, and 32x24 framebuffer/scanline syscall interface.
+- A 256-byte request/response block device. The **host is storage hardware**;
+  it does not interpret game logic. For an entirely self-contained model,
+  storage would also need to be implemented inside Qwenputer's state.
+- WAD directory scanner with up to 8192 lumps; THINGS, VERTEXES, LINEDEFS,
+  SIDEDEFS, and SECTORS parsing. On small maps it caches geometry. For larger
+  maps (up to 8192 vertices and 8192 linedefs) it streams line and vertex
+  records from the virtual disk without caching all geometry in 32 KiB RAM.
+- A **DOOM-WAD map viewer**, with sector floor/ceiling-height-sensitive wall
+  projections, rejection of malformed sector indices, WASD movement/turning,
+  simple wall-crossing collision, and repeatable interactive frames. Draws
+  are performed by guest RV32 instructions, with scanline framebuffer copies.
+- A synthetic WAD regression fixture, not commercial game content.
+- **27 regression tests pass locally** (`make check`). The multi-frame emulator
+  produces three independent guest-rendered frames (`--keys wd`).
+
+**Not implemented:** a genuine DOOM engine (BSP rendering, real textures,
+monsters, collision/sliding, game state, sound, real-time play), hardware
+privilege isolation, executable loading from writable memory, or model-side
+WAD request handling. Local tests do NOT prove that Qwen3.5's compiled
+transformer layers executed the guest. The model checkpoint and GPU are not
+present in this container.
+
+The upstream CPU's ROM is read-only: independent ROM-linked ELF applications
+are supported, but dynamic process loading would require executing code from
+RAM or an equivalent hardware extension. The WAD viewer is not a DOOM port.
 
 ## Build and test (Clang/LLD + readelf + Python 3)
 
 ```sh
 make clean && make check
-make frame
+make doom-frame
+python3 tools/interactive_frames.py --keys wd
 python3 tools/wad_device.py build/qwenos.elf
 ```
 
@@ -83,7 +101,7 @@ still needs integration with Qwenputer's runner. The external WAD storage is
   framebuffer, and disk request/reply mailbox in this region.
 - Data ROM 0x20000–0x3ffff: 128 KiB read-only.
 - Executable ROM 0x40000–0x7ffff: 256 KiB, partitioned at build time into
-  five ROM-linked programs (kernel and four applications).
+  six ROM-linked regions (kernel and five application ELFs).
 - The hardware has no privilege levels, memory protection, timer interrupt,
   or execute-from-RAM. These applications are not isolated Unix processes;
   their binaries are prelinked at fixed ROM addresses and their syscalls
@@ -133,3 +151,41 @@ streaming renderer large enough for real maps; do not claim playable DOOM.
 
 No test here executes the model checkpoint itself. The `upstream_ref.py` path
 also remains unverified until the Qwenputer source dependency is installed.
+
+## Exact acceptance gates for the requested end goal
+
+1. `make check` passes on the independent interpreter (done).
+2. The `upstream-qwenputer-reference` CI job passes using **Qwenputer's own**
+   `chipformer.rv.ref.Machine` against the identical QwenOS ELF (not yet run).
+3. A compatible checkpoint (not the chat bridge alone) produces the same
+   instruction trace/guest output as Qwenputer's reference machine (not run).
+4. Qwenputer model-side memory state supports block-device request/response
+   pause and resume without letting the host execute guest instructions.
+5. A genuine GPL DOOM engine is ported to the guest API and runs with
+   appropriate game assets, correct simulation and rendered game frames.
+
+The CI workflow added here verifies (2) automatically **after the user pushes**
+these files. It does not validate model (3). If (2) fails, the official
+reference CPU and this interpreter are not compatible and that bug must be
+fixed before claiming any model-side results.
+
+## Interactive guest-frame reproduction
+
+```sh
+make check
+python3 tools/interactive_frames.py --keys wd
+# build/interactive-00.pgm, -01.pgm, -02.pgm: raw 32x24 guest frames
+```
+
+All three frames are generated by guest RV32 application instructions. The
+host injects one key into an input mailbox after each frame completion
+notification, copies the guest framebuffer, and serves read-only WAD bytes.
+This is a deterministic **headless reference emulator** demo, not interactive
+realtime Qwen3.5 inference and not the actual DOOM gameplay renderer.
+
+The cached geometry path is much faster than the streaming path. In a test
+with 100 vertices and 140 linedefs, the guest needed 438 virtual disk
+requests and 363,298 instructions for one boot and frame. This is likely
+prohibitively costly for full levels under present transformer inference.
+A proper BSP traversal and asset-cache/paging strategy are required before
+production maps can be efficient.
