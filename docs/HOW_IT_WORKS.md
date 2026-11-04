@@ -34,7 +34,7 @@ doomd **takes over** nearly all the RAM. The code lives in read-only ROM, becaus
 
 <p align="center"><img src="assets/verify-strip.svg" alt="Timeline strip: snapshot, generate, compare, segment ok, next snapshot" width="100%"></p>
 
-What has actually run on the model: a probe, a title frame (6,563 instr), and a cold boot to the first frame marker (1,552,382 instr, 292 segments, zero divergence, earlier pre-merge build). Gameplay frames are 🚧 in progress <!-- PENDING:clip -->.
+What has actually run on the model: a probe, a title frame (6,563 instr), and a cold boot to the first frame marker (1,552,382 instr, 292 segments, zero divergence, earlier pre-merge build). Since then the model has also verified a 45-frame (3 s) scripted E1M1 clip: 35 chunks, 81,065,587 instructions, zero divergence, with pixels rendered by the emulator ([ledger](CLIP_LEDGER.md)).
 
 ## 5. Why chunk ROM removes the disk pauses
 
@@ -42,11 +42,11 @@ What has actually run on the model: a probe, a title frame (6,563 instr), and a 
 
 `tools/chunkrom.py` plans which disk bytes each stretch of the game needs and preloads them into the window at 0x29000..0x3f000. If a read misses, the engine still falls back to the disk mailbox, so correctness never depends on the plan (a deliberate-miss test gives byte-identical output). Price: +10.6 % instructions.
 
-## 6. Next up: chunking across GPUs
+## 6. Chunking across GPUs
 
-<p align="center"><img src="assets/gpu-chunks.svg" alt="Plan: the 3-second clip split into about 30 chunks, fanned out to GPUs, merged into a ledger, pending" width="100%"></p>
+<p align="center"><img src="assets/gpu-chunks.svg" alt="The 3-second clip split into chunks, fanned out to GPUs, merged into a ledger" width="100%"></p>
 
-🚧 A plan, not a result. <!-- PENDING:clip -->
+The clip was split into 35 chunks and run on 29 Modal A100, 3 Lambda A100 and 3 AWS A10G jobs, each verified in lockstep. The diagram shows the idea; the real ledger is [CLIP_LEDGER.md](CLIP_LEDGER.md).
 
 ## 7. The journey
 
@@ -54,7 +54,7 @@ What has actually run on the model: a probe, a title frame (6,563 instr), and a 
 
 ## Honesty box
 
-> The pixels in the GIF come from the emulator. The model verifies the instruction trace (frame marker, console bytes, instruction count, lockstep), not the pixels. Disk is host-served, keyboard input is simulated, the clock is virtual, and it is not real time (about 1.1 k instr/s). The 3-second clip and gameplay frames on the model are in progress. Full list: [HONESTY.md](research/HONESTY.md).
+> The pixels in the GIF come from the emulator. The model verifies the instruction trace (frame marker, console bytes, instruction count, lockstep), not the pixels. Disk is host-served, keyboard input is simulated, the clock is virtual, and it is not real time (about 1.1 k instr/s). The 3-second clip (45 frames, 35 chunks) is model-verified for the instruction trace only; the typed `run /bin/doomd` flow is not. Full list: [HONESTY.md](research/HONESTY.md).
 
 ## Where to go next
 

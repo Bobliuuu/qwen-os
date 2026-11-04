@@ -27,7 +27,7 @@ QwenOS is the little OS we gave it: a kernel, a shell, a keyboard, a 32x24 frame
 Then we asked it to run a *real* DOOM engine ([DMC100-Doom](https://github.com/ArturBieniek4/DMC100-Doom) on [Freedoom](https://freedoom.github.io) data) as an ordinary program, `/bin/doomd`.
 Architecture is inspired by [bobliu-os](https://github.com/Bobliuuu/bobliu-os).
 
-> **Honest summary:** the whole thing works on an emulator, and the real Qwen model has verified a cold boot all the way to the first frame marker. Gameplay frames *on the model* are still in progress. Details in [what is real](#what-is-real-and-what-is-not).
+> **Honest summary:** the whole thing works on an emulator. The real Qwen model has verified a cold boot to the first frame marker, and all 45 frames (3 s at 15 fps) of a scripted E1M1 clip, stitched from 35 separately verified chunks. Pixels come from the emulator, not the model. The typed `run /bin/doomd` flow has not been model-verified. Details in [the clip](#the-3-second-clip) and [what is real](#what-is-real-and-what-is-not).
 
 ## What you can do in 30 seconds
 
@@ -75,7 +75,7 @@ FULL preset means a 160x200 low-detail view, game logic every tic, and 15 of eve
 | T0 | C emulator `tools/rv32_fast` | Everything: typed flow, E1M1 gameplay, chunk ROM, regression goldens, a 1060-frame scripted E1M1 video |
 | T1 | Upstream reference CPU (`chipformer.rv.ref.Machine`) and our Python reference | Lockstep equal to the emulator for 6,000,000 instr of the merged build (level load and 2 frames); upstream also boots the kernel (120,267 instr) |
 | T2 | The real Qwen model (merged Qwen3.5-4B, A100) with a lockstep oracle | Probe; title frame (6,563 instr); **cold boot to the first frame marker: 1,552,382 instr, 292 segments, zero divergence**, on an earlier (pre-merge) build |
-| T2, gameplay | The real Qwen model | 🚧 in progress: no E1M1 frame has been run on the model yet <!-- PENDING:gameplay --> |
+| T2, gameplay | The real Qwen model (Qwen3.5-4B, lockstep oracle) | The 3-second E1M1 clip: 45 frames, 35 chunks, 81,065,587 instr, zero divergence, scripted input (see [the clip](#the-3-second-clip)). Not model-verified: the typed `run /bin/doomd` flow (ELF-build level only) |
 
 Things you should know before you get too excited:
 
@@ -85,23 +85,26 @@ Things you should know before you get too excited:
 - **Pixels** are rendered by the emulator. The model verifies the instruction trace (frame marker, console bytes, instruction count, lockstep), not the pixels.
 - **Segments**: a model run is a series of host-snapshotted segments, and "zero divergence" is per segment.
 - **Not real-time.** At about 1.1 k instr/s, one game tic (roughly 0.5 to 5 M instr) takes many minutes.
-- The merged build has not itself been run on the model. Scope is E1M1.
+- The typed `run /bin/doomd` flow has not been run on the model; the clip uses a dedicated E1M1 demo build with scripted input. Scope is E1M1.
+- Full Python-reference replay covers only segments 1-4; the C twin covers segments 5-38. One chunk (c02) has an unexplained +5 instruction difference that we have not decoded.
 
 Full list: [`docs/research/HONESTY.md`](docs/research/HONESTY.md).
 
 ## The 3-second clip
 
-🚧 **In progress.** <!-- PENDING:clip -->
-We are stitching model-verified runs into a short clip of E1M1 (target: 15 rendered fps, FULL preset). When it is done this section will say how many frames and how many separate model runs were stitched, and which frames are model-verified versus emulator-only.
+<p align="center"><img src="docs/assets/qwenos-doom-3s.gif" alt="The 3-second E1M1 clip, 45 frames at 15 fps" width="480"><br><a href="docs/assets/qwenos-doom-3s.mp4">Full-quality MP4 (960x720, 15 fps)</a> · <a href="docs/assets/qwenos-doom-3s-contact.png">contact sheet</a> · <a href="docs/CLIP_LEDGER.md">per-frame and per-chunk ledger</a></p>
+
+E1M1, FULL preset (160x200 low-detail view, status bar), 15 rendered frames per 35 game tics. The player walks forward, turns right, fires the pistol and keeps walking. The input is a compiled-in script (`q_script`), not typed live.
 
 | Field | Value |
 |---|---|
-| Frames in the clip | pending <!-- PENDING:clip --> |
-| Separate model runs stitched | pending <!-- PENDING:clip --> |
-| Frames model-verified | pending <!-- PENDING:clip --> |
-| Frames emulator-only | pending <!-- PENDING:clip --> |
+| Frames in the clip | 45 (3 s at 15 fps), E1M1 |
+| Separate model runs stitched | 35 chunks: 29 Modal A100, 3 Lambda A100, 3 AWS A10G |
+| Frames model-verified | 45 of 45 (real Qwen3.5-based model, lockstep oracle, zero divergence) |
+| Instructions | 81,065,587 in the run plan; 81,065,591 executed by the model plus 35 host-executed boundary instructions |
+| Disk requests | 4 in total (host-served disk replaced by chunk ROM) |
 
-Until then, the only model-verified frame marker is the cold-boot picture.
+What "verified" means here: the model executed the instruction trace in lockstep with the oracle, and the frame markers and console bytes matched. **The pixels come from the emulator** (same ELF and state), not from the model. Disclosures: keys are simulated, the clock is virtual, the disk is host-served through chunk-ROM windows, and each chunk starts from a host-supplied snapshot. Not covered: the typed `run /bin/doomd` flow; a full Python-reference replay (only segments 1-4, the C twin covers 5-38); and a +5 instruction difference in chunk c02 that we have not decoded. The original run plan failed instruction-count bookkeeping at the c00-c02 split boundary and was reconciled; the ledger links both.
 
 ## The journey
 
