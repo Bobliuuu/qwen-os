@@ -93,16 +93,83 @@ def breakpoint_at(m, pc):
 class Truth:
     """The official reference machine + block device + key injection: the host's view."""
 
-    def __init__(self, elf, disk, kelf, keys, disk_pause):
+    def __init__(self, elf, disk, kelf, keys, disk_pause, rom_plan=None, sym_elf=None):
         from chipformer.rv import elf as relf, ref
         sy = symbols(kelf)
         self.kbox, self.dbox = sy['qos_input_mailbox'], sy['qos_disk_mailbox']
         self.m = ref.Machine.from_program(relf.program(elf))
         self.dev = ReferenceDiskDevice(self.m, self.dbox, disk)
-        self.par, self.seen, self.marks, self.kseq = MarkerParser(), 0, [], 100
+        self.par, self.seen, self.marks = MarkerParser(), 0, []
         self.keys = [[c, int(n), False] for c, n in keys]
         self.disk_pause = disk_pause
         self.tokens = 1
+        # chunk ROM (tools/chunkrom.py): the host fills the data-ROM window of the ROM chunk that contains the
+        # current frame-marker count; the guest (-DQ_CHUNKROM build) then serves those disk reads from ROM.
+        self.disk_bytes = disk
+        self.rom_chunks = rom_plan['chunks'] if rom_plan else []
+        self.rom_base = rom_plan['base'] if rom_plan else None
+        self.rom_cur = None            # index of the chunk whose window is installed (None = cleared)
+        # stop hook (qlcd.c q_stop_in / q_stop_here, -DQ_CHUNKROM builds): lets a multi-frame segment end at ANY frame
+        # marker at a pc that is fresh for the segment (the shared frame-end code never is). Needs engine symbols.
+        self.hook_at = self.hook_pc = self.hook_fr = None
+        self.fr_off = None
+        if sym_elf:
+            sy_e = symbols(sym_elf)
+            self.hook_at, self.hook_pc, self.hook_fr = (sy_e.get('q_stop_at'), sy_e.get('q_stop_here'), sy_e.get('q_frames'))
+            if self.hook_pc is None or self.hook_at is None or self.hook_fr is None:
+                self.hook_pc = None
+        self.armed = False
+
+    def rom_index(self):
+        """ROM chunk containing the current frame-marker count (chunks are [lo, hi) marker counts)."""
+        n = len(self.marks)
+        for i, c in enumerate(self.rom_chunks):
+            if c['lo'] <= n < c['hi']:
+                return i
+        return None
+
+    def apply_rom_window(self):
+        """Install (fill_drom) or clear the window for the chunk containing the marker count on the truth machine.
+        Called only at a segment boundary, BEFORE the segment's start snapshot is cloned, so the model's
+        snapshot (core.snapshot -> DROM tables) and the oracle clone both contain it."""
+        if not self.rom_chunks:
+            return
+        i = self.rom_index()
+        if i == self.rom_cur:
+            return
+        import chunkrom
+        if i is None:
+            chunkrom.clear_drom(self.m, self.rom_base)
+        else:
+            ext = [tuple(e) for e in self.rom_chunks[i]['extents']]
+            chunkrom.fill_drom(self.m, ext, self.disk_bytes, self.rom_base)
+        self.rom_cur = i
+
+    def boundaries(self, split_set):
+        b = set(split_set) | {c['lo'] for c in self.rom_chunks if c['lo'] > 0} | {k[1] for k in self.keys if not k[2]}
+        return sorted(b)
+
+    def arm_stop(self, split_set, target):
+        """At a segment boundary: arm q_stop_at so the segment ends right after the next ROM/split/key boundary marker
+        (hook mode). The guest counts markers in q_frames (incremented before the marker byte); fr_off = host marker
+        count - q_frames is constant and is read the first time we are between markers (any segment start is)."""
+        self.armed = False
+        if self.hook_pc is None:
+            return
+        n = len(self.marks)
+        if n == 0:
+            return   # cold boot: takeover zeroes the guest RAM (incl. q_stop_at) when doomd starts; the first marker ends the segment the old way
+        if self.fr_off is None:
+            self.fr_off = n - self.m.ram[self.hook_fr // 4]
+        nb = [b for b in sorted(set(self.boundaries(split_set)) | {target}) if n < b <= target]
+        v = (nb[0] - self.fr_off) if nb else 0
+        self.m.ram[self.hook_at // 4] = v
+        self.armed = bool(v)
+
+    def rom_boundary_due(self):
+        """True once the tic counter has left the installed chunk (the segment must end soon so the next
+        one starts with the right window; only checked at frame markers)."""
+        return bool(self.rom_chunks) and self.rom_index() != self.rom_cur
 
     def key_pending(self):
         return any(not k[2] and len(self.marks) >= k[1] for k in self.keys)
@@ -115,9 +182,13 @@ class Truth:
         for k in self.keys:
             if not k[2] and len(self.marks) >= k[1]:
                 k[2] = True
-                self.m.ram[(self.kbox + 4) // 4] = ord(k[0])
-                self.m.ram[self.kbox // 4] = self.kseq
-                self.kseq += 1
+                # key ring {u32 seq; u8 q[4]} at the input mailbox: byte into q[seq & 3], then seq+1 LAST (os.patch)
+                seq = self.m.ram[self.kbox // 4]
+                qa = self.kbox + 4 + (seq & 3)
+                w = self.m.ram[qa // 4]
+                sh = (qa & 3) * 8
+                self.m.ram[qa // 4] = (w & ~(0xff << sh) & 0xffffffff) | (ord(k[0]) << sh)
+                self.m.ram[self.kbox // 4] = (seq + 1) & 0xffffffff
                 return True
         return False
 
@@ -167,14 +238,33 @@ def plan(truth, args):
     nseg = 0
     while len(truth.marks) < target:
         truth.inject_due()
+        if truth.hook_pc is not None and m.pc == truth.hook_pc:
+            truth.step()  # leave the stop hook's entry pc on the host so a breakpoint on it can fire in this segment
+        truth.apply_rom_window()
+        truth.arm_stop(getattr(args, 'split_set', ()), target)
         start = clone(m)
         s0, t0, o0 = m.steps, truth.tokens, len(m.out)
-        ev, visited = None, set()
-        while len(truth.marks) < target:
+        ev, visited, hooked = None, set(), False
+        cold = truth.hook_pc is not None and not truth.marks
+        while len(truth.marks) < target or truth.armed:
             pc = m.pc
+            if truth.armed and pc == truth.hook_pc and m.steps > s0:
+                # the guest, with the marker count at the boundary, is about to run q_stop_here (start of the next frame end): stop BEFORE it
+                ev, hooked = 'split', True
+                stop_pc, instr, tokens = pc, m.steps - s0, truth.tokens - t0
+                break
             ev = truth.step()
+            if ev == 'marker' and cold:
+                ev = 'split'  # cold boot: end at the first marker (a lone marker in the segment: its next pc is fresh)
+                break
             if ev == 'marker' and truth.key_pending():
                 break  # a due key is injected at this boundary: end the segment at the marker
+            if ev == 'marker' and truth.hook_pc is None and truth.rom_boundary_due():
+                ev = 'rom'  # the marker count left the installed ROM chunk: end the segment at this marker
+                break
+            if ev == 'marker' and truth.hook_pc is None and len(truth.marks) in getattr(args, 'split_set', ()):
+                ev = 'split'  # explicit segment boundary (model-chunk start, tools/model_runplan.py)
+                break
             if ev == 'disk':
                 # stop BEFORE the store that published the request: the model halts at pc, the host
                 # executes the store (+ the device's reply) and the next segment starts after it
@@ -186,7 +276,7 @@ def plan(truth, args):
             visited.add(pc)
             if args.max_instructions and m.steps - s0 > args.max_instructions:
                 raise RuntimeError('segment exceeds --max-instructions')
-        if ev != 'disk':
+        if ev != 'disk' and not hooked:
             # frame marker: stop at the first pc after it that the segment has not executed (the
             # instruction after a putc ecall sits in a shared putc(); any byte would fire there).
             # Extra host instructions are part of the segment (the model runs them too).
@@ -194,7 +284,9 @@ def plan(truth, args):
                 if m.pc not in visited:
                     break
                 visited.add(m.pc)
-                truth.step()
+                if truth.step() == 'disk':
+                    raise RuntimeError('disk request while advancing to a fresh breakpoint pc (ROM-chunk boundary): '
+                                       'shift the chunk boundary or add margin to the extents')
             else:
                 raise RuntimeError('no fresh breakpoint pc found')
             stop_pc, instr, tokens = m.pc, m.steps - s0, truth.tokens - t0
@@ -202,7 +294,11 @@ def plan(truth, args):
         nseg += 1
         yield dict(index=nseg, start=start, start_steps=s0, stop_pc=stop_pc, instr=instr,
                    tokens=tokens, out=bytes(m.out[o0:]),
-                   reason='disk' if ev == 'disk' else 'marker', markers=bytes(m.out[o0:]).count(b'\x02'))
+                   reason={'disk': 'disk', 'rom': 'rom', 'split': 'split'}.get(ev, 'marker'), rom_chunk=truth.rom_cur, markers=bytes(m.out[o0:]).count(b'\x02'))
+    left = [k[0] for k in truth.keys if not k[2]]
+    if left:
+        raise RuntimeError(f'keys {left!r} were never injected: a key must be due before the final marker so that it falls on a '
+                           'segment boundary (keys cannot be typed inside a model segment)')
 
 
 def main():
@@ -234,6 +330,15 @@ def main():
                          'fast-forwards through the others (chunked/parallel verification, see model_doom_chunks.py)')
     ap.add_argument('--keys', default='', help="key schedule 'CHAR@MARKERS,...' (e.g. 'p@3,\\n@10'): CHAR is typed (written to "
                     "the input mailbox) at the first segment boundary after that many frame markers; \\n \\r \\s=space escapes")
+    ap.add_argument('--rom-plan', default=None, metavar='JSON', help='chunk-ROM plan from tools/chunkrom.py --json (needs the '
+                    '-DQ_CHUNKROM ELF): the host installs each ROM chunk\'s disk-extent window in the snapshot DROM so reads inside it never '
+                    'pause; segments are split at ROM-chunk boundaries (also honored by --segment-range and --plan-json)')
+    ap.add_argument('--sym-elf', default=None, help='engine ELF with symbols (q_stop_in/q_stop_here) for the segment stop hook; '
+                    'without it segments can only end at markers whose next pc is fresh')
+    ap.add_argument('--lock-max-records', type=int, default=10**9,
+                    help='per-segment instruction limit of the lockstep oracle (upstream default 1e6 is too small for zero-pause segments)')
+    ap.add_argument('--split-markers', default='', help='comma list of frame-marker counts at which a segment must end (so a\n                    '
+                    'model chunk can start there: --segment-range then selects segments between such boundaries)')
     ap.add_argument('--plan-json', default=None, help='write per-segment plan (instr, tokens, bytes) and exit')
     ap.add_argument('--result-json', default=None, help='write the final report here too')
     ap.add_argument('--dry-run', action='store_true', help='reference machine stands in for the model')
@@ -254,12 +359,18 @@ def main():
     for tok in filter(None, args.keys.split(',')):
         c, n = tok.rsplit('@', 1)
         keys.append(({'\\n': '\n', '\\r': '\r', '\\s': ' '}.get(c, c), int(n)))
-    truth = Truth(args.elf, Path(args.disk).read_bytes(), kelf, keys, not args.no_disk_pause)
+    args.split_set = {int(x) for x in args.split_markers.split(',') if x}
+    rom_plan = json.loads(Path(args.rom_plan).read_text()) if args.rom_plan else None
+    truth = Truth(args.elf, Path(args.disk).read_bytes(), kelf, keys, not args.no_disk_pause, rom_plan, args.sym_elf)
 
     chat = bridge = S = ids = None
     if not args.dry_run:
         from chipformer.rv import bridge, chat as chatmod, spec as S
         import torch
+        # upstream bridge.Session runs the lockstep oracle for a whole segment in ONE call limited to 1e6 records
+        # (instructions); chunk-ROM segments are whole frames (2.5M+ instr), so raise the limit (python ref ~100k instr/s).
+        bridge.Session.qwen.__defaults__ = (args.lock_max_records, True)
+        bridge.Session.run.__defaults__ = (args.lock_max_records,)
         chat = chatmod.RvChat(args.model, fast=not args.no_executor,
                               executor=(torch.cuda.is_available() and not args.no_executor))
         ids = chat.prompt_ids([{'role': 'user', 'content': 'Use calc to evaluate 1 + 1.'}])
@@ -272,7 +383,7 @@ def main():
         ra, rb = (int(x) for x in args.segment_range.split(':'))
     if args.plan_json:
         segs = [dict(index=g['index'], instr=g['instr'], tokens=g['tokens'], out=len(g['out']),
-                     reason=g['reason'], stop_pc=g['stop_pc'], markers=g['markers']) for g in plan(truth, args)]
+                     reason=g['reason'], stop_pc=g['stop_pc'], markers=g['markers'], rom_chunk=g['rom_chunk']) for g in plan(truth, args)]
         Path(args.plan_json).write_text(json.dumps(segs))
         print(f'planned {len(segs)} segments, {sum(g["instr"] for g in segs)} instr, '
               f'{sum(g["tokens"] for g in segs)} tokens')
@@ -282,6 +393,7 @@ def main():
     nver = 0
     model_secs = 0.0
     detail = []
+    reasons = {}
     for seg in plan(truth, args):
         nseg += 1
         if not (ra <= nseg < rb):
@@ -328,6 +440,7 @@ def main():
                   and oracle.steps - seg['start_steps'] == seg['instr'] + 1)
             model_chip += st['chip']; tot_text += st['text']
         detail.append([nseg, bool(ok), seg['markers'], seg['instr'], seg['tokens']])
+        reasons[seg['reason']] = reasons.get(seg['reason'], 0) + 1
         tot_i += seg['instr']; tot_t += seg['tokens']
         produced += seg['out']
         if not ok:
@@ -354,6 +467,7 @@ def main():
         console_bytes=len(produced), extra_full_text_tokens_for_echo=len(produced),
         est_chip_seconds=round(tot_t / args.tok_per_s, 1), tok_per_s_assumed=args.tok_per_s,
         frame_markers_in_output=produced.count(b'\x02'), out=args.out,
+        segments_by_reason=reasons, rom_plan=args.rom_plan,
         segment_detail=detail)  # [index, ok, markers, instr, planned_tokens]
     print(json.dumps(rep, indent=2))
     if args.result_json:

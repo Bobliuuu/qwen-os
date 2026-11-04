@@ -21,7 +21,7 @@ plan.bin (for rv32_fast CRXPLAN=): records u32 start_tic,end_tic,nwords,words[]
 import argparse, struct, sys
 import numpy as np
 
-CRX_BASE = 0x29000      # must match Q_CRX_BASE (qplat.c) / Q_CRX_BASE_LD (lowres.sh CHUNKROM=1)
+CRX_BASE = 0x28C00      # must match Q_CRX_BASE (qplat.c) / Q_CRX_BASE_LD (lowres.sh CHUNKROM=1)
 DROM_BASE = 0x20000
 DROM_END = 0x3F000      # 0x3f000.. holds the small-app rodata of the merged image
 MAGIC = 0x31585243      # 'CRX1'
