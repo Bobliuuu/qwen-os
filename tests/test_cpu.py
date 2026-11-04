@@ -18,7 +18,7 @@ class BootTests(unittest.TestCase):
         for fragment in ('pid 1','$ cat /README','hello from QwenOS','paint: framebuffer changed','raycast: frame rendered','QWENOS_BOOT_OK'):
             self.assertIn(fragment,log)
         symbols=subprocess.check_output(['readelf','-sW',str(ROOT/'build/kernel.elf')],text=True)
-        m=re.search(r'\b([0-9a-f]{8})\s+768\s+OBJECT\s+LOCAL\s+DEFAULT\s+\d+\s+framebuffer\b',symbols)
+        m=re.search(r'\b([0-9a-f]{8})\s+768\s+OBJECT\s+(?:LOCAL|GLOBAL)\s+DEFAULT\s+\d+\s+qos_framebuffer\b',symbols)
         self.assertIsNotNone(m,'kernel framebuffer symbol missing')
         addr=int(m.group(1),16)
         pix=cpu.mem[addr:addr+32*24]
@@ -44,7 +44,7 @@ class KernelAbiTests(unittest.TestCase):
             cpu.step()
             if not injected and len(cpu.output)>=12:
                 # Deliver a device event while firmware is running, after BSS init.
-                cpu.store(addr+4,4,ord('K'))
+                cpu.store(addr+4,1,ord('K'))   # ring slot 0, then seq=1 (push protocol, include/qos.h)
                 cpu.store(addr,4,1)
                 injected=True
         self.assertTrue(injected)
@@ -62,12 +62,12 @@ class KernelAbiTests(unittest.TestCase):
             if shifted.halted:break
             shifted.step()
             if not injected and '$ run /bin/raycast\n' in ''.join(shifted.output):
-                shifted.store(addr+4,4,ord('d'))
-                shifted.store(addr,4,2)
+                shifted.store(addr+4,1,ord('d'))
+                shifted.store(addr,4,1)
                 injected=True
         self.assertTrue(injected)
         self.assertEqual(shifted.exitcode,0)
-        fb=kernel_symbols()['framebuffer']
+        fb=kernel_symbols()['qos_framebuffer']
         self.assertNotEqual(baseline.mem[fb:fb+768],shifted.mem[fb:fb+768])
         self.assertEqual(shifted.mem[fb+12*32+19],9)
         import zlib
