@@ -1,4 +1,13 @@
-# QwenOS runs DOOM inside Qwenputer: research record
+# The research notebook: QwenOS runs DOOM on Qwenputer
+
+Back to the [project README](../../README.md) · the gentle tour: [HOW_IT_WORKS](../HOW_IT_WORKS.md) · older notes: [HISTORY](../HISTORY.md)
+
+## TL;DR
+
+- **Works:** a real DOOM engine (DMC100-Doom, Freedoom E1M1) runs as `/bin/doomd` of a tiny RV32IM OS in 32 KiB RAM, on the emulator (T0), and the merged build matches the upstream reference CPU (T1) for 6 M instr.
+- **Verified on the real Qwen model (T2):** probe, title frame, and a cold boot to the first frame marker (1,552,382 instr, zero divergence), on an earlier build.
+- **Not yet:** gameplay frames on the model, and the short clip (pending, see [STATUS](STATUS.md)). Disk, keys and clock are host-side; pixels come from the emulator.
+- Read next: [HONESTY](HONESTY.md) for exact claims, [TIMELINE](TIMELINE.md) for the story, [REPRODUCE](REPRODUCE.md) to run it.
 
 Date of record: 2026-11-03/04. Written from the agent work trees under `<WORKDIR>`
 (`patches/`, `out/`, `engine/`, `wt-*`) and the upstream Qwenputer checkout. Where a number comes
@@ -8,18 +17,18 @@ Goal of the effort: run a real DOOM engine as an application of QwenOS (an RV32I
 CPU that Qwenputer compiles into Qwen3.5 transformer layers, and show gameplay frames whose
 instruction trace the model actually executed.
 
-## Contents
+## What is in this folder
 
 | File | What it is |
 |---|---|
-| [STATUS.md](STATUS.md) | Live status; section for the final merged build and the 5 s clip (both `pending`) |
+| [STATUS.md](STATUS.md) | Live status; final merged build numbers; the short clip section is `pending` |
 | [TIMELINE.md](TIMELINE.md) | Chronological narrative of every attempt |
 | [HONESTY.md](HONESTY.md) | Exactly what is and is not claimed |
 | [REPRODUCE.md](REPRODUCE.md) | Commands for build, regress, emulator, upstream, model, live demo (verified/unverified marked) |
 | [experiments/](experiments/) | One file per experiment or patch (index below) |
 | [TRACES/](TRACES/README.md) | Small evidence files: run JSONs, ledger, results, request analyses, 15 frames, patches with md5 |
 
-## Executive summary
+## The story in seven points
 
 1. QwenOS (v0.11 starting point: kernel, shell, WAD map viewer, RV32 emulator) was extended until a genuine
    DOOM engine (DMC100-Doom, GPL-2.0, doomgeneric lineage, 32 KB-RAM port) runs as `/bin/doomd` on
@@ -31,7 +40,7 @@ instruction trace the model actually executed.
    configurations (different metrics, see experiments 09 and 14).
 3. Instruction cost per game tic was cut from 10.47 M to 3.52 M mean (perf.patch, agent report), with
    further reductions from syscall squeeze (-7 %), renderer work (-18 %), frame skip (-52 % total instructions at
-   15/35) and disk-request removal (bake: -95 % requests; chunk ROM: 165,054 -> 4 requests for +6.6 % instructions).
+   15/35) and disk-request removal (bake: -95 % requests; chunk ROM: 165,054 -> 4 requests; +10.6 % instructions in the final merged build, see STATUS).
 4. On the real Qwen model (tier T2, merged Qwen3.5-4B "rv1", A100-SXM4-40GB) four runs passed with a lockstep oracle and zero
    divergence: probe, title-frame (6,563 instr), and cold boot to the first frame marker
    (1,552,382 instr, 2,091,327 chip tokens, 292 segments, 1,438 s). No gameplay (E1M1) frame has been executed by the model.
@@ -41,7 +50,7 @@ instruction trace the model actually executed.
 6. Every demonstration frame to date comes from the emulator. The merge of all patches into one E1M1 build has landed
    (see MERGE_NOTES.md at the repo root and STATUS.md); its regression run passes against the original goldens. The merged build has not been run on the model.
 
-## Honest status table: what runs where
+## What runs where (honest status table)
 
 Tiers: T0 = C emulator `tools/rv32_fast`; T1 = upstream Python reference CPU (`chipformer.rv.ref.Machine`) or
 our Python reference; T2 = real Qwen model with lockstep oracle. "Verified" for T2 means every chip token matched the oracle.
@@ -61,7 +70,7 @@ our Python reference; T2 = real Qwen model with lockstep oracle. "Verified" for 
 Frames model-verified in total: 1 (the boot frame marker; the pixels of that frame are the title picture drawn by the guest).
 Frames model-verified from actual gameplay: 0.
 
-## Experiment index
+## All the experiments
 
 | # | Experiment | Result |
 |---|---|---|
