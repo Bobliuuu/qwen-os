@@ -1,0 +1,17 @@
+DMC100-Doom engine patches
+==========================
+
+dmc100-qwenos-merged.patch is a unified diff (text only) of the edits QwenOS makes
+to the DMC100-Doom engine, relative to pristine upstream:
+
+    https://github.com/ArturBieniek4/DMC100-Doom   (commit 0cdc78e)
+
+DMC100-Doom is licensed GPL-2.0 and descends from doomgeneric and id Software's
+DOOM source (GPL). This patch is a derivative work of those sources and is
+distributed under GPL-2.0 as well. It contains no WAD data.
+
+Apply it to a checkout of upstream (the QwenOS build expects it at ../engine/DMC100-Doom):
+
+    git clone https://github.com/ArturBieniek4/DMC100-Doom ../engine/DMC100-Doom
+    cd ../engine/DMC100-Doom && git checkout 0cdc78e
+    patch -p1 < ../../<this repo>/engine-patches/dmc100-qwenos-merged.patch

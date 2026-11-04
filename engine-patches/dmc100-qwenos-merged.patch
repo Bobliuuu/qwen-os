@@ -1,0 +1,987 @@
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/d_main.c b/engine/d_main.c
+--- a/engine/d_main.c	2026-11-03 17:56:32
++++ b/engine/d_main.c	2026-11-03 19:54:02
+@@ -239,7 +239,11 @@
+     }
+ 
+     // the dirty parts of the status band
++#ifdef Q_NOBAR
++    R_BandFlush (inlevel, 0);       // lowres: no status bar (the band below the view stays black)
++#else
+     R_BandFlush (inlevel, inlevel);
++#endif
+ 
+     // the compose buffers are in the tic scratch: sent before the next tic
+     if (!view)
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/p_mapdata.c b/engine/p_mapdata.c
+--- a/engine/p_mapdata.c	2026-11-03 17:56:32
++++ b/engine/p_mapdata.c	2026-11-03 19:47:32
+@@ -269,6 +269,18 @@
+ #endif
+ }
+ 
++// The renderer's part of P_GetLine: flags (without ML_MAPPED, which only the automap reads) and
++// the two sectors. Nothing else of the line is read by r_segs.c.
++void P_GetLineR (lineidx_t i, line_t* l)
++{
++    dmc_line_t	r;
++
++    P_LineRec(i, &r);
++    l->flags = r.flags;
++    l->frontsector = r.front;
++    l->backsector = r.back;
++}
++
+ int P_LineTag (lineidx_t i)
+ {
+     dmc_line_t	r;
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/p_mapdata.h b/engine/p_mapdata.h
+--- a/engine/p_mapdata.h	2026-11-03 17:56:32
++++ b/engine/p_mapdata.h	2026-11-03 19:47:32
+@@ -126,6 +126,7 @@
+ #define P_TagOnlyLine(t)	(LINE_TAGONLY | (t))
+ 
+ void P_GetLine (lineidx_t i, line_t* l);
++void P_GetLineR (lineidx_t i, line_t* l);
+ int P_LineTag (lineidx_t i);
+ int P_LineSpecial (lineidx_t i);
+ void P_SetLineSpecial (lineidx_t i, int special);
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/r_data.c b/engine/r_data.c
+--- a/engine/r_data.c	2026-11-03 17:56:32
++++ b/engine/r_data.c	2026-11-03 19:47:32
+@@ -242,6 +242,8 @@
+ #else
+ #define STAT_PX()	((void)0)
+ #endif
++// the host frame test (DMC_ATTR) classifies through colfunc, which wall columns no longer use
++#define ATTR_DIRECT(p, src, bits, fs)	((void)0)
+ 
+ 
+ //
+@@ -401,11 +403,19 @@
+     else
+ 	fetch_wait(b->ticket);
+     b->ticket = 0;
+-    R_LoadColumn(p);
+     if (p->post)
++    {
++	R_LoadColumn(p);
+ 	R_DrawMaskedColumn(POSTBUF(p->buf));
+-    else
++	if (next)
++	    R_LoadColumn(rq);
++	return;
++    }
++    // a wall or sky column goes straight to the inner loop: no round trip through
++    // the dc_* globals (they stay those of the column being queued)
+     {
++	int	fs;
++
+ 	src = WALLBUF(p->buf);
+ 	bits = p->bits;
+ 	// one stored row: the drawer reads two
+@@ -414,17 +424,14 @@
+ 	    src[1] = src[0];
+ 	    bits = 1;
+ 	}
+-	dc_source = src;
+-	dc_fracshift = 16 - p->level - bits;
+-	dc_rowshift = 32 - bits;
+-#ifdef DMC_ATTR
+-	dc_texheight = p->texheight;
+-	dc_ispost = 0;
+-#endif
+-	colfunc ();
++	fs = 16 - p->level - bits;
++	R_ColumnLoop (r_stripbuf + (p->x - r_bufx0) * R_VIEWH + p->yl, p->yh - p->yl + 1,
++		      (unsigned) (p->texturemid + (p->yl - centery) * p->iscale) << fs,
++		      (unsigned) p->iscale << fs, 32 - bits, src,
++		      colormaps + p->cmap);
++	RSTAT(colpx, p->yh - p->yl + 1);
++	ATTR_DIRECT(p, src, bits, fs);
+     }
+-    if (next)
+-	R_LoadColumn(rq);
+ }
+ 
+ 
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/r_main.c b/engine/r_main.c
+--- a/engine/r_main.c	2026-11-03 17:56:32
++++ b/engine/r_main.c	2026-11-03 19:54:02
+@@ -514,7 +514,11 @@
+ 
+     colfunc = R_DrawColumn;
+ 
++    #if Q_XTVASH
++    r_xtva = dmc_xtva_high;
++#else
+     r_xtva = detailshift ? dmc_xtva_low : dmc_xtva_high;
++#endif
+     clipangle = R_XToViewAngle(0);
+     
+     // psprite scales
+@@ -619,6 +623,11 @@
+ 	fixedcolormap = colormaps + player->fixedcolormap*256;
+     else
+ 	fixedcolormap = 0;
++#ifdef Q_FIXEDLIGHT
++    /* lowres build: no light diminishing, every sector / distance uses colormap row Q_FIXEDLIGHT */
++    if (!fixedcolormap)
++	fixedcolormap = colormaps + Q_FIXEDLIGHT*256;
++#endif
+ 		
+     framecount++;
+ }
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/r_main.h b/engine/r_main.h
+--- a/engine/r_main.h	2026-11-03 17:56:32
++++ b/engine/r_main.h	2026-11-03 19:54:02
+@@ -201,11 +201,24 @@
+ // fine angle (vanilla viewangletox), from the tables in flash.
+ extern const unsigned short*	r_xtva;
+ 
++#ifndef Q_XTVASH
++#define Q_XTVASH 0   /* lowres detail 2: xtoviewangle[x] = high[4x] */
++#endif
+ static inline angle_t R_XToViewAngle (int x)
+ {
+-    return ((angle_t)r_xtva[x] << 19) - ANG90;
++    return ((angle_t)r_xtva[x << Q_XTVASH] << 19) - ANG90;
+ }
+ 
+ int R_ViewAngleToX (unsigned angle);
++
++// Clip bounds of the 3D view: the whole viewheight, or the rows Q_VTOP..Q_VBOT-1 of a lowres
++// "letterbox" view (rows outside are never drawn nor sent).
++#ifdef Q_VTOP
++#define R_CLIPTOP (Q_VTOP - 1)
++#define R_CLIPBOT (Q_VBOT)
++#else
++#define R_CLIPTOP (-1)
++#define R_CLIPBOT (viewheight)
++#endif
+ 
+ #endif
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/r_plane.c b/engine/r_plane.c
+--- a/engine/r_plane.c	2026-11-03 17:56:32
++++ b/engine/r_plane.c	2026-11-03 19:54:02
+@@ -122,7 +122,7 @@
+ //
+ // BASIC PRIMITIVE
+ //
+-void
++static inline void
+ R_MapPlane
+ ( int		y,
+   int		x1,
+@@ -136,6 +136,8 @@
+     fixed_t	ystep;
+     unsigned	index;
+     unsigned	position;
++    unsigned	ds_step_l;
++    lighttable_t* cmap;
+ 	
+     distance = FixedMulI (planeheight, dmc_yslope_tab[y]);
+     xstep = FixedMulI (distance,basexscale);
+@@ -146,16 +148,14 @@
+ 
+     position = ((xfrac << 10) & 0xffff0000)
+              | ((yfrac >> 6)  & 0x0000ffff);
+-    ds_step = ((xstep << 10) & 0xffff0000)
++    ds_step_l = ((xstep << 10) & 0xffff0000)
+             | ((ystep >> 6)  & 0x0000ffff);
++#ifdef DMC_ATTR
++    ds_step = ds_step_l;
++#endif
+ 
+-    ds_x1 = r_s0 + x1;
+-    ds_x2 = r_s0 + x2;
+-    ds_y = y;
+-    ds_position = position + (unsigned)ds_x1 * ds_step;
+-
+     if (fixedcolormap)
+-	ds_colormap = fixedcolormap;
++	cmap = fixedcolormap;
+     else
+     {
+ 	index = distance >> LIGHTZSHIFT;
+@@ -163,14 +163,35 @@
+ 	if (index >= MAXLIGHTZ )
+ 	    index = MAXLIGHTZ-1;
+ 
+-	ds_colormap = R_ZLight (planelight, index);
++	cmap = R_ZLight (planelight, index);
+     }
+ 	
+     RSTAT(spans, 1);
++#ifdef DMC_ATTR
++    ds_colormap = cmap;
++    ds_x1 = r_s0 + x1;
++    ds_x2 = r_s0 + x2;
++    ds_y = y;
++    ds_position = position + (unsigned)ds_x1 * ds_step;
+     if (ds_source)
+ 	R_DrawSpan ();
+     else
+ 	R_DrawSpanSolid ();
++#else
++    {
++	// the span goes straight to the inner loop (R_DrawSpan and R_DrawSpanSolid without
++	// the round trip through the ds_* globals)
++	int	xa = r_s0 + x1;
++	byte*	dest = r_stripbuf + (xa - r_bufx0) * R_VIEWH + y;
++
++	RSTAT(spanpx, x2 - x1 + 1);
++	if (ds_source)
++	    R_SpanLoop (dest, x2 - x1 + 1, position + (unsigned)xa * ds_step_l, ds_step_l,
++			ds_source, cmap);
++	else
++	    R_FillRow (dest, x2 - x1 + 1, cmap[ds_solid]);
++    }
++#endif
+ }
+ 
+ 
+@@ -185,8 +206,8 @@
+     // opening / clipping determination
+     for (i=r_s0 ; i<r_s1 ; i++)
+     {
+-	floorclip[i] = viewheight;
+-	ceilingclip[i] = -1;
++	floorclip[i] = R_CLIPBOT;
++	ceilingclip[i] = R_CLIPTOP;
+     }
+ 
+     r_numplanes = 0;
+@@ -354,7 +375,7 @@
+ //
+ // R_MakeSpans
+ //
+-void
++static inline void
+ R_MakeSpans
+ ( int		x,
+   int		t1,
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/r_plane.h b/engine/r_plane.h
+--- a/engine/r_plane.h	2026-11-03 17:56:32
++++ b/engine/r_plane.h	2026-11-03 19:47:32
+@@ -84,19 +84,7 @@
+   int		top,
+   int		bottom );
+ 
+-void
+-R_MapPlane
+-( int		y,
+-  int		x1,
+-  int		x2 );
+-
+-void
+-R_MakeSpans
+-( int		x,
+-  int		t1,
+-  int		b1,
+-  int		t2,
+-  int		b2 );
++// R_MapPlane and R_MakeSpans are local to r_plane.c (inlined into R_DrawPlane).
+ 
+ void R_DrawPlanes (void);
+ 
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/r_segs.c b/engine/r_segs.c
+--- a/engine/r_segs.c	2026-11-03 17:56:32
++++ b/engine/r_segs.c	2026-11-03 19:47:32
+@@ -171,7 +171,7 @@
+     // OPTIMIZE: get rid of LIGHTSEGSHIFT globally
+     P_GetSeg(ds->curline, &curline);
+     curlineidx = ds->curline;
+-    P_GetLine(curline.linedef, &linedef);
++    P_GetLineR(curline.linedef, &linedef);
+     frontsector = curline.side ? linedef.backsector : linedef.frontsector;
+     backsector = curline.backsector;
+     R_ReadSector (frontsector, &front);
+@@ -940,7 +940,7 @@
+ 
+     curlineidx = frag >> 18;
+     P_GetSeg(curlineidx, &curline);
+-    P_GetLine(curline.linedef, &linedef);
++    P_GetLineR(curline.linedef, &linedef);
+     frontsector = curline.side ? linedef.backsector : linedef.frontsector;
+     backsector = curline.backsector;
+     R_ReadSector (frontsector, &frontsec);
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/engine/r_things.c b/engine/r_things.c
+--- a/engine/r_things.c	2026-11-03 17:56:32
++++ b/engine/r_things.c	2026-11-03 19:54:02
+@@ -704,9 +704,9 @@
+     
+     // clip to screen bounds
+     mfloorclip = NULL;
+-    mfloorconst = viewheight;
++    mfloorconst = R_CLIPBOT;
+     mceilingclip = NULL;
+-    mceilconst = -1;
++    mceilconst = R_CLIPTOP;
+     
+     // add all active psprites
+     for (i=0, psp=viewplayer->psprites;
+@@ -854,10 +854,10 @@
+     for (x = x1 ; x<=x2 ; x++)
+     {
+ 	if (clipbot[x] == -2)		
+-	    clipbot[x] = viewheight;
++	    clipbot[x] = R_CLIPBOT;
+ 
+ 	if (cliptop[x] == -2)
+-	    cliptop[x] = -1;
++	    cliptop[x] = R_CLIPTOP;
+     }
+ 		
+     mfloorclip = clipbot;
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/platform/lcd.h b/platform/lcd.h
+--- a/platform/lcd.h	2026-11-03 17:56:32
++++ b/platform/lcd.h	2026-11-03 19:54:02
+@@ -71,6 +71,8 @@
+ extern uint16_t pump_lut[256];
+ 
+ #define PUMP_DOUBLE 1  // low detail: every submitted column is sent twice
++#define PUMP_ROW2 4    // lowres dump only: every second row of a column is sent (host doubles rows)
++#define PUMP_QUAD 2    // lowres detail 2: every submitted column is sent four times
+ 
+ // Opens the window x0..x1, y0..y1 (one RAMWR). Column height h = y1 - y0 + 1 must be a
+ // multiple of 4 and at most 200, other windows go to plat_panic. The 3D view is
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/data/cache.c b/port/data/cache.c
+--- a/port/data/cache.c	2026-11-03 17:56:32
++++ b/port/data/cache.c	2026-11-03 19:47:32
+@@ -5,7 +5,30 @@
+ 
+ #include "cache.h"
+ #include "img.h"
++#include "nor.h"
+ 
++#ifdef DMC_FW
++// Map streams baked into the data ROM (ports/doomdmc/qbake.c, bakemap.c): reads inside them never
++// touch the cache or the disk. bake_span is 0 unless the image's map entry matches the baked one.
++extern uint32_t bake_lo, bake_span, bake_n;
++extern const uint32_t bake_rng[][3], bake_data[];
++static inline const uint8_t *bake_ptr(uint32_t loff, uint32_t n)
++{
++    if (loff - bake_lo >= bake_span)
++        return 0;
++    for (uint32_t i = 0; i < bake_n; i++) {
++        uint32_t rel = loff - bake_rng[i][0];
++        if (rel < bake_rng[i][1] && n <= bake_rng[i][1] - rel)
++            return (const uint8_t *)bake_data + bake_rng[i][2] + rel;
++    }
++    return 0;
++}
++#else
++#define bake_span 0u
++#define bake_lo 0u
++#define bake_ptr(l, n) ((const uint8_t *)0)
++#endif
++
+ #define RC_NOTAG 0xFFFFu
+ // MRU way in bits 0-1 up to the LRU way in bits 6-7
+ #define RC_LRU_INIT 0xE4u
+@@ -97,15 +120,17 @@
+ }
+ #endif
+ 
+-// Moves way w to the MRU position.
+-static uint8_t lru_touch(uint8_t l, unsigned w)
++// Moves way w to the MRU position (table lookup, generated from the shift loop of the original).
++static const uint8_t lru_tab[4][256] = {
++    {0,4,8,12,4,20,24,28,8,36,40,44,12,52,56,60,16,20,24,28,20,84,88,92,24,100,104,108,28,116,120,124,32,36,40,44,36,148,152,156,40,164,168,172,44,180,184,188,48,52,56,60,52,212,216,220,56,228,232,236,60,244,248,252,64,68,72,76,68,84,88,92,72,100,104,108,76,116,120,124,80,84,88,92,84,0,0,0,88,0,0,0,92,0,0,0,96,100,104,108,100,0,0,0,104,0,0,0,108,0,0,0,112,116,120,124,116,0,0,0,120,0,0,0,124,0,0,0,128,132,136,140,132,148,152,156,136,164,168,172,140,180,184,188,144,148,152,156,148,0,0,0,152,0,0,0,156,0,0,0,160,164,168,172,164,0,0,0,168,0,0,0,172,0,0,0,176,180,184,188,180,0,0,0,184,0,0,0,188,0,0,0,192,196,200,204,196,212,216,220,200,228,232,236,204,244,248,252,208,212,216,220,212,0,0,0,216,0,0,0,220,0,0,0,224,228,232,236,228,0,0,0,232,0,0,0,236,0,0,0,240,244,248,252,244,0,0,0,248,0,0,0,252,0,0,0},
++    {0,1,0,0,1,5,9,13,0,9,0,0,0,13,0,0,1,17,9,13,17,21,25,29,33,25,41,45,49,29,57,61,0,33,0,0,33,37,41,45,0,41,0,0,0,45,0,0,0,49,0,0,49,53,57,61,0,57,0,0,0,61,0,0,1,65,9,13,65,69,73,77,33,73,41,45,49,77,57,61,65,81,73,77,81,85,89,93,97,89,105,109,113,93,121,125,129,97,137,141,97,101,105,109,161,105,169,173,177,109,185,189,193,113,201,205,113,117,121,125,225,121,233,237,241,125,249,253,0,129,0,0,129,133,137,141,0,137,0,0,0,141,0,0,129,145,137,141,145,149,153,157,161,153,169,173,177,157,185,189,0,161,0,0,161,165,169,173,0,169,0,0,0,173,0,0,0,177,0,0,177,181,185,189,0,185,0,0,0,189,0,0,0,193,0,0,193,197,201,205,0,201,0,0,0,205,0,0,193,209,201,205,209,213,217,221,225,217,233,237,241,221,249,253,0,225,0,0,225,229,233,237,0,233,0,0,0,237,0,0,0,241,0,0,241,245,249,253,0,249,0,0,0,253,0,0},
++    {0,0,2,0,0,0,6,0,2,6,10,14,0,0,14,0,0,0,18,0,0,0,22,0,18,22,26,30,0,0,30,0,2,6,34,14,18,22,38,30,34,38,42,46,50,54,46,62,0,0,50,0,0,0,54,0,50,54,58,62,0,0,62,0,0,0,66,0,0,0,70,0,66,70,74,78,0,0,78,0,0,0,82,0,0,0,86,0,82,86,90,94,0,0,94,0,66,70,98,78,82,86,102,94,98,102,106,110,114,118,110,126,0,0,114,0,0,0,118,0,114,118,122,126,0,0,126,0,2,6,130,14,18,22,134,30,130,134,138,142,50,54,142,62,66,70,146,78,82,86,150,94,146,150,154,158,114,118,158,126,130,134,162,142,146,150,166,158,162,166,170,174,178,182,174,190,194,198,178,206,210,214,182,222,178,182,186,190,242,246,190,254,0,0,194,0,0,0,198,0,194,198,202,206,0,0,206,0,0,0,210,0,0,0,214,0,210,214,218,222,0,0,222,0,194,198,226,206,210,214,230,222,226,230,234,238,242,246,238,254,0,0,242,0,0,0,246,0,242,246,250,254,0,0,254,0},
++    {0,0,0,3,0,0,0,7,0,0,0,11,3,7,11,15,0,0,0,19,0,0,0,23,0,0,0,27,19,23,27,31,0,0,0,35,0,0,0,39,0,0,0,43,35,39,43,47,3,7,11,51,19,23,27,55,35,39,43,59,51,55,59,63,0,0,0,67,0,0,0,71,0,0,0,75,67,71,75,79,0,0,0,83,0,0,0,87,0,0,0,91,83,87,91,95,0,0,0,99,0,0,0,103,0,0,0,107,99,103,107,111,67,71,75,115,83,87,91,119,99,103,107,123,115,119,123,127,0,0,0,131,0,0,0,135,0,0,0,139,131,135,139,143,0,0,0,147,0,0,0,151,0,0,0,155,147,151,155,159,0,0,0,163,0,0,0,167,0,0,0,171,163,167,171,175,131,135,139,179,147,151,155,183,163,167,171,187,179,183,187,191,3,7,11,195,19,23,27,199,35,39,43,203,195,199,203,207,67,71,75,211,83,87,91,215,99,103,107,219,211,215,219,223,131,135,139,227,147,151,155,231,163,167,171,235,227,231,235,239,195,199,203,243,211,215,219,247,227,231,235,251,243,247,251,255}
++};
++
++static inline uint8_t lru_touch(uint8_t l, unsigned w)
+ {
+-    unsigned k = 0;
+-    while (((l >> (2 * k)) & 3u) != w)
+-        k++;
+-    unsigned below = l & ((1u << (2 * k)) - 1u);
+-    unsigned above = l & ~((1u << (2 * k + 2)) - 1u) & 0xFFu;
+-    return (uint8_t)(above | below << 2 | w);
++    return lru_tab[w][l];
+ }
+ 
+ // Miss of logical line number ln: the LRU way of its set gets the line. Out
+@@ -133,7 +158,13 @@
+ #ifdef DMC_HOST
+     if (!rc2_mem || !rc2_swap(ln, set, w, old))
+ #endif
+-        img_read(loff, rc_data[base + w], n);
++    {
++        const uint32_t *pw = img_pw[loff >= img.split];
++        if (loff - pw[0] < pw[1] - pw[0] && pw[1] - loff >= n)
++            nor_read(pw[2] + loff, rc_data[base + w], n);
++        else
++            img_read(loff, rc_data[base + w], n);
++    }
+     rc_tag[base + w] = tag;
+     rc_lru[set] = lru_touch(rc_lru[set], w);
+     return rc_data[base + w];
+@@ -177,8 +208,15 @@
+ // built freestanding, where memcpy is an ordinary call. Up to 8 B it becomes
+ // single loads and stores. Lines and destinations need not be word aligned,
+ // and the M4 does those unaligned (never LDRD, STRD, LDM or STM, which fault).
+-void rec_get(uint32_t loff, void *out, uint32_t n)
++__attribute__((noinline)) static void rec_get_slow(uint32_t loff, void *out, uint32_t n)
+ {
++    {
++        const uint8_t *b = bake_ptr(loff, n);
++        if (b) {
++            memcpy(out, b, n);
++            return;
++        }
++    }
+     uint8_t *o = out;
+     unsigned in = loff & (RC_LINE - 1);
+ 
+@@ -211,7 +249,7 @@
+         unsigned k = RC_LINE - in;
+         if (k > n)
+             k = n;
+-        rec_get(loff, o, k);
++        rec_get_slow(loff, o, k);
+         o += k;
+         loff += k;
+         n -= k;
+@@ -219,16 +257,181 @@
+     }
+ }
+ 
+-uint16_t rec_u16(uint32_t loff)
++// Hit lookup without a fill: NULL on a miss (the hit path of rec_get stays a leaf function).
++static inline __attribute__((always_inline)) const uint8_t *rc_hit(uint32_t loff)
+ {
++    uint32_t ln = loff / RC_LINE;
++    unsigned set = ln & (RC_SETS - 1);
++    uint16_t tag = (uint16_t)(ln / RC_SETS);
++    const uint16_t *t = &rc_tag[set * RC_WAYS];
++    unsigned w;
++
++    if (t[0] == tag)
++        w = 0;
++    else if (t[1] == tag)
++        w = 1;
++    else if (t[2] == tag)
++        w = 2;
++    else if (t[3] == tag)
++        w = 3;
++    else
++        return 0;
++    uint8_t *lru = &rc_lru[set];
++    uint8_t l = *lru;
++    if ((l & 3u) != w)
++        *lru = lru_tab[w][l];
++    return rc_data[set * RC_WAYS + w] + (loff & (RC_LINE - 1));
++}
++
++__attribute__((noinline)) static void rec_get_full(uint32_t loff, void *out, uint32_t n)
++{
++    const uint8_t *p = 0;
++    if (loff - bake_lo < bake_span)
++        p = bake_ptr(loff, n);
++    if (!p) {
++        if (n - 1u >= RC_LINE - (loff & (RC_LINE - 1))) {
++            rec_get_slow(loff, out, n);
++            return;
++        }
++        // one line: a hit, else the line is filled right here (rec_get_slow would look it up again)
++        p = rc_hit(loff);
++        if (!p)
++            p = rc_fill(loff / RC_LINE) + (loff & (RC_LINE - 1));
++    }
++    if (!(((uintptr_t)p | (uintptr_t)out) & 3u)) {
++        const uint32_t *s = (const uint32_t *)(const void *)p;
++        uint32_t *d = (uint32_t *)out;
++        switch (n) {
++        case 16: {
++            uint32_t a = s[0], b = s[1], c = s[2], e = s[3];
++            d[0] = a; d[1] = b; d[2] = c; d[3] = e;
++            return;
++        }
++        case 8: {
++            uint32_t a = s[0], b = s[1];
++            d[0] = a; d[1] = b;
++            return;
++        }
++        case 4:
++            d[0] = s[0];
++            return;
++        case 12: {
++            uint32_t a = s[0], b = s[1], c = s[2];
++            d[0] = a; d[1] = b; d[2] = c;
++            return;
++        }
++        }
++    }
++    memcpy(out, p, n);
++}
++
++__attribute__((noinline)) static uint16_t rec_u16_full(uint32_t loff)
++{
++    if (!(loff & 1u)) {
++        const uint8_t *p = loff - bake_lo < bake_span ? bake_ptr(loff, 2) : 0;
++        if (!p) {
++            p = rc_hit(loff);
++            if (!p)
++                p = rc_fill(loff / RC_LINE) + (loff & (RC_LINE - 1));
++        }
++        return *(const uint16_t *)(const void *)p;
++    }
+     uint16_t v;
+-    rec_get(loff, &v, 2);
++    rec_get_slow(loff, &v, 2);
+     return v;
+ }
+ 
+-uint32_t rec_u32(uint32_t loff)
++__attribute__((noinline)) static uint32_t rec_u32_full(uint32_t loff)
+ {
++    if (!(loff & 3u)) {
++        const uint8_t *p = loff - bake_lo < bake_span ? bake_ptr(loff, 4) : 0;
++        if (!p) {
++            p = rc_hit(loff);
++            if (!p)
++                p = rc_fill(loff / RC_LINE) + (loff & (RC_LINE - 1));
++        }
++        return *(const uint32_t *)(const void *)p;
++    }
+     uint32_t v;
+-    rec_get(loff, &v, 4);
++    rec_get_slow(loff, &v, 4);
+     return v;
++}
++
++// A record in one line that is not in the cache (outside the baked ranges): fill, then copy.
++__attribute__((noinline)) static void rec_get_miss(uint32_t loff, void *out, uint32_t n)
++{
++    const uint8_t *p = rc_fill(loff / RC_LINE) + (loff & (RC_LINE - 1));
++    if (!(((uintptr_t)p | (uintptr_t)out) & 3u)) {
++        const uint32_t *s = (const uint32_t *)(const void *)p;
++        uint32_t *d = (uint32_t *)out;
++        if (n == 16) {
++            uint32_t a = s[0], b = s[1], c = s[2], e = s[3];
++            d[0] = a; d[1] = b; d[2] = c; d[3] = e;
++            return;
++        }
++        if (n == 8) {
++            uint32_t a = s[0], b = s[1];
++            d[0] = a; d[1] = b;
++            return;
++        }
++        if (n == 4) {
++            d[0] = s[0];
++            return;
++        }
++    }
++    memcpy(out, p, n);
++}
++
++// Hit paths: leaf functions (no saved registers) for a record in one line of the cache and
++// outside the baked ranges; everything else takes the full versions above.
++void rec_get(uint32_t loff, void *out, uint32_t n)
++{
++    if (loff - bake_lo >= bake_span && n - 1u < RC_LINE - (loff & (RC_LINE - 1))) {
++        const uint8_t *p = rc_hit(loff);
++        if (p) {
++            if (!(((uintptr_t)p | (uintptr_t)out) & 3u)) {
++                const uint32_t *s = (const uint32_t *)(const void *)p;
++                uint32_t *d = (uint32_t *)out;
++                if (n == 16) {
++                    uint32_t a = s[0], b = s[1], c = s[2], e = s[3];
++                    d[0] = a; d[1] = b; d[2] = c; d[3] = e;
++                    return;
++                }
++                if (n == 8) {
++                    uint32_t a = s[0], b = s[1];
++                    d[0] = a; d[1] = b;
++                    return;
++                }
++                if (n == 4) {
++                    d[0] = s[0];
++                    return;
++                }
++            }
++            memcpy(out, p, n);
++            return;
++        }
++        rec_get_miss(loff, out, n);
++        return;
++    }
++    rec_get_full(loff, out, n);
++}
++
++uint16_t rec_u16(uint32_t loff)
++{
++    if (!(loff & 1u) && loff - bake_lo >= bake_span) {
++        const uint8_t *p = rc_hit(loff);
++        if (p)
++            return *(const uint16_t *)(const void *)p;
++    }
++    return rec_u16_full(loff);
++}
++
++uint32_t rec_u32(uint32_t loff)
++{
++    if (!(loff & 3u) && loff - bake_lo >= bake_span) {
++        const uint8_t *p = rc_hit(loff);
++        if (p)
++            return *(const uint32_t *)(const void *)p;
++    }
++    return rec_u32_full(loff);
+ }
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/data/cache.h b/port/data/cache.h
+--- a/port/data/cache.h	2026-11-03 17:56:32
++++ b/port/data/cache.h	2026-11-03 19:36:49
+@@ -10,9 +10,11 @@
+ 
+ #include <stdint.h>
+ 
+-#define RC_LINE 16
++#ifndef RC_LINE
++#define RC_LINE 32
+ #define RC_WAYS 4
+-#define RC_SETS 32
++#define RC_SETS 16
++#endif
+ #define RC_LINES (RC_WAYS * RC_SETS)
+ // RAM of the cache: line data, u16 tags and the LRU bytes
+ #define RC_BYTES (RC_LINES * RC_LINE + RC_LINES * 2 + RC_SETS)
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/data/extents.c b/port/data/extents.c
+--- a/port/data/extents.c	2026-11-03 17:56:32
++++ b/port/data/extents.c	2026-11-03 19:31:00
+@@ -9,8 +9,10 @@
+ 
+ static const uint8_t ext_cap[DMC_NFILES] = { 16, 8, 8, 4, 4, 1 };
+ 
++extern uint32_t img_pw[2][3];
+ void ext_reset(void)
+ {
++    img_pw[0][1] = img_pw[0][0] = img_pw[1][1] = img_pw[1][0] = 0;
+     unsigned first = 0;
+     for (int i = 0; i < DMC_NFILES; i++) {
+         dmc_file_t *f = &dmc_files[i];
+@@ -26,6 +28,7 @@
+ 
+ int ext_add(dmc_file_t *f, uint16_t lcl, uint16_t pcl)
+ {
++    img_pw[0][1] = img_pw[0][0] = img_pw[1][1] = img_pw[1][0] = 0;
+     dmc_extent_t *e = &dmc_extents[f->first];
+     if (f->next) {
+         dmc_extent_t *last = &e[f->next - 1];
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/data/fetch.c b/port/data/fetch.c
+--- a/port/data/fetch.c	2026-11-03 17:56:32
++++ b/port/data/fetch.c	2026-11-03 19:37:37
+@@ -347,11 +347,21 @@
+     flat_touch(s);
+ }
+ 
++// QwenOS: the flats the E1 maps use live in the data ROM (ports/doomdmc/mkflatrom.py), so no
++// flat cache RAM and no flat reads; any other flat falls back to the slots (k = 0: solid colour).
++#ifdef QOS_FLATROM
++extern const uint16_t q_flat_idx[];
++extern const uint8_t q_flat_rom[][DMC_FLAT_SIZE];
++#endif
+ const uint8_t *flat_get(int flat)
+ {
++    flat_check(flat);
++#ifdef QOS_FLATROM
++    if (q_flat_idx[flat] != 0xFFFFu)
++        return q_flat_rom[q_flat_idx[flat]];
++#endif
+     if (!flat_slots)
+         return NULL;
+-    flat_check(flat);
+     int s = flat_find(flat);
+     if (s < 0) {
+         // the previous flat is done with, slots of prefetches are kept
+@@ -371,6 +381,10 @@
+ void flat_prefetch(int flat)
+ {
+     flat_check(flat);
++#ifdef QOS_FLATROM
++    if (q_flat_idx[flat] != 0xFFFFu)
++        return;
++#endif
+     if (flat_slots < 2 || flat_find(flat) >= 0)
+         return;
+     // never the slot in use or one still loading
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/data/img.c b/port/data/img.c
+--- a/port/data/img.c	2026-11-03 17:56:32
++++ b/port/data/img.c	2026-11-03 19:31:00
+@@ -19,8 +19,18 @@
+     img_read(DMC_MAP_TABLE_OFF + 32u * (unsigned)k, e, sizeof(*e));
+ }
+ 
++// One cached run per file part (DOOM.DAT / DOOMX.DAT) of the logical image with a constant
++// offset to the NOR address: every translation after the first in the same extent is a
++// subtract, a compare and an add.
++uint32_t img_pw[2][3];  // lo, hi, delta
++
+ uint32_t img_phys_run(uint32_t loff, uint32_t *run)
+ {
++    uint32_t *w = img_pw[loff >= img.split];
++    if (loff - w[0] < w[1] - w[0]) {
++        *run = w[1] - loff;
++        return loff + w[2];
++    }
+     uint32_t phys;
+     if (loff < img.split) {
+         phys = ext_phys(&dmc_files[DMC_F_DOOM], loff, run);
+@@ -29,6 +39,9 @@
+     } else {
+         phys = ext_phys(&dmc_files[DMC_F_DOOMX], loff - img.split + DMC_DOOMX_HDR, run);
+     }
++    w[0] = loff;
++    w[1] = loff + *run;
++    w[2] = phys - loff;
+     return phys;
+ }
+ 
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/data/img.h b/port/data/img.h
+--- a/port/data/img.h	2026-11-03 17:56:32
++++ b/port/data/img.h	2026-11-03 19:31:00
+@@ -38,6 +38,8 @@
+ } img_dir_t;
+ 
+ extern img_dir_t img;
++// cached translation runs (lo, hi, phys - logical) of the DOOM.DAT and DOOMX.DAT parts, see img.c
++extern uint32_t img_pw[2][3];
+ 
+ // Locates the files (DOOMCODE.DMC on the firmware drive first, then on the
+ // data drive), checks both headers and the header CRC, loads the section
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/game/fe_glue.c b/port/game/fe_glue.c
+--- a/port/game/fe_glue.c	2026-11-03 17:56:32
++++ b/port/game/fe_glue.c	2026-11-03 19:54:02
+@@ -33,7 +33,10 @@
+ boolean messageNeedsInput;
+ int showMessages = 1;
+ #ifdef DMC_FW
+-int detailLevel = 1;  // low detail, the meter's view
++#ifndef Q_DETAIL
++#define Q_DETAIL 1   /* 0: 320 columns, 1: 160 (doubled), 2: 80 (x4, lowres build) */
++#endif
++int detailLevel = Q_DETAIL;  // low detail, the meter's view
+ #else
+ int detailLevel;
+ #endif
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/game/i_dmc.c b/port/game/i_dmc.c
+--- a/port/game/i_dmc.c	2026-11-03 17:56:32
++++ b/port/game/i_dmc.c	2026-11-03 19:31:00
+@@ -93,6 +93,18 @@
+ 
+ void I_Sleep(int ms)
+ {
++#ifdef DMC_FW
++    // Virtual clock (no timer): TryRunTics sleeps 1 ms at a time until the next tic. Jump straight to the
++    // first ms whose I_GetTime is one more than now: every observable state is the same, 28 loops fewer.
++    if (ms == 1)
++    {
++        uint32_t t = (uint32_t)I_GetTime() + 1u, sec = t / TICRATE, k = t % TICRATE;
++        uint32_t target = sec * 1000u + (k * 1000u + (TICRATE - 1u)) / TICRATE;
++        uint32_t now = plat_ms();
++        plat_delay_ms(target > now ? target - now : 1u);
++        return;
++    }
++#endif
+     plat_delay_ms(ms > 0 ? (uint32_t)ms : 1u);
+ }
+ 
+@@ -238,4 +250,9 @@
+                 (unsigned)(c + need - arena));
+     rc_place(c);
+     flat_place(k ? c + RC_BYTES : NULL);
++#ifdef Q_DBG_RAM
++    { extern void q_puts(const char*); extern void q_puthex(uint32_t); extern void q_putc(int);
++      q_puts("RAMDBG c+need="); q_puthex((uint32_t)(uintptr_t)(c + need)); q_puts(" arena="); q_puthex((uint32_t)(uintptr_t)arena);
++      q_puts(" k="); q_puthex(k); q_puts(" plan="); q_puthex((uint32_t)M.plan.plan); q_putc(10); }
++#endif
+ }
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/math/trig.c b/port/math/trig.c
+--- a/port/math/trig.c	2026-11-03 17:56:32
++++ b/port/math/trig.c	2026-11-03 19:54:02
+@@ -87,6 +87,8 @@
+     unsigned lo, hi, width;
+     const uint32_t *words;
+     const uint16_t *prefix;
++    if (detail >= 2)   /* lowres: 80 columns, the 320 column boundary rounded up to a quarter */
++        return (dmc_viewangletox(0, i) + 3) >> 2;
+     if (detail) {
+         lo = DMC_VATX_LO_LOW, hi = DMC_VATX_HI_LOW, width = 160;
+         words = dmc_vatx_words_low, prefix = dmc_vatx_prefix_low;
+@@ -105,7 +107,7 @@
+ 
+ uint32_t dmc_xtoviewangle(int detail, unsigned x)
+ {
+-    unsigned fine = detail ? dmc_xtva_low[x] : dmc_xtva_high[x];
++    unsigned fine = detail >= 2 ? dmc_xtva_high[x << 2] : detail ? dmc_xtva_low[x] : dmc_xtva_high[x];
+     return ((uint32_t)fine << 19) - ANG90;
+ }
+ 
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/obj/level.c b/port/obj/level.c
+--- a/port/obj/level.c	2026-11-03 17:56:32
++++ b/port/obj/level.c	2026-11-03 19:37:37
+@@ -31,7 +31,11 @@
+ int			o_page_cap;
+ int			o_mover_cap;
+ #else
++#ifdef QOS_FLATROM
++#define ARENA_MAX	24000	// QwenOS: arenas are larger than the AT32's plan D (no flat cache RAM)
++#else
+ #define ARENA_MAX	14800	// plan D
++#endif
+ #endif
+ #define ARENA_END	O_ARENA_END
+ 
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/render/r_frame.c b/port/render/r_frame.c
+--- a/port/render/r_frame.c	2026-11-03 17:56:32
++++ b/port/render/r_frame.c	2026-11-03 19:54:02
+@@ -213,13 +213,21 @@
+         config_plan = plan;
+         flat_set_slots(slots_request >= 0 ? slots_request : M.plan.k);
+         r_layout_t l;
++#ifdef QOS_FLATROM
++        if (R_Layout(&l, pw, 1))  // QwenOS: always textured (ROM flats)
++#else
+         if (R_Layout(&l, pw, M.plan.k != 0))
++#endif
+             I_Error("R_FrameSetup: plan needs %u B of frame region", (unsigned)l.total);
+         frame_len = ALIGN16(l.total);
+         lay.w = 0;
+     }
+     int w = w_request ? w_request : pw;
++#ifdef QOS_FLATROM
++    int textured = solid_request >= 0 ? !solid_request : 1;  // QwenOS: ROM flats
++#else
+     int textured = solid_request >= 0 ? !solid_request : M.plan.k != 0;
++#endif
+     if (w != lay.w || textured != lay.textured) {
+         R_PumpIdle();
+         R_ApplyLayout(w, textured);
+@@ -379,8 +387,23 @@
+     R_PlanesFrame();
+     R_RenderBSPPass();
+ 
++#ifdef Q_VTOP
++    /* lowres letterbox: strip buffers keep their 200 row stride, rows Q_VTOP..Q_VBOT-1 are sent */
++    extern int q_pump_stride;
++    q_pump_stride = R_VIEWH;
++#define PUMP_ROW0 Q_VTOP
++#define PUMP_ROW1 (Q_VBOT - 1)
++#else
++#define PUMP_ROW0 0
++#define PUMP_ROW1 (R_VIEWH - 1)
++#endif
+     if (!tempscreen)
+-        R_PumpWindow(0, SCREENWIDTH - 1, 0, R_VIEWH - 1, detailshift ? PUMP_DOUBLE : 0);
++        R_PumpWindow(0, SCREENWIDTH - 1, PUMP_ROW0, PUMP_ROW1,
++                     (detailshift >= 2 ? PUMP_QUAD : detailshift ? PUMP_DOUBLE : 0)
++#ifdef Q_DUMP_ROW2
++                     | PUMP_ROW2
++#endif
++                     );
+     for (int s0 = 0; s0 < viewwidth; s0 += lay.w) {
+         int s1 = s0 + lay.w < viewwidth ? s0 + lay.w : viewwidth;
+         cur ^= 1;
+@@ -398,8 +421,11 @@
+         if (tempscreen)
+             R_StripToScreen(r_stripbuf, s0, s1 - s0);
+         else
+-            pump_submit(r_stripbuf, s1 - s0);
++            pump_submit(r_stripbuf + PUMP_ROW0, s1 - s0);
+     }
++#ifdef Q_VTOP
++    q_pump_stride = 0;
++#endif
+ #ifdef DMC_ATTR
+     R_AttrViewEnd();
+ #endif
+diff -ruN -x build -x .git -x *.o -x *.elf -x *.img -x *.bin -x *.wad -x __pycache__ a/port/render/r_inner.c b/port/render/r_inner.c
+--- a/port/render/r_inner.c	2026-11-03 17:56:32
++++ b/port/render/r_inner.c	2026-11-03 19:47:32
+@@ -10,23 +10,28 @@
+ #include "r_strip.h"
+ #include "trig_tables.h"
+ 
++// Duff's device over 8 pixels: the first n & 7 pixels are entered at the matching case of one
++// unrolled body (dest is moved back so every case uses the same offsets), no prologue loop.
++#define COL_PX(k) d[k] = cmap[src[pos >> sh]]; pos += step
+ void R_ColumnLoop(uint8_t *dest, int n, uint32_t pos, uint32_t step, int sh, const uint8_t *src,
+                   const uint8_t *cmap)
+ {
+-    for (; n & 3; n--) {
+-        *dest++ = cmap[src[pos >> sh]];
+-        pos += step;
++    uint8_t *d = dest - ((8 - (n & 7)) & 7);
++    int blocks = (n + 7) >> 3;
++    switch (n & 7) {
++    case 0:
++        do {
++            COL_PX(0);
++    case 7: COL_PX(1);
++    case 6: COL_PX(2);
++    case 5: COL_PX(3);
++    case 4: COL_PX(4);
++    case 3: COL_PX(5);
++    case 2: COL_PX(6);
++    case 1: COL_PX(7);
++            d += 8;
++        } while (--blocks);
+     }
+-    for (; n; n -= 4, dest += 4) {
+-        dest[0] = cmap[src[pos >> sh]];
+-        pos += step;
+-        dest[1] = cmap[src[pos >> sh]];
+-        pos += step;
+-        dest[2] = cmap[src[pos >> sh]];
+-        pos += step;
+-        dest[3] = cmap[src[pos >> sh]];
+-        pos += step;
+-    }
+ }
+ 
+ // Vanilla R_InitTranslationTables: the green ramp 0x70..0x7f becomes grey,
+@@ -63,23 +68,26 @@
+ 
+ #define SPAN_TEXEL(p) cmap[src[(((p) >> 6) & 0x3E0u) | ((p) >> 27)]]
+ 
++// Same device for the spans (a row step is R_VIEWH).
++#define SPAN_PX(k) d[(k) * R_VIEWH] = SPAN_TEXEL(pos); pos += step
+ void R_SpanLoop(uint8_t *dest, int n, uint32_t pos, uint32_t step, const uint8_t *src,
+                 const uint8_t *cmap)
+ {
+-    for (; n & 3; n--) {
+-        *dest = SPAN_TEXEL(pos);
+-        dest += R_VIEWH;
+-        pos += step;
+-    }
+-    for (; n; n -= 4, dest += 4 * R_VIEWH) {
+-        dest[0] = SPAN_TEXEL(pos);
+-        pos += step;
+-        dest[R_VIEWH] = SPAN_TEXEL(pos);
+-        pos += step;
+-        dest[2 * R_VIEWH] = SPAN_TEXEL(pos);
+-        pos += step;
+-        dest[3 * R_VIEWH] = SPAN_TEXEL(pos);
+-        pos += step;
++    uint8_t *d = dest - (int)((8 - (n & 7)) & 7) * R_VIEWH;
++    int blocks = (n + 7) >> 3;
++    switch (n & 7) {
++    case 0:
++        do {
++            SPAN_PX(0);
++    case 7: SPAN_PX(1);
++    case 6: SPAN_PX(2);
++    case 5: SPAN_PX(3);
++    case 4: SPAN_PX(4);
++    case 3: SPAN_PX(5);
++    case 2: SPAN_PX(6);
++    case 1: SPAN_PX(7);
++            d += 8 * R_VIEWH;
++        } while (--blocks);
+     }
+ }
+ 
