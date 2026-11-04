@@ -23,7 +23,7 @@ def main():
     if cpu.exitcode!=0 or 'doom: WAD map geometry rendered' not in log:
         raise RuntimeError('guest did not render a WAD map')
     elf=Path(a.elf)
-    framebuffer=kernel_symbol(elf.with_name('kernel.elf'),'framebuffer')
+    framebuffer=kernel_symbol(elf.with_name('kernel.elf'),'qos_framebuffer')
     pixels=bytes(cpu.mem[framebuffer:framebuffer+32*24])
     Path(a.out).write_bytes(b'P5\n32 24\n255\n'+pixels)
     print(f'{a.out}: 32x24 guest framebuffer, {cpu.steps} RISC-V instructions, {len(dev.reads)} disk requests, {len(set(pixels))} shades')

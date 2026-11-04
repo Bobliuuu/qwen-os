@@ -22,7 +22,7 @@ def main():
     if cpu.exitcode!=0:raise SystemExit(f'QwenOS failed (exit={cpu.exitcode})')
     kernel=Path(a.elf).with_name('kernel.elf')
     syms=subprocess.check_output(['readelf','-sW',str(kernel)],text=True)
-    match=re.search(r'\b([0-9a-f]{8})\s+768\s+OBJECT\s+LOCAL\s+DEFAULT\s+\d+\s+framebuffer\b',syms)
+    match=re.search(r'\b([0-9a-f]{8})\s+768\s+OBJECT\s+(?:LOCAL|GLOBAL)\s+DEFAULT\s+\d+\s+qos_framebuffer\b',syms)
     if not match:raise SystemExit('framebuffer symbol missing')
     addr=int(match.group(1),16)
     frame=cpu.mem[addr:addr+768]
