@@ -1,90 +1,60 @@
-# How QwenOS runs DOOM, step by step
+# How QwenOS runs DOOM (the picture book)
 
-A gentle tour. No assembly required. For the headline numbers see the [README](../README.md); for the evidence see [research](research/README.md).
+Look, don't read. Every picture moves. For the headline numbers see the [README](../README.md); for the evidence see [research](research/README.md).
 
-## The cast
+<p align="center"><img src="assets/hero-terminal.svg" alt="A terminal boots QwenOS, shows the dollar prompt and types run /bin/doomd" width="100%"><br><img src="assets/doom-e1m1.gif" alt="Real E1M1 frames from the emulator" width="480"></p>
 
-```mermaid
-flowchart LR
-    subgraph guest["Guest: everything here is RV32IM instructions"]
-        SH["shell"] --> DM["/bin/doomd + DMC100 engine"]
-        KN["kernel core"]
-        DM --> KN
-        SH --> KN
-    end
-    HOST["host: keys in, disk blocks out"] <--> KN
-    guest --> CPU["Qwenputer CPU inside Qwen3.5"]
-```
+*Real E1M1 frames from the emulator (the C emulator renders the pixels; see the honesty box below).*
 
-The guest is a normal little OS. The host is a very dumb helper that pushes key bytes and serves disk blocks. It never runs game logic.
+## 1. The stack
 
-## Step 1: boot
+A keystroke dives six layers down. A frame climbs back up.
 
-The CPU resets and the kernel runs. In the live build it prints `$ ` and parks, waiting for a key. That takes **184 instructions** after reset (186 in the merged build). There is no banner, because every instruction is precious when each one costs a couple of tokens.
+<p align="center"><img src="assets/stack.svg" alt="Animated stack: you, shell, /bin/doomd, DMC100 engine, kernel syscalls, Qwenputer circuit inside Qwen3.5" width="100%"></p>
 
-## Step 2: the shell
+The host is a very dumb helper: it pushes key bytes and serves disk blocks. It never runs game logic.
 
-You type `run /bin/doomd` and press Enter. The shell echoes each key (about 70 instructions per key), and understands `ls`, `cat`, `echo`, `run /bin/X` and `exit`. Typing the whole command costs about 1,050 instructions.
+## 2. One frame, token by token
 
-## Step 3: takeover
+About 0.49 M instructions per game tic, 1.345 chip tokens each.
 
-`doomd` is special. A normal app shares RAM with the kernel; `doomd` **takes over** nearly all of it.
+<p align="center"><img src="assets/one-frame.svg" alt="Instruction chips turn into token blocks, counters tick up, a frame pops out with marker 0x02" width="100%"></p>
 
-```text
-RAM 0x0000 .. 0x7fff  (32 KiB)
-+----------------+ 0x0000
-| null guard     |  stays zero forever
-+----------------+ 0x0100
-| kernel core    |  keys, disk mailbox, 32x24 framebuffer (0x154, 0x15c, 0x270)
-+----------------+ 0x0570
-| doomd          |  30,800 B: data, frame region, stack growing down
-+----------------+ 0x8000
-```
+Boot to the `$ ` prompt is 184 instructions (186 in the merged build). Typing `run /bin/doomd` costs about 1,050.
 
-The kernel zeroes the RAM above its core, then hands it over. The code itself lives in read-only ROM (256 KiB exec, 128 KiB data), because this CPU cannot execute from RAM.
+## 3. The 32 KiB map
 
-## Step 4: one frame
+doomd **takes over** nearly all the RAM. The code lives in read-only ROM, because this CPU cannot execute from RAM.
 
-Each game tic the engine reads keys from the 4-deep key ring, moves the world, and, on the tics it chooses to draw, renders the view straight into the framebuffer. Then it prints a frame marker on the console. In the FULL preset it draws 15 of every 35 tics (game logic still runs every tic). Reading map and texture data goes through the disk.
+<p align="center"><img src="assets/memory-map.svg" alt="RAM map and ROM map, with the chunk window at 0x29000..0x3f000" width="100%"></p>
 
-## Step 5: how the model checks it in lockstep
+## 4. Lockstep: every token must match
 
-The model does not "see" the game. It **executes the CPU**, token by token, and a reference machine checks every step.
+<p align="center"><img src="assets/lockstep.svg" alt="Three lanes, model, reference CPU and host truth, march in step with checks; a faded mismatch scenario stops the run" width="100%"></p>
 
-```mermaid
-sequenceDiagram
-    participant R as Reference machine (truth)
-    participant M as Qwen model
-    R->>M: snapshot of machine state
-    loop one segment
-        M->>M: generate chip tokens (RV32 instructions)
-        M-->>R: compare each token with the oracle
-    end
-    Note over M,R: segment ok: instr count, tokens and marker match
-    R->>M: next snapshot, plus any disk bytes
-```
+<p align="center"><img src="assets/verify-strip.svg" alt="Timeline strip: snapshot, generate, compare, segment ok, next snapshot" width="100%"></p>
 
-A run is a chain of **segments**. Each starts from a host snapshot, and "zero divergence" means every chip token matched the oracle inside that segment. The pixels you would see in a video come from the emulator rendering the same state; the model vouches for the instruction trace (frame marker, console bytes, instruction count), not the pixels.
+What has actually run on the model: a probe, a title frame (6,563 instr), and a cold boot to the first frame marker (1,552,382 instr, 292 segments, zero divergence, earlier pre-merge build). Gameplay frames are 🚧 in progress <!-- PENDING:clip -->.
 
-What has actually happened on the model: a probe, a title frame (6,563 instr), and a cold boot to the first frame marker (1,552,382 instr, 292 segments, zero divergence). Gameplay frames are 🚧 in progress <!-- PENDING:clip -->.
+## 5. Why chunk ROM removes the disk pauses
 
-## Step 6: why chunk ROM removes the disk pauses
+<p align="center"><img src="assets/chunk-rom.svg" alt="Before, 165,054 disk pauses. After, an 89 KB data-ROM window per chunk and 4 pauses" width="100%"></p>
 
-The disk is the awkward part. Every disk request means the model must **pause**, the host must patch the answer into the machine state, and the model resumes. Without help, 350 tics of E1M1 make **165,054** requests, each one a segment boundary.
+`tools/chunkrom.py` plans which disk bytes each stretch of the game needs and preloads them into the window at 0x29000..0x3f000. If a read misses, the engine still falls back to the disk mailbox, so correctness never depends on the plan (a deliberate-miss test gives byte-identical output). Price: +10.6 % instructions.
 
-```mermaid
-flowchart LR
-    subgraph before["Before: host-served disk"]
-        A1["engine asks for bytes"] --> A2["model pauses"] --> A3["host patches answer in"] --> A4["resume"]
-    end
-    subgraph after["After: chunk ROM"]
-        B1["engine asks for bytes"] --> B2["lookup in data-ROM window"] --> B3["keep going"]
-    end
-```
+## 6. Next up: chunking across GPUs
 
-The idea: the data ROM has 128 KiB of read-only space. A planner (`tools/chunkrom.py`) looks at which disk bytes each stretch of the game will need and preloads them into a window at 0x29000..0x3f000. The plan has 5 chunks, switching at frame markers 0, 4, 17, 31, 100 and 152. If a read misses the window the engine still falls back to the disk mailbox, so correctness never depends on the plan (a deliberate-miss test gives byte-identical output).
+<p align="center"><img src="assets/gpu-chunks.svg" alt="Plan: the 3-second clip split into about 30 chunks, fanned out to GPUs, merged into a ledger, pending" width="100%"></p>
 
-Result: **4 disk requests in total** (all tiny reads at boot), for about +10.6 % instructions.
+🚧 A plan, not a result. <!-- PENDING:clip -->
+
+## 7. The journey
+
+<p align="center"><img src="assets/journey.svg" alt="Timeline from the v0.11 viewer to real DOOM, upstream CPU, model boot frame, chunk ROM and the clip" width="100%"></p>
+
+## Honesty box
+
+> The pixels in the GIF come from the emulator. The model verifies the instruction trace (frame marker, console bytes, instruction count, lockstep), not the pixels. Disk is host-served, keyboard input is simulated, the clock is virtual, and it is not real time (about 1.1 k instr/s). The 3-second clip and gameplay frames on the model are in progress. Full list: [HONESTY.md](research/HONESTY.md).
 
 ## Where to go next
 

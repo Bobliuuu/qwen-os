@@ -1,5 +1,15 @@
 <div align="center">
 
+<img src="docs/assets/hero-terminal.svg" alt="QwenOS boots, shows a prompt and types run /bin/doomd" width="100%">
+
+<img src="docs/assets/doom-e1m1.gif" alt="Real E1M1 frames from the QwenOS emulator" width="480">
+
+<sub>Real E1M1 frames from the emulator. The model-verified part is the instruction trace; see below.</sub>
+
+</div>
+
+<div align="center">
+
 # QwenOS
 
 **A tiny operating system that boots, opens a shell, and runs real DOOM, on a CPU that lives inside a language model.**
@@ -34,32 +44,9 @@ Other handy targets: `CHUNKROM=1 make demo-live` (typed-flow image) and `tools/d
 
 ## How it works in one picture
 
-```text
-  you type            +---------+      +-----------+      +----------------+
-  "run /bin/doomd" -> |  shell  | ---> | /bin/doomd| ---> | DMC100 engine  |
-                      +---------+      +-----------+      +--------+-------+
-                                                                   | syscalls
-                      +--------------------------------------------v-------+
-                      |  QwenOS kernel: keys, framebuffer, disk, console    |
-                      +--------------------------------------------+-------+
-                                                                   | RV32IM instructions
-                      +--------------------------------------------v-------+
-                      |  Qwenputer: the RV32IM circuit inside Qwen3.5       |
-                      |  (32 KiB RAM, 256 KiB exec ROM, 128 KiB data ROM)   |
-                      +-----------------------------------------------------+
-```
+<p align="center"><img src="docs/assets/stack.svg" alt="Animated stack: you, shell, doomd, DMC100 engine, kernel syscalls, Qwenputer circuit inside Qwen3.5" width="100%"></p>
 
-```mermaid
-flowchart TB
-    U["you type: run /bin/doomd"] --> SH["shell"]
-    SH --> D["/bin/doomd takes over the RAM"]
-    D --> E["DMC100 DOOM engine"]
-    E --> K["kernel syscalls: keys, framebuffer, disk, console"]
-    K --> Q["Qwenputer RV32IM circuit inside Qwen3.5"]
-    H["host: serves disk blocks, pushes keys"] -.-> K
-```
-
-Want the slow, friendly version? Read [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
+Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one animation per idea.
 
 ## The numbers
 
@@ -117,6 +104,8 @@ We are stitching model-verified runs into a short clip of E1M1 (target: 15 rende
 Until then, the only model-verified frame marker is the cold-boot picture.
 
 ## The journey
+
+<p align="center"><img src="docs/assets/journey.svg" alt="Journey timeline from the v0.11 viewer to the clip" width="100%"></p>
 
 What worked (all in [`docs/research/experiments/`](docs/research/experiments/)):
 
