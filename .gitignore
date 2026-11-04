@@ -14,3 +14,4 @@ __pycache__/
 *.gif
 *.o
 *.a
+!docs/assets/*.gif
