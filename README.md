@@ -14,7 +14,7 @@
 
 **A tiny operating system that boots, opens a shell, and runs real DOOM, on a CPU that lives inside a language model.**
 
-![ISA](https://img.shields.io/badge/CPU-RV32IM-5b8def) ![RAM](https://img.shields.io/badge/RAM-32%20KiB-f2c14e) ![engine](https://img.shields.io/badge/engine-DMC100--Doom-c0392b) ![model](https://img.shields.io/badge/model-Qwen3.5--4B-7e57c2) ![license](https://img.shields.io/badge/license-GPL--2.0-lightgrey) ![status](https://img.shields.io/badge/status-research%20demo-lightgrey)
+![ISA](https://img.shields.io/badge/CPU-RV32IM-5b8def) ![RAM](https://img.shields.io/badge/RAM-32%20KiB-f2c14e) ![engine](https://img.shields.io/badge/engine-DMC100--Doom-c0392b) ![model](https://img.shields.io/badge/model-Qwen3.5--4B-7e57c2) ![license](https://img.shields.io/badge/license-MIT%20%2B%20GPL--2.0-lightgrey) ![status](https://img.shields.io/badge/status-research%20demo-lightgrey)
 
 [Quick start](#what-you-can-do-in-30-seconds) · [How it works](#how-it-works-in-one-picture) · [The numbers](#the-numbers) · [What is real](#what-is-real-and-what-is-not) · [The journey](#the-journey) · [The clip](#the-3-second-clip) · [License](#license)
 
@@ -148,5 +148,7 @@ The `engine-patches/` diff holds the QwenOS edits to DMC100-Doom (see `engine-pa
 
 ## License
 
-GPL-2.0-only, see `LICENSE` and `NOTICE`. DMC100-Doom, doomgeneric and DOOM are GPL-2.0;
-Freedoom is separate (BSD) and not included.
+QwenOS-original code is MIT, see `LICENSE`. The DOOM engine port (`ports/doomdmc/`,
+`engine-patches/`, `apps/doomd*`) is built on DMC100-Doom, doomgeneric and DOOM, which are
+GPL-2.0, see `COPYING`, so the built `/bin/doomd` image is GPL-2.0. Per-directory breakdown in
+`NOTICE`. Freedoom is separate (BSD) and not included.

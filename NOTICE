@@ -1,13 +1,23 @@
 QwenOS licensing notice
 =======================
 
-* ports/doomdmc/ and engine-patches/ build on or modify DMC100-Doom
-  (https://github.com/ArturBieniek4/DMC100-Doom, GPL-2.0), which descends from
-  doomgeneric and id Software's DOOM source (GPL-2.0). Those parts are GPL-2.0-only.
-* The QwenOS-original code (kernel/, apps/, linker/, include/, tools/, tests/) is
-  also released under GPL-2.0-only, so that the combined work (the doomd image
-  links the engine into the QwenOS memory layout) is license-compatible.
-* The upstream CPU reference and model (divagr18/qwenputer, "chipformer") are
-  separate projects with their own licenses; they are not included here.
-* Game data is NOT included. Freedoom (https://freedoom.github.io, modified BSD) is
-  fetched separately by the user; the original DOOM WADs are commercial.
+QwenOS is dual-licensed by directory. Two license texts live in the repo root:
+LICENSE (MIT) and COPYING (GPL-2.0).
+
+MIT (see LICENSE): the QwenOS-original code
+  kernel/, linker/, include/, tools/, tests/, docs/, Makefile,
+  apps/ (except the doomd files listed below), ports/doom/
+
+GPL-2.0-only (see COPYING): anything built on or modified from DMC100-Doom
+(https://github.com/ArturBieniek4/DMC100-Doom, GPL-2.0), which descends from
+doomgeneric and id Software's DOOM source (GPL-2.0)
+  ports/doomdmc/, engine-patches/, apps/doomd.c, apps/doomd_crt0.S
+
+The built /bin/doomd image links the GPL engine into the QwenOS memory layout, so
+that binary, and any build that includes it, is GPL-2.0. The MIT parts remain MIT
+when used on their own.
+
+Not included here, with their own licenses:
+* The upstream CPU reference and model (divagr18/qwenputer, "chipformer").
+* Game data. Freedoom (https://freedoom.github.io, modified BSD) is fetched
+  separately by the user; the original DOOM WADs are commercial.
