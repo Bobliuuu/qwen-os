@@ -136,7 +136,6 @@ class ModelPlan(unittest.TestCase):
 
     # XFAIL (merge): needs the keys-inside-segment check of the updated tools/model_doom_qwen.py, which is owned by another
     # agent and was deliberately NOT replaced in this tree (the stock bundle version does not raise here).
-    @unittest.expectedFailure
     def test_key_inside_a_segment_is_refused(self):
         t = self.truth(keys=[('p', 3)])
         with self.assertRaises(RuntimeError):

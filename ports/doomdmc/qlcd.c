@@ -134,11 +134,19 @@ void pump_end(void) {}
 // the frame is done: called by the main loop. The framebuffer is the live display memory (the
 // FB_PRESENT syscall only computed a checksum nobody reads while doomd owns the machine), so
 // presenting is just the frame marker.
+/* model-run segment stop (tools/model_doom_qwen.py): a model segment ends at a breakpoint (ebreak patched over one ROM
+   word) that must be a pc the segment has not executed before, but the frame-end code is shared by every frame. The host
+   therefore arms q_stop_at = the q_frames value of the wanted boundary (0 = off); the frame end that reaches it calls
+   q_stop_here() right after its marker, and the first instruction of that function is fresh for the segment.
+   Disarmed it costs one load + compare per frame. */
+volatile uint32_t q_stop_at;
+__attribute__((noinline, used)) void q_stop_here(void) { __asm__ volatile("" ::: "memory"); }
 void q_frame_end(void)
 {
     q_frames++;
     if (dumping) { q_putc(1); q_putc('E'); put16(q_frames); dumping = 0; }
     q_putc(2);  /* frame marker for the harness */
+    if (q_frames == q_stop_at) q_stop_here();   /* host-armed segment boundary right after this marker */
 }
 
 // ---- polled panel interface (menu/status text paths of the meter's UI): unused here ----
