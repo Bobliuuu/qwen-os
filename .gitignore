@@ -2,3 +2,15 @@ build/
 __pycache__/
 *.py[cod]
 .venv/
+.DS_Store
+.idea/
+.vscode/
+*.elf
+*.img
+*.bin
+*.wad
+*.WAD
+*.mp4
+*.gif
+*.o
+*.a
