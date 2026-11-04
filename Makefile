@@ -61,6 +61,7 @@ asset: all
 frame: all
 	python3 tools/render_frame.py $(OUT)
 build/rv32_fast: tools/rv32_fast.c
+	mkdir -p build
 	cc -O2 -o $@ $<
 check: all model-probe build/qwenos-doomd.elf build/qwenos-live.elf build/rv32_fast
 	python3 tools/check_layout.py $(OUT)
