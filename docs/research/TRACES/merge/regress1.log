@@ -1,0 +1,16 @@
+== building (parallel)
+== running
+== comparing
+FAIL m1-states: first divergence at line 58: golden tic 57 bf417ed03a25430b != actual tic 57 97c3a085063e1e5b (139 of 260 lines differ)
+ok   m1-frames: 257 lines identical to golden
+ok   m1-frames-nohash: 257 lines identical to golden
+ok   m2-states: 100 lines identical to golden
+ok   m2-frames: 99 lines identical to golden
+ok   m1-prod-vs-check: production and check build run the same 260 frame/tic sequence
+ok   m2-prod-vs-check: production and check build run the same 100 frame/tic sequence
+== cost (production build, E1.img, instr per game tic; disk requests per tic)
+stat m1: game tics n=257 instr/tic mean=3087317 median=3072247 p90=3495608 max=3924767; disk req/tic=3618 bytes/tic=118894 total req=942731
+note m1: mean instr/tic is 26.7% below the baseline 4210308 (--update to adopt)
+stat m2: game tics n=97 instr/tic mean=1498230 median=1438740 p90=2140250 max=2315537; disk req/tic=819 bytes/tic=37305 total req=83403
+note m2: mean instr/tic is 26.7% below the baseline 2042709 (--update to adopt)
+FAIL doomd_regress

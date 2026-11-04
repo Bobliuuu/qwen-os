@@ -1,0 +1,46 @@
+a65ce0520babc6d89e5ef2a9608084c7 bake.patch
+96e04ee84234ae889fb871d697e47004 chunkrom-model.patch
+2833b1b3340a0fbc5056569ee48b7606 chunkrom.patch
+30de1384fab29b9d55a4c7f67bb68b98 full-engine.patch
+6e362310144572dfc430020a4a40adbb full.patch
+ad8c85eac823ea71ccd425b9a5d77c03 lowres.patch
+4a0c6eb46e6d96eefa1159316196b0f3 os.patch
+67c30a734bb4ca2982ba509ec2e6b36d perf.patch
+b666a22f92401152e0423acd73883eb9 ram.patch
+8a23f20b0ccf09f3c18fd9b5e66a4036 render.patch
+deb26b3690e2491c7668813a0d27f2cd sys.patch
+2b8ad04f1a4c5c9e8f2b63e66e630f60 test.patch
+a617f2cb1dfb74049fa7c5e729af660e ram-E1.img
+f0c760b733a4bcc0e856a58ee30b9059 ram-qwenos-doomdmc.elf
+   38993 bake.patch
+   16537 chunkrom-model.patch
+   19374 chunkrom.patch
+   32367 full-engine.patch
+   40093 full.patch
+   18204 lowres.patch
+   81824 os.patch
+   38544 perf.patch
+   61717 ram.patch
+   22910 render.patch
+   19525 sys.patch
+   63883 test.patch
+ 4194304 ram-E1.img
+  300296 ram-qwenos-doomdmc.elf
+ 4948571 total
+bake.patch: 15 diff headers
+chunkrom-model.patch: 2 diff headers
+chunkrom.patch: 5 diff headers
+full-engine.patch: 22 diff headers
+full.patch: 12 diff headers
+lowres.patch: 0 diff headers
+os.patch: 24 diff headers
+perf.patch: 17 diff headers
+ram.patch: 22 diff headers
+render.patch: 14 diff headers
+sys.patch: 8 diff headers
+test.patch: 18 diff headers
+e53d874d97cd9a87d102be0100d6f6a9 out/video/qwenos-doom-e1m1.mp4
+cc1564845ad45ab6d4c75a9538ad7c28 out/video/qwenos-doom-e1m1.gif
+5030876bcc952c92cb04d1cbdeea26a7 out/video/doomd-m2-dumpall.elf
+79b7d86efb58c3078d035a6736e38e3f out/full/img/E1.img
+b93be13d05148dd01614bc205a03648e wads/freedoom1.wad

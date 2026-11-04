@@ -1,0 +1,1625 @@
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/ports/doomdmc/build.sh wt-test/repo2/ports/doomdmc/build.sh
+--- wt-perf/repo2/ports/doomdmc/build.sh	2026-11-03 19:02:30
++++ wt-test/repo2/ports/doomdmc/build.sh	2026-11-03 19:26:40
+@@ -13,6 +13,8 @@
+ ARCH="--target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -msmall-data-limit=0 -mno-relax"
+ INC="-I$HERE/stub -I$DMC/engine/stub/include -I$DMC/engine -I$DMC/port/data -I$DMC/port/render -I$DMC/port/obj -I$DMC/port/math -I$DMC/platform -I$DMC/port/game -I$DMC/port/ovl -I$HERE -I$GEN -I$DMC/controller/rc-n1 -I$REPO/include -I$REPO/ports/doom"
+ DEFS="-DDOOMD_MODE=${DOOMD_MODE:-0} -DDOOMD_DUMP=${DOOMD_DUMP:-0} -DDMC_FW -DDMC_HASHORDER -DDMC_SINE_L1 -DPLAT_HOST"
++[ -n "$QHASH" ] && INC="$INC -I$DMC/tests/lockstep" && EXTRA_CF="$EXTRA_CF -DQ_STATE_HASH"
++[ -n "$QTRACE" ] && EXTRA_CF="$EXTRA_CF -DQ_TRACE_TIC=$QTRACE"
+ CF="$ARCH ${OPT:--O2} -ffunction-sections -fdata-sections -ffreestanding -fno-builtin -fno-common -fwrapv -fsigned-char -std=gnu11 -w $DEFS $INC ${EXTRA_CF}"
+ # map streams in the data ROM (disk-request cut): BAKE_IMG = NOR image to read E1M6 from (default: the E1 pack)
+ BAKE_IMG=${BAKE_IMG:-$DMC/build/sw/nor/E1.img}
+@@ -22,14 +24,27 @@
+ fi
+ SRCS=""
+ for f in $DMC/engine/*.c; do
+-  b=$(basename $f .c); case $b in am_map|z_zone|m_argv|w_wad|w_file|i_endoom|m_fixed) continue;; esac; SRCS="$SRCS $f"
++  b=$(basename $f .c); case $b in am_map|z_zone|m_argv|w_wad|w_file|i_endoom) continue;; m_fixed) [ -n "$NOFASTFIX" ] || continue;; esac; SRCS="$SRCS $f"
+ done
+ for f in $DMC/port/data/*.c $DMC/port/render/*.c $DMC/port/math/trig.c $DMC/port/obj/*.c; do
+   b=$(basename $f .c); SRCS="$SRCS $f"
+ done
+ for b in i_dmc libc_dmc fe_glue i_input s_pcspk l_level l_lines l_menu l_wi l_finale g_save l_save; do SRCS="$SRCS $DMC/port/game/$b.c"; done
+ SRCS="$SRCS $GEN/info.c $GEN/colormap.c $GEN/trig_tables.c $GEN/view.c"
+-SRCS="$SRCS $DMC/platform/rt.c $DMC/platform/text.c $HERE/qplat.c $REPO/ports/doom/hal.c $HERE/doomd_main.c $HERE/ovl_rv.c $HERE/fastfix.c $HERE/rtlib.c $HERE/qimg.c $HERE/qsolid.c $HERE/qbake.c $BAKE $HERE/qnor.c $HERE/qlcd.c"
++# QHASH=1: verification build with the lockstep game-state hash after every tic (qhash.c)
++if [ -n "$QHASH" ]; then
++  HASHC=$DMC/tests/lockstep/hash.c
++  if [ -n "$QTRACE" ]; then   # QTRACE=tic: every hashed value of that tic is printed ("T name idx value")
++    python3 - "$HASHC" "$OUT/hash_trace.c" <<'PY'
++import sys
++s=open(sys.argv[1]).read().replace("    (void)name;\n    (void)idx;","    q_trace_put(name, idx, v);",1)
++open(sys.argv[2],'w').write('void q_trace_put(const char*,int,int);\n'+s)
++PY
++    HASHC=$OUT/hash_trace.c
++  fi
++  SRCS="$SRCS $HASHC $HERE/qhash.c"; LDX="$LDX --wrap=G_Ticker"
++fi
++SRCS="$SRCS $DMC/platform/rt.c $DMC/platform/text.c $HERE/qplat.c $REPO/ports/doom/hal.c $HERE/doomd_main.c $HERE/ovl_rv.c $([ -n "$NOFASTFIX" ] || echo $HERE/fastfix.c) $HERE/rtlib.c $([ -n "$NOQIMG" ] || echo $HERE/qimg.c) $([ -n "$NOSOLID" ] || echo $HERE/qsolid.c) $HERE/qbake.c $BAKE $HERE/qnor.c $HERE/qlcd.c"
+ objs=""
+ $CC $ARCH -c $REPO/apps/doomd_crt0.S -o $OUT/o/crt0.o
+ objs="$OUT/o/crt0.o"
+@@ -42,6 +57,7 @@
+    l_level) extra="-DG_DoLoadLevel=__real_G_DoLoadLevel -DG_DoNewGame=__real_G_DoNewGame -DG_DoPlayDemo=__real_G_DoPlayDemo -DG_DoWorldDone=__real_G_DoWorldDone -DP_Init=__real_P_Init";;
+    l_lines) extra="-DP_CrossSpecialLine=__real_P_CrossSpecialLine -DP_ShootSpecialLine=__real_P_ShootSpecialLine -DP_UseSpecialLine=__real_P_UseSpecialLine";;
+    i_dmc) extra="-Dpal_read=q_pal_set";;
++   hash|hash_trace) extra="-DLS_SMALL -DLS_NOFILE -Drndindex=ls_zero_rnd";;
+    l_wi) extra="-DG_DoCompleted=__real_G_DoCompleted";;
+   esac
+   if [ ! -f $o ] || [ $s -nt $o ] || [ -n "$FORCE" ]; then
+@@ -50,6 +66,6 @@
+   fi
+ done
+ wait
+-WRAP="--wrap=G_DoLoadLevel --wrap=G_DoNewGame --wrap=G_DoPlayDemo --wrap=G_DoCompleted --wrap=G_DoWorldDone --wrap=P_Init --wrap=R_SolidColumn --wrap=img_read --wrap=img_read_async --wrap=D_PostEvent --wrap=P_CrossSpecialLine --wrap=P_ShootSpecialLine --wrap=P_UseSpecialLine"
++WRAP="--wrap=G_DoLoadLevel --wrap=G_DoNewGame --wrap=G_DoPlayDemo --wrap=G_DoCompleted --wrap=G_DoWorldDone --wrap=P_Init $([ -n "$NOSOLID" ] || echo --wrap=R_SolidColumn) $([ -n "$NOQIMG" ] || echo "--wrap=img_read --wrap=img_read_async") --wrap=D_PostEvent --wrap=P_CrossSpecialLine --wrap=P_ShootSpecialLine --wrap=P_UseSpecialLine"
+ $LD --gc-sections --no-relax -T $REPO/linker/doomd.ld $HERE/frame.ld -z max-page-size=4 $WRAP --defsym=DOOMD_STACK_OVERRIDE=${STACK:-0x580} ${LDX} -Map $OUT/doomd.map -o $OUT/doomd.elf $objs
+ readelf -SW $OUT/doomd.elf | grep -E " \.(text|rodata|data|bss) "
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/ports/doomdmc/doomd_main.c wt-test/repo2/ports/doomdmc/doomd_main.c
+--- wt-perf/repo2/ports/doomdmc/doomd_main.c	2026-11-03 19:02:30
++++ wt-test/repo2/ports/doomdmc/doomd_main.c	2026-11-03 19:18:02
+@@ -147,9 +147,11 @@
+         // Virtual time makes every other TryRunTics call return without a tic (it waits out the
+         // tic's 28 ms in 1 ms sleeps). Redrawing the unchanged level costs ~4M instructions, so
+         // only frames that follow a tic (or any menu / non-level screen) are drawn.
++#ifndef Q_NOSKIP
+         if (gamestate == GS_LEVEL && !menuactive && !was_menu &&
+             (gametic == t0 || !players[consoleplayer].mo))
+             continue;
++#endif
+         was_menu = menuactive;
+         S_UpdateSounds(players[consoleplayer].mo);
+ #if DOOMD_FRAMES && DOOMD_MODE
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/ports/doomdmc/qhash.c wt-test/repo2/ports/doomdmc/qhash.c
+--- wt-perf/repo2/ports/doomdmc/qhash.c	1969-12-31 19:00:00
++++ wt-test/repo2/ports/doomdmc/qhash.c	2026-11-03 19:42:26
+@@ -0,0 +1,41 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Verification build only (EXTRA_SRC=qhash.c, LDX=--wrap=G_Ticker, see tools/doomd_regress.sh):
++// the lockstep game-state hash of tests/lockstep/hash.c (identical to the host oracle's
++// stream, FNV-1a over players, sectors and every live mobj) after every game tic, printed as
++//   "TICHASH <gametic> <16 hex>\n"
++// The scratch the hash needs (2 B per handle slot) is borrowed from the frame area, which
++// is dead between G_Ticker and D_Display except for the strip cache, so frame hashes of a
++// hash build are only comparable with each other, not with the plain build.
++#include <stdint.h>
++#include "doomdef.h"
++#include "doomstat.h"
++#include "hash.h"
++#include "qplat.h"
++#include "things.h"
++
++/* hash.c is built with -Drndindex=ls_zero_rnd: rndindex (M_Random) is cosmetic and counts frame
++ * draws (wipes), which differ between a draw-per-tic oracle and this loop, so it is not hashed */
++const int ls_zero_rnd = 0; /* rodata: RAM is full, a bss word can push "plan D" over the edge */
++extern uint8_t __frame_start[], __ram_end[];
++void __real_G_Ticker(void);
++
++void __wrap_G_Ticker(void)
++{
++    int t = gametic;
++    __real_G_Ticker();
++    if (gamestate != GS_LEVEL) return;
++    uint32_t bytes = (uint32_t)(__ram_end - __frame_start);
++    uint64_t h = LS_HashScratch(__frame_start, bytes > 6144 ? 6144 : bytes);
++    for (int i = 0; i < EV_COUNT; i++)   /* object-store events (page pool exhausted...) change the game */
++        if (o_stats.events[i]) { q_puts("TICEVENTS "); q_putu((uint32_t)t); q_putc(' '); q_putu((uint32_t)i); q_putc('\n'); break; }
++    q_puts("TICHASH "); q_putu((uint32_t)t); q_putc(' ');
++    q_puthex((uint32_t)(h >> 32)); q_puthex((uint32_t)h); q_putc('\n');
++}
++
++#ifdef Q_TRACE_TIC
++void q_trace_put(const char *name, int idx, int v)
++{
++    if (gametic != Q_TRACE_TIC) return;
++    q_puts("T "); q_puts(name); q_putc(' '); q_putu((uint32_t)idx); q_putc(' '); q_putu((uint32_t)v); q_putc('\n');
++}
++#endif
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/ports/doomdmc/qsolid.c wt-test/repo2/ports/doomdmc/qsolid.c
+--- wt-perf/repo2/ports/doomdmc/qsolid.c	2026-11-03 18:55:16
++++ wt-test/repo2/ports/doomdmc/qsolid.c	2026-11-03 19:44:12
+@@ -1,25 +1,53 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ // /bin/doomd: R_SolidColumn (plan D floors and ceilings in one colour per light row) is a
+-// function of (rows, plane height, colour, light) only. Neighbouring columns of a plane repeat
+-// the call with identical arguments, so a repeat is a copy of the column just drawn. Linked with
+-// --wrap=R_SolidColumn; the result is byte-identical (checked by frame dumps).
++// function of (rows, plane height, colour, light) only (its tables are const). Neighbouring
++// columns of a plane repeat the call with identical arguments, so a repeat is a copy of the
++// column just computed. Linked with --wrap=R_SolidColumn; the result is byte-identical
++// (checked by tools/doomd_regress.sh frame hashes).
++//
++// The copy comes from a PRIVATE buffer, never from the previous destination column: the strip
++// buffer column that was just drawn can be overdrawn (wall/sprite pixels, e.g. row 199 of the
++// DEMO1 frame at unique index 202) before the next plane column is requested, and copying that
++// column would replicate the overdraw across the whole run of columns.
+ #include <stdint.h>
+ #include <string.h>
+ 
+ void __real_R_SolidColumn(uint8_t *dest, int y, int n, int32_t planeheight, int c, int startmap,
+                           const uint8_t *cmaps, const uint8_t *fixedmap);
+ 
+-static struct { const uint8_t *dest; int32_t ph; const uint8_t *cmaps, *fixed; uint16_t y, n; int16_t c, sm; } last;
++/* RAM is the limit here (the level arena takes whatever .bss leaves; 200 B for a column copy
++ * already makes "plan D: caches end 48 B into the arena" panic), so the last column is kept as
++ * runs of equal bytes (one run per light row, at most Q_SOLID_RUNS of them): 2 B per run. */
++#define Q_SOLID_MAX  200 /* R_VIEWH */
++#define Q_SOLID_RUNS 24
++static struct { const uint8_t *cmaps, *fixed; int32_t ph; uint8_t y, n, c, sm, valid, nr; } last; /* y < 200, n <= 200, c a colour, sm 0..31 */
++static uint8_t run_at[Q_SOLID_RUNS], run_val[Q_SOLID_RUNS]; /* row offset of the run, its byte */
+ 
+ void __wrap_R_SolidColumn(uint8_t *dest, int y, int n, int32_t planeheight, int c, int startmap,
+                           const uint8_t *cmaps, const uint8_t *fixedmap)
+ {
+-    if (last.dest && last.y == y && last.n == n && last.ph == planeheight && last.c == c &&
+-        last.sm == startmap && last.cmaps == cmaps && last.fixed == fixedmap) {
+-        memcpy(dest, last.dest, (uint32_t)n);
+-    } else {
++    if (n <= 0 || n > Q_SOLID_MAX) {           /* not cacheable: behave exactly like the original */
++        last.valid = 0;
+         __real_R_SolidColumn(dest, y, n, planeheight, c, startmap, cmaps, fixedmap);
++        return;
+     }
+-    last.dest = dest; last.y = (uint16_t)y; last.n = (uint16_t)n; last.ph = planeheight;
+-    last.c = (int16_t)c; last.sm = (int16_t)startmap; last.cmaps = cmaps; last.fixed = fixedmap;
++    if (last.valid && last.y == y && last.n == n && last.ph == planeheight && last.c == c &&
++        last.sm == startmap && last.cmaps == cmaps && last.fixed == fixedmap) {
++        for (unsigned i = 0; i < last.nr; i++) {
++            unsigned end = i + 1 < last.nr ? run_at[i + 1] : (unsigned)n;
++            memset(dest + run_at[i], run_val[i], end - run_at[i]);
++        }
++        return;
++    }
++    __real_R_SolidColumn(dest, y, n, planeheight, c, startmap, cmaps, fixedmap);
++    unsigned nr = 0;
++    last.valid = 0;
++    for (int i = 0; i < n; i++) {
++        if (i && dest[i] == dest[i - 1]) continue;
++        if (nr == Q_SOLID_RUNS) return;        /* too many runs: leave the cache invalid */
++        run_at[nr] = (uint8_t)i; run_val[nr] = dest[i]; nr++;
++    }
++    last.nr = (uint8_t)nr; last.valid = 1; last.y = (uint8_t)y; last.n = (uint8_t)n;
++    last.ph = planeheight; last.c = (uint8_t)c; last.sm = (uint8_t)startmap;
++    last.cmaps = cmaps; last.fixed = fixedmap;
+ }
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tests/golden/README.txt wt-test/repo2/tests/golden/README.txt
+--- wt-perf/repo2/tests/golden/README.txt	1969-12-31 19:00:00
++++ wt-test/repo2/tests/golden/README.txt	2026-11-03 19:45:53
+@@ -0,0 +1,15 @@
++Goldens of tools/doomd_regress.sh (regenerate with: tools/doomd_regress.sh --update)
++
++doomd_m1_states.txt   "<gametic> <fnv64>" after every game tic of DEMO1 (mode 1, 260 frames): the DMC100
++                      lockstep hash (tests/lockstep/hash.c: globals, player, sectors, every live mobj; rndindex
++                      zeroed because M_Random counts frame draws) computed in the guest.
++doomd_m1_frames.txt   "<tic> <md5-12>" for every frame whose picture (320x240 canvas + palette) differs from the
++                      previous one. DEMO1 frames were verified IDENTICAL to the original pre-optimisation build
++                      (base/v0long.h, 256 unique frames incl. unique frame 202) when these were generated.
++doomd_m2_*.txt        the same for the E1M1 scripted run (mode 2, 100 frames; q_script in doomd_main.c).
++perf_baseline.txt     "<mode> <mean instr per game tic> <disk requests per tic> <game tics>" of the production build.
++
++State hashes are optimisation independent (they changed in none of the builds tried: -Oz/-O2, with and without
++qsolid/fastfix/qimg/bake/redraw skip, original engine tree). They are NOT identical to the host oracle's stream
++tic for tic: the guest's object store lists mobjs in a different order (tier order, not spawn order) from tic 71
++of DEMO1 on, and hashes target ordinals; compare single tics field by field with tools/doomd_trace_cmp.py.
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tests/golden/doomd_m1_frames.txt wt-test/repo2/tests/golden/doomd_m1_frames.txt
+--- wt-perf/repo2/tests/golden/doomd_m1_frames.txt	1969-12-31 19:00:00
++++ wt-test/repo2/tests/golden/doomd_m1_frames.txt	2026-11-03 19:43:14
+@@ -0,0 +1,257 @@
++1 cd78d0043d6f
++2 f0abe54c39c1
++4 0a59cf5f1fc8
++5 09fe2e4e99d4
++6 282c8bd7c20c
++7 b1bbedda45ea
++8 2e2352e5128c
++9 c6f1c65ae8e4
++10 7e495c209d02
++11 b9542b30f4a8
++12 5778f56badca
++13 8ae90ef4b620
++14 33755e718ec7
++15 1218b57c2448
++17 c8827210a8fd
++18 5b74a033f416
++19 311a2a213421
++20 c18f77b1c942
++21 20e0dc267be4
++22 0795df037c0a
++23 f23a3eb1308b
++24 94be03595b96
++25 262f49bebed2
++26 c9a535f3f80e
++27 784a483bf41e
++28 0b907b6b75a0
++29 bab9cacfaace
++30 2903af23658f
++31 21c8eb3d3e01
++32 0159d6ef02b2
++33 9cfb91a30a21
++34 c836d76815a4
++35 1df9de762232
++36 543c5f78388f
++37 d84f7961c7a6
++38 ab204b3ae544
++39 600f756658d5
++40 ad918a37f2b8
++41 d68f87c25415
++42 8ca99fea78bf
++43 2b8d8542c1f3
++44 3042cad4b057
++45 627fe33134a0
++46 6295d250a764
++47 b4d527a1bc8d
++48 2042fdcf971e
++49 2a1c24131c79
++50 2bc86b0ce852
++51 909dd5997ecf
++52 410708540f82
++53 45ee57786d6d
++54 840d22759154
++55 5416e8985b92
++56 4f5faae24f5e
++57 506c1f4563eb
++58 f5826f3d092c
++59 cd0ac9ce8f9d
++60 f856ae036dd2
++61 e24182b45eb0
++62 e3de7ec06632
++63 580001ca6b7b
++64 735c320e180e
++65 8fe0cb4a5ae6
++66 15561a9664a6
++67 cae7b75b04f4
++68 433ddd027077
++69 589794a64bd1
++70 cb0758bbb6f2
++71 b11c744bcf7f
++72 73f53330f957
++73 c6cacaf4b385
++74 c34eb41d3066
++75 cd2a15ef7a9b
++76 876e3cde0458
++77 e2f5c6c92504
++78 2049db5fb078
++79 c760edfe5b90
++80 70803d34502c
++81 64b5332e463c
++82 286b699dba17
++83 da13442daa47
++84 23a33f96bab8
++85 591757f02a65
++86 98fceeaf0527
++87 fe7ad1915b84
++88 c2f7b9b5c3fd
++89 339eaf85524e
++90 dbfa03e56c96
++91 209809878f4b
++92 324116bd2c93
++93 aabba0b37c41
++94 ed0bb0bd20fd
++95 cb20302648c1
++96 2b2ef0d8ac78
++97 8a8286f5337e
++98 00b3363c45f4
++99 b2e84e97f847
++100 4793faad05e8
++101 ce6cbbed85fa
++102 8b59b7e05a54
++103 d36906f17e42
++104 e1ce4fe9931a
++105 29124e3aa38f
++106 a99669d29f29
++107 68f37023f68d
++108 36a138fdffb8
++109 67e5ec7d8737
++110 aa396139630b
++111 a993c3b3ed4a
++112 1bca48204890
++113 2491ab31d5ff
++114 3cc2ddb80a11
++115 455df49f140d
++116 21a400be038f
++117 9a4f8216b568
++118 226880c1b642
++119 eade7af827b8
++120 5cf12c803ede
++121 2443af0530ea
++122 16eadf2a6c32
++123 df10f8e5cc3c
++124 888381af99ad
++125 2a532ebc99af
++126 a657d1c7c213
++127 7b00eb05f8ee
++128 19c36b280596
++129 431108fb42e5
++130 3677a87bddfc
++131 c5da3694d27e
++132 c081f201d591
++133 7ea7f546cf6e
++134 ab16c61e8ad2
++135 46202ea4038a
++136 de7c1d62100c
++137 fd05191d6cf8
++138 8ca1f8c24a01
++139 0d019e5036b8
++140 79c02afeb201
++141 b7465249bd48
++142 834adb966a2f
++143 1bee1452090c
++144 91738f6ccc60
++145 0ad92af52932
++146 f67a1470f8fb
++147 c1f6f67ee66c
++148 bb858486c25a
++149 ae0e8d78f1eb
++150 c21320ca5b4a
++151 382b68bcbcfe
++152 5b7fe86ae15e
++153 fe1e5a8611cb
++154 f7fbe423737e
++155 a8594e81e88b
++156 8890ef3a73fa
++157 ecf0e26c4c66
++158 171924d484b3
++159 a4eee40a3cb3
++160 74bd1acc2044
++161 cc27a6baff8e
++162 01d4b4f9253f
++163 9ba8d95c4b28
++164 944ae00adb21
++165 1a0aa1723041
++166 7b72a5695c0c
++167 bc1e8f298a32
++168 ce5fbd4836b0
++169 ed9496d7046b
++170 be0bb0154c80
++171 92884aa0d68b
++172 e59037642bf6
++173 c20f1044495c
++174 6d49bc970bb5
++175 7df487d2dc71
++176 3ab2e2072eac
++177 8eb74ce8b110
++178 f960b46ec0f1
++179 9e1e48dc3a58
++180 1456490e10c3
++181 af7624582787
++182 e5361f5c218c
++183 5e22c17dbe74
++184 ba00c7e236ac
++185 c15752271267
++186 b727d397c922
++187 94029616af3e
++188 ec1aebc09a6a
++189 cb3c57a7901a
++190 6819e0cb0af4
++191 d13a8ad10597
++192 7b8b85da57b7
++193 4924c404a6a2
++194 ec379d26404c
++195 9315a8490500
++196 896c6d5334b3
++197 8a389e642282
++198 77acc044f335
++199 e1f7be104b45
++200 799dd1d368e4
++202 ecdbf1534d6a
++203 3baeb5852e61
++204 9deb27a74237
++205 626a22676a23
++206 03ffe790539d
++207 43f29860afca
++208 7139165eddbb
++209 c3d1508e9930
++210 c0913b762040
++211 41e478930bf7
++212 c9b95bb9db85
++213 7001ed7d8f9a
++214 fe5bf77003bc
++215 9bddcb364fc7
++216 469347da2660
++217 ede9cb809e63
++218 f52c53e027c8
++219 86397c268bae
++220 b0c89c4a5c23
++221 857ee6480f3e
++222 aebd71138702
++223 4f87fbc4bb06
++224 f8119d65154a
++225 d30675035f5c
++226 8c78f13e89a1
++227 d7836d11124e
++228 f7530490cbf0
++229 39508a57eab5
++230 0f0852a41c1a
++231 594f24ef6c8b
++232 b129e8898228
++233 b79f9332020b
++234 39c7bf81c0b7
++235 a4aa9d135770
++236 482dbe51e3c2
++237 29d5af7d85fb
++238 e4aca0068ef8
++239 0cbec43aa5b3
++240 11c3de668cbf
++241 de512b98652f
++242 591df1960427
++243 408bfbe4c2df
++244 5c6d39250964
++245 320c34e2217d
++246 b38d7fc9307f
++247 314c950c7d3c
++248 84bbb15de979
++249 d680c1e4141c
++250 8db15866be04
++251 8b77a758e877
++252 b12326310bd2
++253 1ccc6b43c9e9
++254 60cf003dfb05
++255 3122728032df
++256 8b79c6745ca4
++257 8797c3861c20
++258 0934ba651337
++259 bd6187d66cc9
++260 0ef1fd2724d8
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tests/golden/doomd_m1_states.txt wt-test/repo2/tests/golden/doomd_m1_states.txt
+--- wt-perf/repo2/tests/golden/doomd_m1_states.txt	1969-12-31 19:00:00
++++ wt-test/repo2/tests/golden/doomd_m1_states.txt	2026-11-03 19:43:14
+@@ -0,0 +1,260 @@
++0 43292cab08078279
++1 defde31eac658c41
++2 9ff9138e1647032e
++3 c03860283e58b3ec
++4 757cfe2d333c79d5
++5 516214ea3b4f1298
++6 f6dd59fb7704cee5
++7 2f658f408210493a
++8 7ab1af69c5fd728a
++9 4b7f1b5d3e8dc544
++10 c61deec55af81f6d
++11 ed0fa14f8b448450
++12 da8717cd9b457bd5
++13 061c410b8c9be1db
++14 a898939b0660ce69
++15 00dc92085a668575
++16 f84cdc9fce20b530
++17 16ee3ceb8363ff51
++18 2bfcb6369cd4daad
++19 c0de90ae8961a439
++20 1b9fcf5fe0ba7692
++21 77fd2327847a6a3f
++22 af96f5c02435f370
++23 9f97eb4bbe2d6148
++24 648640f63e414f8b
++25 18cd4fd21bf10036
++26 1bb74748917ba2ac
++27 1e2e3c894cb1ca27
++28 199a3ad342c8a31b
++29 6f93a9d35e2e2c8c
++30 27f6571f74ee3331
++31 17835135e9843597
++32 9d9275f8a9c4d06c
++33 02f305ddca50d689
++34 db661f56cd910812
++35 35607f3e5df92d46
++36 6baba7a245feb320
++37 ac284ded772ba817
++38 5ed93e7524de8438
++39 3eb322a2f12f4330
++40 c489283a3a6f868a
++41 5944105d47888a13
++42 c7b0512c126b7390
++43 43c18682192aa179
++44 4ca506a45fdbe8b8
++45 22564eeaeea9473e
++46 d4fe87a184969212
++47 9501d0e17a37d908
++48 05516b9c54522086
++49 dc8475d06cc17669
++50 fe2e33b924585653
++51 b8653c080e1a0ad2
++52 eab9470b20224b27
++53 10d39f708007e919
++54 d19c27cf29aa9891
++55 c3e657cc8955fb9a
++56 e2dcdb2277f77a07
++57 bf417ed03a25430b
++58 54102f26359ae857
++59 47aa8f205e9618bb
++60 dca811cd293da7f7
++61 6bffc7b779fa3088
++62 47c7ebcd0c77b1dd
++63 4452328a38288648
++64 dcd141902cc0217c
++65 d189389f7dfbf0a5
++66 1a9d45084e56b0fb
++67 ae85ded1dc5a3cbb
++68 b98b41df80144368
++69 b9245a5e8e1598c6
++70 8c69777ee62ff68f
++71 dde50f54498401be
++72 5ac49a73a352b289
++73 5cd655e56a05e787
++74 3cf7dbdffc7ab428
++75 5657b3a2a1fd9f17
++76 4be09222827db827
++77 d946793bb8aa74a8
++78 5881ab524f78f30d
++79 9a9b7392be2955f1
++80 0c7c683bc0b140fe
++81 5f6eecbcf964976a
++82 e49551096acffa16
++83 600c7bf0cc8d17f8
++84 7d0ceaa0e6204dca
++85 d146887d4d4e0130
++86 01ed44abd8846fc2
++87 da7ee265748bc6ff
++88 e86b8b781bc9e28a
++89 2243f52d86fd5bff
++90 28839f21059909c9
++91 a89a49e044fa07ff
++92 0d955f3cfd577876
++93 e7ee783f3224b07c
++94 f96864b665ad085d
++95 f46ec3bfb5540165
++96 552e9745d439ec10
++97 394e5f7bc0b6623f
++98 fbccf2c183bef06e
++99 7bdc7e59736503b1
++100 fa7450907fec4870
++101 954f148bbc04e0af
++102 2b7c443bb21a89fa
++103 bc0d9fb7c0f947e0
++104 d8a3965294810b29
++105 eecb57239317b803
++106 b094e84133f76a1d
++107 f41af20ec0b0de1d
++108 7d1f0d7afb842e19
++109 ec062a7eef286a23
++110 64332e7ac08ea52c
++111 4c1e6748cf8552e1
++112 c4d00dff9dec5c5d
++113 8648c01d6d1b0c90
++114 31d649197368eba2
++115 24b75c67afd0923b
++116 3be2ace4e4b1d34c
++117 552b4557643ee447
++118 14dc97a2126775e9
++119 2ccb88f6534d9a2e
++120 730595589a95483e
++121 65db3c0dd561dd2d
++122 80ca3aa4670b75e0
++123 302f90bf100de5d0
++124 e4f18e947ab8eac9
++125 de8abbd5599bdab1
++126 708660349bbdf46e
++127 267b495045952689
++128 444b05ad81eb1642
++129 6aba821ac576d030
++130 58cbbbf01574f8b3
++131 2ad702dd8f2d08b0
++132 5c730f5c8770247f
++133 3f4fff6719f99795
++134 ecca91ba8aae9a10
++135 57f07c33ef81b975
++136 4c6734458be06a52
++137 93267b6b5d8017b8
++138 8e8d47231d53770c
++139 7f8fe2ede60101ff
++140 4b757c507faf7d26
++141 dd82c06fd05b07ab
++142 021c68a1318a9a1e
++143 23e9c8e914b524be
++144 dbdca028f26fab6a
++145 4fac4418871e6529
++146 4d301cb8cee3f71b
++147 bc43a71df985026c
++148 dbefd17bbd0f4b5c
++149 290c240bf7bb0301
++150 d7bf4a6dada1b9ff
++151 77b103f03e7159bd
++152 d99f56e5489a388d
++153 4f58b891f263791d
++154 45c3e9b2b1939788
++155 ef3b21ffb32354d1
++156 98e08ebd04c1a7a9
++157 4d46ddb1f34649c7
++158 2d2e688a2592499d
++159 2ac77514b1c5dd91
++160 f3145a0103c7b49d
++161 4b4ec2f7ad5e9ba0
++162 0fe014bcae887010
++163 57cdf3490cc444c5
++164 f053f1124603bd4e
++165 2aabe6c89b35fd6f
++166 00d6d00c6c0e63a5
++167 303d1ff1beb81236
++168 5a6605523679b370
++169 cb105c03fed0807c
++170 97bd3af051edca3e
++171 06db6b613c449d7c
++172 bd3affebba343718
++173 5f4e4e21108e6bc9
++174 245ae52892fb6a34
++175 afb691ef97c55ecd
++176 33b64479a9198c74
++177 a336c3c1548218cb
++178 d6c85bce94f08f55
++179 3c038a2e43a1535c
++180 4d85131c667da9ad
++181 4645661aa3ccad1d
++182 bba9f6926eead264
++183 5078e1e638218ef3
++184 c9ca5c4ab9e63f6d
++185 d5b4207b85f5bdad
++186 974f6ce5ea881998
++187 b4c914757acf71f7
++188 6a1b61bdab53663b
++189 2b071b4c8a9a0789
++190 324c401371fc5517
++191 d86c1e4b43cd1046
++192 a283c1ec8675a6bd
++193 ee0c5e45632c44ed
++194 12eb50a2ec3c2aed
++195 219593879434edbe
++196 37e453c7fed417f0
++197 a7808ac1830f56c0
++198 9cf24d2503cd5bc3
++199 02ce246428f1a8af
++200 ee73f8e342f23987
++201 97b28c1b5bbcd819
++202 5dbc34561d6df409
++203 84a5bb7782511bfa
++204 814d52d9398df604
++205 fda86e7b210880ad
++206 22d8b817766e57d0
++207 c42bdd85f4719592
++208 5ee8495e9edd45e7
++209 d8ebb5665665109f
++210 86617bc919acb113
++211 ae5ff92500f7618e
++212 f3137efd80dbe1a2
++213 1ec4b0705c4b8e18
++214 ef767fdf158b4425
++215 592e89a36ac39343
++216 7d87ce59b06f8b7a
++217 26ab4504313f3da9
++218 cdeb95d66a1500ee
++219 ca3de084e5d9e2cd
++220 efabe5bd788e0440
++221 0ff034dd3b0e3b71
++222 2122669110fe0077
++223 51cea2c0f7e5937c
++224 f9d46af1e973bdc5
++225 8a4403aed6200807
++226 e15e3b7fd5f13093
++227 5c4605312dcc15fe
++228 0547cd8a80bfbce8
++229 64c7f703ecb6a647
++230 c87470f792a28987
++231 b07ad637e7660293
++232 1ffee0a49ec1cf1e
++233 9aa44129c64e82da
++234 1aeb056b7f2f9b40
++235 b4f98259d7bd518d
++236 02823939705f4f5d
++237 011c933f1fe2fd9e
++238 9c7248095100a74d
++239 c4b8184085dc5791
++240 6a2cda90be9b9d3c
++241 a67dc279044a40eb
++242 c2d7256c04deaf60
++243 a43c8134f69f27ab
++244 55203455b1eef568
++245 ab93a510d2ffc2ca
++246 68743813d631c6fa
++247 b0ad0e0db5c5ab65
++248 551c30961f564af4
++249 8667e2f79fe8786e
++250 86d0432c423f0ade
++251 ed04ea1087793ddc
++252 11ff2b356e9fd746
++253 dec9c94bb6084407
++254 a246cd9d384f2fb7
++255 de19f664fab3f3f3
++256 1f66a351d55964f5
++257 da3dae55b0f6c694
++258 2d2eb3a3d67abf3b
++259 0684d02a1129056d
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tests/golden/doomd_m2_frames.txt wt-test/repo2/tests/golden/doomd_m2_frames.txt
+--- wt-perf/repo2/tests/golden/doomd_m2_frames.txt	1969-12-31 19:00:00
++++ wt-test/repo2/tests/golden/doomd_m2_frames.txt	2026-11-03 19:43:14
+@@ -0,0 +1,99 @@
++1 d219d8318b89
++3 f5752854095a
++4 9b324c7fe0d2
++5 137fec4b8d2c
++6 568f0283af37
++7 cda894668fd7
++8 773f1c23b5cd
++9 fadab65f88cf
++10 4b167111691a
++11 35c532c5c8eb
++12 cd6fdf51a387
++13 511cb636d1a5
++14 ccc8b2ded0fa
++15 9693b6e5baac
++16 d4647b2b9c0e
++17 534f714b45d6
++18 888c0819d594
++19 49ef537ad5ac
++20 f84e8516a7d9
++21 d8ce2d0c1817
++22 94e1adeae4cf
++23 4fe0f310d29b
++24 6a212b902893
++25 958e0e5bd459
++26 e789e36b2312
++27 c405dbc06c99
++28 a5456fc45f32
++29 57ea427c4fa4
++30 2832bf79910b
++31 28a3ddb1f137
++32 da1f6528f644
++33 b41cccee7310
++34 3645e6d42a6f
++35 1cffef67041e
++36 3f95982d255b
++37 3378e052a83d
++38 ccbd1cd57885
++39 6e3891f04092
++40 db1a7a679c9d
++41 b437f0e528b8
++42 4b1ffb334c88
++43 e7e6ae0df9bc
++44 98ce65f272f6
++45 7e00dfb2ffdb
++46 9ab2f74eaa16
++47 2451388b2e58
++48 bd87b20d70ce
++49 eb9bdc0191e7
++50 c899082e8353
++51 6b9cdbc69c29
++52 2982fbf54a19
++53 ded854ef147e
++54 738078ba5ad4
++55 c7b08b184835
++56 70b3c69f77c1
++57 f6dfb87f7eca
++58 3d02fa71d6a6
++59 9d4f64f34be1
++60 3ca68d657c1f
++61 803b3e534941
++62 43f0d902c262
++63 0e9b5dcd28d3
++64 46478890722c
++65 f3ff4ad5fe82
++66 ecdaa45496a6
++67 1574d7bbe440
++68 3f3ce27e9fc7
++69 46e114d40635
++70 8aa080efe8ac
++71 f5863f751e76
++72 e393f37b83c9
++73 9ce8e01ed081
++74 ed6e10688a6b
++75 a9da16af449f
++76 6327e9c1bdd5
++77 4b0368e66523
++78 dc07d64dc314
++79 fde2228868be
++80 ae98ba8a5c7b
++81 f1d18f0692fd
++82 87a1f686bcd0
++83 8b5a1ab67468
++84 9769fbfc3667
++85 64b1b993b21f
++86 33678c6b2a42
++87 3bac5cab4dc1
++88 2f0021e6de93
++89 8f1573f51b54
++90 a1600df762bb
++91 3f6c5b72843f
++92 638389a8e0b2
++93 f5a0e828cc1e
++94 31aee12dbeb6
++95 6b9188e77964
++96 ebbda397002a
++97 3f54aa406938
++98 717e4736783c
++99 3d4b10c287fd
++100 0bdf9330b8e3
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tests/golden/doomd_m2_states.txt wt-test/repo2/tests/golden/doomd_m2_states.txt
+--- wt-perf/repo2/tests/golden/doomd_m2_states.txt	1969-12-31 19:00:00
++++ wt-test/repo2/tests/golden/doomd_m2_states.txt	2026-11-03 19:43:14
+@@ -0,0 +1,100 @@
++0 182acd059954dfd4
++1 1017f4c832cd6c86
++2 42dadde94085d370
++3 cdeabd1828793011
++4 98e7281f8259a239
++5 5c48b6e4855fc825
++6 b5231cd8a838c4f5
++7 e42f8eb992f194c9
++8 4a9a83053d3349a8
++9 fb33a054f646c053
++10 59d4c4d50c84c303
++11 06a4117b25527824
++12 61bde9bd8a9ba35c
++13 cd2952e7dff8f46a
++14 5e33b5c8c469dbbb
++15 d7615452a18e6aab
++16 d882e9454d49d516
++17 91788270e029dbf4
++18 b69bbc683b912e0f
++19 0cd6774b333441cc
++20 2c8c3e6a86a322c3
++21 47af0fd170078a86
++22 fcf173941317050b
++23 e905e15f83d0981f
++24 4490bec0507cf899
++25 3f6a7d0b8752ef33
++26 7915f7105e8a8ba6
++27 a28b7b5bf640409c
++28 e5cc46f358639eef
++29 31cc9936b4676748
++30 e9282213e52e8a27
++31 e2b7623c455eec2a
++32 6914f674d12359dc
++33 2a5174da7ea65209
++34 aa810cf74b082f6c
++35 618514c3209d31d9
++36 8063fb8fe15554e3
++37 6e78118dcf74f129
++38 6c95f90d9ae6fdb8
++39 cdf43f9e07436eb0
++40 c6d17f44eb2e803c
++41 6417872c5a71b558
++42 2b3819f4de6001da
++43 dc9181d0a1ecea87
++44 f73a9b2ba8c3f215
++45 342951735399461c
++46 d28c03e593b542cc
++47 d72212fdeae83adf
++48 175adfb402213470
++49 ce477e6a786f4395
++50 d61c72335920ba61
++51 17f8ff99d48812c6
++52 fd12791538360a1e
++53 69aba12ba8347781
++54 cf1e36ed52e06531
++55 f13c57a3b584abce
++56 291583189e6b57c0
++57 04577f02bdcf553f
++58 4b5e5b7df2417c54
++59 41ece9451b002d95
++60 6088386d5a92b71e
++61 088bc45e1cac7b6f
++62 141c479d360f89bc
++63 8eede45964d7df00
++64 a841432ddca5fb1f
++65 72cc5d04696c19e6
++66 1f1163e508fa4d58
++67 aa6a6b393a348dd3
++68 b09efe7fac9c3a8e
++69 3e7904a0c336c1f5
++70 13f71fabaf995a32
++71 1cbb54f79a818765
++72 3ae0d4fc4f9aa646
++73 6453a3fce059973f
++74 3b03ce7776503e46
++75 2646b978d908c5bc
++76 4baa974eba284060
++77 a5c188df48aa2485
++78 5db9f84ab05e1a2c
++79 c4f049d44e3f4cb4
++80 f3975a53895f529d
++81 e24dcea1109ad934
++82 2c3a90db3ccceb1d
++83 a3ff096f3d773634
++84 d26f00961493d42f
++85 ea84fc3725e60367
++86 4519bd10324c2434
++87 b3c98e68228b01a2
++88 619f09cad371fe3a
++89 40c78c81c913e290
++90 941c8e40162de601
++91 daa7ba73de8c5757
++92 c59f374657f6aab8
++93 3114db3dc1968717
++94 aeabf9936dad96ef
++95 371bb33537cb9b28
++96 07469d0dd84fded9
++97 ecab408a4484e268
++98 e8ac2ded85f81649
++99 063462c18e15a2c5
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tests/golden/perf_baseline.txt wt-test/repo2/tests/golden/perf_baseline.txt
+--- wt-perf/repo2/tests/golden/perf_baseline.txt	1969-12-31 19:00:00
++++ wt-test/repo2/tests/golden/perf_baseline.txt	2026-11-03 19:43:15
+@@ -0,0 +1,2 @@
++m1 4210308 4050 257
++m2 2042709 1421 97
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tests/test_doomd_regress.py wt-test/repo2/tests/test_doomd_regress.py
+--- wt-perf/repo2/tests/test_doomd_regress.py	1969-12-31 19:00:00
++++ wt-test/repo2/tests/test_doomd_regress.py	2026-11-03 19:45:25
+@@ -0,0 +1,105 @@
++"""Determinism and reference-vs-C-twin lockstep of the real doomd ELF (build/regress/prod1.elf,
++made by tools/doomd_regress.sh; override with DOOMD_ELF).  Skipped when the ELF, the NOR image
++(DOOMDMC_DISK) or build/rv32_fast is missing.
++
++  * determinism: the same ELF run twice on the C twin gives byte-identical console output,
++    register file and RAM image
++  * lockstep (LOCKSTEP_INSTR, default 2,500,000 instructions, three checkpoints): the independent
++    Python reference (tools/rv32_qwenputer.py + wad_device.py) and, when upstream is on PYTHONPATH,
++    Qwenputer's official reference machine agree with the C twin on console bytes, final RAM,
++    and (Python reference) pc + all registers
++"""
++import os, subprocess, sys, tempfile, unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / 'tools'))
++ELF = Path(os.environ.get('DOOMD_ELF', ROOT / 'build/regress/prod1.elf'))
++DISK = Path(os.environ.get('DOOMDMC_DISK', '<WORKDIR>/engine/DMC100-Doom/build/sw/nor/E1.img'))
++FAST = ROOT / 'build/rv32_fast'
++N = int(os.environ.get('LOCKSTEP_INSTR', '2500000'))
++KBOX, DBOX = 0x100, 0x108   # qos_input_mailbox, qos_disk_mailbox of build/kernel-doomd.elf
++
++
++def twin(elf, n, tmp, tag):
++    out, regs = Path(tmp) / f'{tag}.bin', Path(tmp) / f'{tag}.regs'
++    env = dict(os.environ, REGDUMP=str(regs))
++    subprocess.run([str(FAST), str(elf), str(DISK), '%x' % KBOX, '%x' % DBOX, str(out), str(n)],
++                   env=env, capture_output=True, timeout=600)
++    return out.read_bytes(), Path(str(out) + '.ram').read_bytes(), regs.read_text()
++
++
++@unittest.skipUnless(ELF.is_file() and DISK.is_file() and FAST.is_file(),
++                     'needs build/regress/prod1.elf (tools/doomd_regress.sh), E1.img and build/rv32_fast')
++class DoomdDeterminism(unittest.TestCase):
++    def test_same_elf_twice_is_identical(self):
++        with tempfile.TemporaryDirectory() as t:
++            a, b = twin(ELF, 3_000_000, t, 'a'), twin(ELF, 3_000_000, t, 'b')
++        self.assertTrue(a[0], 'no console output')
++        self.assertEqual(a[0], b[0], 'console bytes differ between two runs of the same ELF')
++        self.assertEqual(a[1], b[1], 'RAM image differs between two runs of the same ELF')
++        self.assertEqual(a[2], b[2], 'registers differ between two runs of the same ELF')
++
++    def test_game_state_hash_stream_is_deterministic(self):
++        chk = ROOT / 'build/regress/chk2.elf'
++        if not chk.is_file():
++            self.skipTest('needs build/regress/chk2.elf')
++        with tempfile.TemporaryDirectory() as t:
++            a, b = twin(chk, 700_000_000, t, 'a'), twin(chk, 700_000_000, t, 'b')
++        self.assertIn(b'TICHASH', a[0])
++        self.assertEqual(a[0], b[0])
++
++
++@unittest.skipUnless(ELF.is_file() and DISK.is_file() and FAST.is_file(),
++                     'needs build/regress/prod1.elf (tools/doomd_regress.sh), E1.img and build/rv32_fast')
++class PyRefLockstep(unittest.TestCase):
++    def test_python_reference_matches_twin_at_checkpoints(self):
++        from rv32_qwenputer import CPU
++        from wad_device import WadDevice
++        cpu = CPU(str(ELF))
++        cpu.sym['qos_disk_mailbox'] = DBOX
++        dev = WadDevice(cpu, DISK.read_bytes())
++        marks = [N // 5, N // 2, N]
++        with tempfile.TemporaryDirectory() as t:
++            for m in marks:
++                while cpu.steps < m:
++                    cpu.step()
++                    dev.tick()
++                out, ram, regs = twin(ELF, m, t, f'c{m}')
++                py_out = bytes(b & 255 for b in cpu.byte_events if b < 256)
++                self.assertEqual(py_out, out, f'console bytes differ within the first {m} instructions')
++                self.assertEqual(bytes(cpu.mem[:0x8000]), ram, f'RAM differs after {m} instructions')
++                lines = regs.split('\n')
++                self.assertEqual(lines[0], f'pc {cpu.pc:08x} steps {m}', f'pc differs after {m} instructions')
++                for i in range(1, 32):
++                    self.assertEqual(lines[i + 1], f'x{i} {cpu.reg[i]:08x}', f'x{i} differs after {m} instructions')
++
++    def test_twin_step_budget_is_exact(self):
++        with tempfile.TemporaryDirectory() as t:
++            self.assertTrue(twin(ELF, 12345, t, 'x')[2].startswith('pc '))
++            self.assertIn('steps 12345', twin(ELF, 12345, t, 'y')[2].split('\n')[0])
++
++
++def have_upstream():
++    try:
++        import chipformer.rv.ref  # noqa
++        return True
++    except ImportError:
++        return False
++
++
++@unittest.skipUnless(have_upstream() and ELF.is_file() and DISK.is_file() and FAST.is_file(),
++                     'needs upstream Qwenputer on PYTHONPATH, prod1.elf, E1.img, build/rv32_fast')
++class UpstreamLockstep(unittest.TestCase):
++    def test_official_reference_matches_twin(self):
++        r = subprocess.run([sys.executable, str(ROOT / 'tools/upstream_doomd.py'), str(ELF), str(DISK),
++                            '--kernel-elf', str(ROOT / 'build/kernel-doomd.elf'), '--max-instructions', str(N),
++                            '--compare-fast', str(FAST)],
++                           capture_output=True, text=True, timeout=1800)
++        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
++        self.assertIn('console bytes equal: True', r.stdout)
++        self.assertIn('final RAM equal    : True', r.stdout)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tests/test_model_doom_plan.py wt-test/repo2/tests/test_model_doom_plan.py
+--- wt-perf/repo2/tests/test_model_doom_plan.py	1969-12-31 19:00:00
++++ wt-test/repo2/tests/test_model_doom_plan.py	2026-11-03 19:41:58
+@@ -0,0 +1,190 @@
++"""Unit tests of tools/model_doom_qwen.py (chunk planner, segment logic, --dry-run) on a tiny
++synthetic RV32 program, so they run in about a second and do not depend on the DOOM build.
++The tool is read-only here (another agent extends it): only its stable surface is used
++(plan, Truth, clone, breakpoint_at, oracle_run, symbols, main/--dry-run).  Skipped unless the
++upstream Qwenputer reference (chipformer.rv.ref) is on PYTHONPATH.
++
++Guest program (disk mailbox at 0x100): 4 x { publish a disk request, wait for the reply,
++putc(0x02) frame marker }, then exit(0).
++"""
++import contextlib, io, json, os, struct, sys, tempfile, unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / 'tools'))
++
++try:
++    import chipformer.rv.ref  # noqa: F401
++    HAVE = True
++except ImportError:
++    HAVE = False
++
++
++def i_(op, rd, f3, rs1, imm): return (imm & 0xfff) << 20 | rs1 << 15 | f3 << 12 | rd << 7 | op
++def s_(f3, rs1, rs2, imm): return (imm >> 5 & 0x7f) << 25 | rs2 << 20 | rs1 << 15 | f3 << 12 | (imm & 31) << 7 | 0x23
++def b_(f3, rs1, rs2, off):
++    return ((off >> 12 & 1) << 31 | (off >> 5 & 63) << 25 | rs2 << 20 | rs1 << 15 | f3 << 12 |
++            (off >> 1 & 15) << 8 | (off >> 11 & 1) << 7 | 0x63)
++def addi(rd, rs, imm): return i_(0x13, rd, 0, rs, imm)
++def lw(rd, rs, imm): return i_(0x03, rd, 2, rs, imm)
++def sw(rs2, rs1, imm): return s_(2, rs1, rs2, imm)
++ECALL = 0x73
++S0, S1, T0, T1, T2, A0, A7 = 8, 9, 5, 6, 7, 10, 17
++MARKERS, DBOX, KBOX = 4, 0x100, 0x80
++
++
++def program():
++    p = [addi(S0, 0, DBOX), addi(S1, 0, 0),
++         addi(S1, S1, 1), addi(T0, 0, 16), sw(T0, S0, 4), addi(T0, 0, 4), sw(T0, S0, 8),
++         sw(S1, S0, 0),                       # 7: the store that publishes the request
++         lw(T1, S0, 12), b_(1, T1, S1, -4),   # wait for the device's release word
++         addi(A7, 0, 1), addi(A0, 0, 2), ECALL,
++         addi(T2, 0, MARKERS), b_(4, S1, T2, -48),
++         addi(A7, 0, 93), addi(A0, 0, 0), ECALL]
++    return b''.join(struct.pack('<I', w) for w in p)
++
++
++def write_elf(path, code, base=0x40000):
++    ehdr = b'\x7fELF\x01\x01\x01' + bytes(9) + struct.pack('<HHIIIIIHHHHHH', 2, 243, 1, base, 52, 0, 0, 52, 32, 1, 0, 0, 0)
++    phdr = struct.pack('<8I', 1, 84, base, base, len(code), len(code), 5, 4)
++    Path(path).write_bytes(ehdr + phdr + code)
++
++
++@unittest.skipUnless(HAVE, 'needs qwenputer/experimental/riscv on PYTHONPATH')
++class ModelPlan(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        import model_doom_qwen as M
++        cls.M = M
++        cls.tmp = tempfile.TemporaryDirectory()
++        cls.elf = os.path.join(cls.tmp.name, 'tiny.elf')
++        write_elf(cls.elf, program())
++        cls.disk = os.path.join(cls.tmp.name, 'disk.img')
++        Path(cls.disk).write_bytes(bytes(range(256)) * 4)
++        cls._sym = M.symbols
++        M.symbols = lambda k: {'qos_input_mailbox': KBOX, 'qos_disk_mailbox': DBOX}   # no kernel ELF needed
++        import upstream_ref
++        cls._usym = upstream_ref.symbols
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.M.symbols = cls._sym
++        cls.tmp.cleanup()
++
++    def truth(self, keys=(), pause=True):
++        return self.M.Truth(self.elf, Path(self.disk).read_bytes(), 'unused', list(keys), pause)
++
++    def args(self, **kw):
++        a = dict(snapshot_marker=1, frames=2, max_instructions=0)
++        a.update(kw)
++        return type('A', (), a)()
++
++    def segments(self, **kw):
++        return list(self.M.plan(self.truth(), self.args(**kw)))
++
++    def test_segments_end_at_disk_requests_and_at_the_last_marker(self):
++        # frames=2 after the snapshot at marker 1: requests 2 and 3 stop a segment each (marker 2 is
++        # inside the second one), marker 3 ends the run
++        segs = self.segments()
++        self.assertEqual([s['reason'] for s in segs], ['disk', 'disk', 'marker'])
++        self.assertEqual([s['index'] for s in segs], [1, 2, 3])
++        self.assertEqual([s['out'] for s in segs], [b'', b'\x02', b'\x02'])
++
++    def test_segments_are_contiguous_and_stop_on_ebreak(self):
++        segs = self.segments()
++        for a, b in zip(segs, segs[1:]):
++            # a disk stop sits BEFORE the request store, which the host then executes (+1)
++            self.assertEqual(b['start_steps'], a['start_steps'] + a['instr'] + (1 if a['reason'] == 'disk' else 0))
++        for s in segs:
++            word = s['start'].rom[(s['stop_pc'] - 0x40000) >> 2]
++            self.assertEqual(word, self.M.EBREAK)
++            self.assertGreaterEqual(s['tokens'], s['instr'])     # >= 1 chip token per instruction
++
++    def test_disk_stop_is_the_request_store(self):
++        segs = self.segments()
++        store_pc = 0x40000 + 4 * 7
++        self.assertEqual([s['stop_pc'] for s in segs if s['reason'] == 'disk'], [store_pc, store_pc])
++
++    def test_marker_segment_ends_on_a_fresh_pc_after_the_marker(self):
++        last = self.segments()[-1]
++        self.assertEqual(last['reason'], 'marker')
++        self.assertEqual(last['out'], b'\x02')
++        self.assertGreater(last['stop_pc'], 0x40000 + 4 * 12)   # past the putc ecall
++
++    def test_dry_run_oracle_matches_every_segment(self):
++        for s in self.segments():
++            i, t, out = self.M.oracle_run(self.M.clone(s['start']))
++            self.assertEqual(i, s['instr'] + 1)              # the ebreak pair
++            self.assertEqual(out, s['out'])
++
++    def test_plan_is_deterministic(self):
++        key = lambda segs: [(s['reason'], s['start_steps'], s['stop_pc'], s['instr'], s['tokens'], s['out']) for s in segs]
++        self.assertEqual(key(self.segments()), key(self.segments()))
++
++    def test_no_disk_pause_makes_one_marker_segment_per_frame(self):
++        segs = list(self.M.plan(self.truth(pause=False), self.args()))
++        self.assertEqual([s['reason'] for s in segs], ['marker'])
++        # the walk to a fresh pc may run past more markers in a loop this tight (here all pcs repeat)
++        self.assertGreaterEqual(segs[0]['out'].count(2), 2)
++
++    def test_clone_is_independent(self):
++        t = self.truth()
++        c = self.M.clone(t.m)
++        c.record()
++        self.assertEqual(t.m.steps + 1, c.steps)
++        self.assertNotEqual(t.m.pc, c.pc)
++
++    def test_key_inside_a_segment_is_refused(self):
++        t = self.truth(keys=[('p', 3)])
++        with self.assertRaises(RuntimeError):
++            list(self.M.plan(t, self.args()))
++
++    def test_max_instructions_cap(self):
++        with self.assertRaises(RuntimeError):
++            list(self.M.plan(self.truth(), self.args(max_instructions=3)))
++
++    def test_markerparser_ignores_dump_payload(self):
++        from upstream_doomd import MarkerParser
++        p = MarkerParser()
++        pkt = b'\x01P\x05' + b'\x01W' + bytes(10) + b'\x01D' + struct.pack('<H', 6) + bytes([2, 2, 2, 1, 2, 2]) + b'\x01E\x07\x00'
++        self.assertEqual(sum(p.feed(c) for c in pkt), 0)
++        self.assertTrue(p.feed(2))
++
++    def run_main(self, *argv):
++        out = io.StringIO()
++        old = sys.argv
++        sys.argv = ['model_doom_qwen.py', *argv]
++        try:
++            with contextlib.redirect_stdout(out):
++                self.M.main()
++        finally:
++            sys.argv = old
++        return out.getvalue()
++
++    def test_cli_dry_run_report(self):
++        txt = self.run_main('--elf', self.elf, '--disk', self.disk, '--kernel-elf', 'unused', '--dry-run',
++                            '--snapshot-marker', '1', '--frames', '2', '--out', os.devnull)
++        rep = json.loads(txt[txt.index('{'):])
++        self.assertEqual(rep['segments'], 3)
++        self.assertEqual(rep['frame_markers_in_output'], 2)
++        self.assertIn('dry-run', rep['mode'])
++        self.assertEqual(rep['console_bytes'], 2)
++        self.assertGreaterEqual(rep['planned_chip_tokens'], rep['instructions'])
++
++    def test_cli_rejects_missing_model_and_bad_dump(self):
++        with contextlib.redirect_stderr(io.StringIO()):
++            with self.assertRaises(SystemExit) as c:
++                self.run_main('--elf', self.elf, '--disk', self.disk)       # no model, no --dry-run
++            self.assertEqual(c.exception.code, 2)
++            with self.assertRaises(SystemExit) as c:
++                self.run_main('--elf', self.elf, '--disk', self.disk, '--dry-run', '--dump', '--snapshot-marker', '0')
++            self.assertEqual(c.exception.code, 2)
++
++    def test_cli_max_segments(self):
++        with self.assertRaises(SystemExit):
++            self.run_main('--elf', self.elf, '--disk', self.disk, '--kernel-elf', 'unused', '--dry-run',
++                          '--snapshot-marker', '1', '--frames', '2', '--max-segments', '2', '--out', os.devnull)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tools/build_oracle_mac.sh wt-test/repo2/tools/build_oracle_mac.sh
+--- wt-perf/repo2/tools/build_oracle_mac.sh	1969-12-31 19:00:00
++++ wt-test/repo2/tools/build_oracle_mac.sh	2026-11-03 19:26:41
+@@ -0,0 +1,31 @@
++#!/bin/bash
++# Build the DMC100 host oracle (unmodified doomgeneric + hash hooks) on macOS, where ld has no
++# --wrap: the defining files are compiled with the wrapped names renamed to __real_*, and the
++# hook files with __wrap_* renamed to the plain names (same effect as ld --wrap: only calls
++# from other translation units are redirected).
++# usage: build_oracle_mac.sh DMC_DIR   -> DMC_DIR/build/oracle/dg_oracle
++set -e
++DMC=${1:-<WORKDIR>/engine/DMC100-Doom}
++cd "$DMC"
++CC=${CC:-clang}
++make oracle ENG_CC=$CC >/dev/null 2>&1 || true   # compiles all objects; link fails on macOS (ignored)
++O=build/oracle
++SRC=oracle/src/doomgeneric-repo/doomgeneric
++CF="-O2 -g -std=gnu11 -w -fwrapv -fsigned-char -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -I$SRC -Ioracle -Itests/lockstep"
++ren() { local o=""; for f in "$@"; do o="$o -D$f=__real_$f"; done; echo $o; }
++unw() { local o=""; for f in "$@"; do o="$o -D__wrap_$f=$f"; done; echo $o; }
++$CC $CF $(ren G_Ticker G_BuildTiccmd G_DeferedPlayDemo G_TimeDemo G_ExitLevel G_SecretExitLevel) -c $SRC/g_game.c -o $O/up/g_game.o
++$CC $CF $(ren I_Quit I_Error) -c $SRC/i_system.c -o $O/up/i_system.o
++$CC $CF $(ren I_SetPalette) -c $SRC/i_video.c -o $O/up/i_video.o
++$CC $CF $(ren P_PlayerThink) -c $SRC/p_user.c -o $O/up/p_user.o
++$CC $CF $(ren M_Drawer) -c $SRC/m_menu.c -o $O/up/m_menu.o
++$CC $CF $(ren F_StartFinale) -c $SRC/f_finale.c -o $O/up/f_finale.o
++W="G_Ticker G_BuildTiccmd I_Quit I_Error G_DeferedPlayDemo G_TimeDemo I_SetPalette P_PlayerThink G_ExitLevel G_SecretExitLevel M_Drawer F_StartFinale"
++$CC $CF $(unw $W) -c oracle/hash_hook.c -o $O/own/hash_hook.o
++$CC $CF $(unw $W) -c tests/lockstep/play.c -o $O/own/play.o
++# hash without rndindex (M_Random counts frame draws, cosmetic), same as the guest's qhash build
++$CC $CF -Drndindex=ls_zero_rnd -c tests/lockstep/hash.c -o $O/own/hash.o
++echo "int ls_zero_rnd;" > $O/zr.c; $CC -c $O/zr.c -o $O/own/zr.o
++# hook files call the wrapped names they mean to reach through __real_*; rename calls inside them
++$CC -o $O/dg_oracle $O/up/*.o $O/own/*.o -lm
++echo built $O/dg_oracle
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tools/doomd_hashes.py wt-test/repo2/tools/doomd_hashes.py
+--- wt-perf/repo2/tools/doomd_hashes.py	1969-12-31 19:00:00
++++ wt-test/repo2/tools/doomd_hashes.py	2026-11-03 19:39:39
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python3
++"""Per-tic game-state hashes and per-frame picture hashes from a doomd console dump.
++
++  doomd_hashes.py OUT.bin STATES.txt FRAMES.txt
++
++OUT.bin is the console stream rv32_fast wrote for a regression ELF (QHASH=1 + Q_DUMP_ALL, see
++tools/doomd_regress.sh).  It carries
++  * "TICHASH <gametic> <16 hex>"   lockstep state hash after every game tic (players, sectors, every
++    live mobj; tests/lockstep/hash.c of DMC100, rndindex left out): optimisation independent.
++  * the full 320x240 pump stream of every frame (0x01 'P'/'W'/'D'/'E' packets, see qlcd.c) and the
++    "DOOMD_FRAME n tic t" marker after it.
++STATES.txt: one "<tic> <hash>" line per tic.  FRAMES.txt: one "<tic> <md5-12>" line per frame whose
++picture (canvas + palette number) differs from the previous frame (a skipped redraw and a repeated
++identical redraw are the same thing); tic is the game tic the frame was drawn after.
++"""
++import hashlib, re, sys
++
++
++def frames(d):
++    """[(tic, md5)] per 'E' packet, tic from the DOOMD_FRAME line printed after the frame."""
++    marks = [(m.start(), int(m.group(1))) for m in re.finditer(rb'DOOMD_FRAME \d+ tic (\d+)', d)]
++    out, i, mi = [], 0, 0
++    cur, win, col, L = 0, None, 0, len(d)
++    canvas = bytearray(320 * 240)
++    pend = []  # frames whose tic is not yet known
++    while i < L:
++        if d[i] != 1:
++            i += 1
++            continue
++        t = d[i + 1]
++        i += 2
++        if t == 80:
++            cur = d[i]; i += 1
++        elif t == 87:
++            win = tuple(d[i + 2 * k] | d[i + 2 * k + 1] << 8 for k in range(5)); i += 10; col = win[0]
++        elif t == 68:
++            nb = d[i] | d[i + 1] << 8; i += 2
++            if i + nb > L:
++                break
++            x0, x1, y0, y1, _ = win
++            h = y1 - y0 + 1
++            for c in range(nb // h):
++                canvas[y0 * 320 + col:(y1 + 1) * 320 + col:320] = d[i + c * h:i + c * h + h]
++                col += 1
++                if col > x1:
++                    col = x0
++            i += nb
++        elif t == 69:
++            i += 2
++            while mi < len(marks) and marks[mi][0] < i:
++                mi += 1
++            tic = marks[mi][1] if mi < len(marks) else -1
++            out.append((tic, hashlib.md5(bytes([cur]) + bytes(canvas)).hexdigest()[:12]))
++    return out
++
++
++def dedupe(fr):
++    o = []
++    for tic, h in fr:
++        if not o or o[-1][1] != h:
++            o.append((tic, h))
++    return o
++
++
++def main():
++    d = open(sys.argv[1], 'rb').read()
++    st = [(int(a), b) for a, b in re.findall(r'TICHASH (\d+) ([0-9a-f]{16})', d.decode('latin1'))]
++    fr = dedupe(frames(d))
++    open(sys.argv[2], 'w').write(''.join(f'{a} {b}\n' for a, b in st))
++    open(sys.argv[3], 'w').write(''.join(f'{a} {b}\n' for a, b in fr))
++    print(f'{len(st)} tic hashes, {len(fr)} distinct-consecutive frames')
++
++
++if __name__ == '__main__':
++    main()
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tools/doomd_regress.sh wt-test/repo2/tools/doomd_regress.sh
+--- wt-perf/repo2/tools/doomd_regress.sh	1969-12-31 19:00:00
++++ wt-test/repo2/tools/doomd_regress.sh	2026-11-03 19:42:35
+@@ -0,0 +1,108 @@
++#!/bin/bash
++# doomd_regress.sh: correctness + cost regression suite of the real DMC100 DOOM (/bin/doomd) on RV32IM.
++#
++#   tools/doomd_regress.sh            build, run, compare against tests/golden, print stats
++#   tools/doomd_regress.sh --update   adopt the current state/frame/perf results as the new goldens
++#   options: --no-build (reuse build/regress/*.elf)  --clean (force rebuild)  --fail-perf
++#            --tics1 N (DEMO1 game frames, default 260)  --tics2 N (E1M1 scripted, default 100)
++#   env: DMC (DMC100-Doom checkout), IMG (NOR image), ORIG_H (frame-hash list of the ORIGINAL
++#        pre-optimisation build, default <root>/../base/v0long.h when present), REGRESS_OUT
++#
++# What is checked (any difference exits 1):
++#   state  per-tic lockstep game-state hash (players, sectors, all mobjs; DMC100 tests/lockstep/hash.c,
++#          rndindex excluded) for DEMO1 (mode 1) and the E1M1 scripted run (mode 2): identical to golden
++#   frames per-frame picture hash (320x240 canvas + palette) of both runs identical to golden, and
++#          of a build WITHOUT the hash code (so the hash scratch cannot hide a rendering bug)
++#   orig   DEMO1 frames identical to the original build's (ORIG_H), when the file is there
++#   tics   the production build (no dump, no hash) runs the same frame/tic sequence
++# Reported: instr/tic (mean, median, p90, max) and disk requests/tic of the production build; a
++# regression > 5% instr or > 10% requests against tests/golden/perf_baseline.txt warns (--fail-perf fails).
++# The goldens come from the build whose DEMO1 frames were verified identical to the original build
++# (see tests/golden/README.txt); --update must only be used after that check (ORIG_H).
++set -u
++ROOT=$(cd "$(dirname "$0")/.." && pwd)
++GOLD=$ROOT/tests/golden
++OUT=${REGRESS_OUT:-$ROOT/build/regress}
++export DMC=${DMC:-<WORKDIR>/engine/DMC100-Doom}
++IMG=${IMG:-$DMC/build/sw/nor/E1.img}
++[ -z "${ORIG_H:-}" ] && [ -f "$ROOT/../base/v0long.h" ] && ORIG_H=$ROOT/../base/v0long.h
++UPDATE= NOBUILD= CLEAN= FAILPERF= T1=260 T2=100
++while [ $# -gt 0 ]; do case $1 in
++  --update) UPDATE=1;; --no-build) NOBUILD=1;; --clean) CLEAN=1;; --fail-perf) FAILPERF=--fail-perf;;
++  --tics1) T1=$2; shift;; --tics2) T2=$2; shift;; -h|--help) sed -n 2,26p "$0"; exit 0;;
++  *) echo "unknown option $1"; exit 2;; esac; shift; done
++mkdir -p "$OUT" "$GOLD"
++RC=0; fail() { echo "$@"; RC=1; }
++[ -f "$IMG" ] || { echo "NOR image $IMG missing (set IMG/DMC)"; exit 2; }
++
++# ---- tools
++cc -O2 -o "$ROOT/build/rv32_fast" "$ROOT/tools/rv32_fast.c" || exit 2
++FAST=$ROOT/build/rv32_fast
++for e in kernel-doomd shell paint raycast asset doom; do
++  [ -f "$ROOT/build/$e.elf" ] || make -C "$ROOT" build/$e.elf >/dev/null || { echo "cannot build $e.elf"; exit 2; }
++done
++
++# ---- builds: NAME MODE FRAMES "env..."   (check = hash + dump, frm = dump only, prod = neither)
++build() {
++  local name=$1 mode=$2 frames=$3; shift 3
++  local d=$OUT/$name flags="$mode $frames $* $DMC"
++  [ -n "$NOBUILD" ] && return 0
++  local force=; { [ -n "$CLEAN" ] || [ "$(cat $d/flags 2>/dev/null)" != "$flags" ]; } && force=1
++  mkdir -p "$d"
++  ( env "$@" DOOMD_MODE=$mode FORCE=$force EXTRA_CF="-DDOOMD_FRAMES=$frames $EXTRA" "$ROOT/ports/doomdmc/build.sh" "$d" >/dev/null 2>"$d/build.log" &&
++    python3 "$ROOT/tools/merge_elf.py" "$OUT/$name.elf" "$ROOT/build/kernel-doomd.elf" "$ROOT/build/shell.elf" "$ROOT/build/paint.elf" \
++       "$ROOT/build/raycast.elf" "$ROOT/build/asset.elf" "$ROOT/build/doom.elf" "$d/doomd.elf" >/dev/null &&
++    echo "$flags" > "$d/flags" ) || { echo "BUILD FAILED: $name (see $d/build.log)"; return 1; }
++}
++echo "== building (parallel)"
++EXTRA="-DQ_DUMP_ALL" build chk1 1 $T1 QHASH=1 & P1=$!
++EXTRA="-DQ_DUMP_ALL" build frm1 1 $T1 X=1 & P2=$!
++EXTRA="-DQ_DUMP_ALL" build chk2 2 $T2 QHASH=1 & P3=$!
++EXTRA="" build prod1 1 $T1 X=1 & P4=$!
++EXTRA="" build prod2 2 $T2 X=1 & P5=$!
++for p in $P1 $P2 $P3 $P4 $P5; do wait $p || RC=1; done
++[ $RC -ne 0 ] && exit 1
++
++# ---- runs
++run() { # name elf -> $OUT/name.bin, $OUT/name.log (stderr of the twin)
++  SYMELF=$OUT/${3:-$1}/doomd.elf "$FAST" "$OUT/$1.elf" "$IMG" 100 108 "$OUT/$1.bin" 20000000000 >"$OUT/$1.log" 2>&1
++  local rc=$?
++  [ $rc -eq 0 ] || { echo "FAIL $1: guest did not finish cleanly (rv32_fast exit $rc: 99 = DOOMD PANIC, see $OUT/$1.log and the end of $OUT/$1.bin)"; return 1; }
++}
++echo "== running"
++PIDS=; for n in chk1 frm1 chk2 prod1 prod2; do run $n & PIDS="$PIDS $!"; done
++for p in $PIDS; do wait $p || RC=1; done
++[ $RC -ne 0 ] && exit 1
++
++# ---- compare
++echo "== comparing"
++H=$ROOT/tools/doomd_hashes.py; C=$ROOT/tools/doomd_regress_cmp.py
++python3 $H "$OUT/chk1.bin" "$OUT/m1.states" "$OUT/m1.frames" >/dev/null
++python3 $H "$OUT/frm1.bin" /dev/null "$OUT/m1.nohash.frames" >/dev/null
++python3 $H "$OUT/chk2.bin" "$OUT/m2.states" "$OUT/m2.frames" >/dev/null
++if [ -n "$UPDATE" ]; then
++  cp "$OUT/m1.states" "$GOLD/doomd_m1_states.txt"; cp "$OUT/m1.frames" "$GOLD/doomd_m1_frames.txt"
++  cp "$OUT/m2.states" "$GOLD/doomd_m2_states.txt"; cp "$OUT/m2.frames" "$GOLD/doomd_m2_frames.txt"
++  python3 - "$OUT" "$ROOT/tools" > "$GOLD/perf_baseline.txt" <<'PY'
++import sys
++sys.path.insert(0, sys.argv[2])
++import doomd_regress_cmp as c
++for m in (1, 2):
++    r = c.parse_stats('%s/prod%d.log' % (sys.argv[1], m))
++    print('m%d %d %d %d' % (m, r['mean'], r['req_per_tic'], r['n']))
++PY
++  echo "goldens updated in $GOLD"
++fi
++python3 $C diff m1-states "$GOLD/doomd_m1_states.txt" "$OUT/m1.states" || RC=1
++python3 $C diff m1-frames "$GOLD/doomd_m1_frames.txt" "$OUT/m1.frames" || RC=1
++python3 $C diff m1-frames-nohash "$GOLD/doomd_m1_frames.txt" "$OUT/m1.nohash.frames" || RC=1
++python3 $C diff m2-states "$GOLD/doomd_m2_states.txt" "$OUT/m2.states" || RC=1
++python3 $C diff m2-frames "$GOLD/doomd_m2_frames.txt" "$OUT/m2.frames" || RC=1
++[ -n "${ORIG_H:-}" ] && { python3 $C orig m1-vs-original "$ORIG_H" "$OUT/m1.frames" || RC=1; }
++python3 $C tics m1-prod-vs-check "$OUT/prod1.bin" "$OUT/chk1.bin" || RC=1
++python3 $C tics m2-prod-vs-check "$OUT/prod2.bin" "$OUT/chk2.bin" || RC=1
++echo "== cost (production build, E1.img, instr per game tic; disk requests per tic)"
++python3 $C stats m1 "$OUT/prod1.log" "$GOLD/perf_baseline.txt" $FAILPERF || RC=1
++python3 $C stats m2 "$OUT/prod2.log" "$GOLD/perf_baseline.txt" $FAILPERF || RC=1
++[ $RC -eq 0 ] && echo "PASS doomd_regress" || echo "FAIL doomd_regress"
++exit $RC
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tools/doomd_regress_cmp.py wt-test/repo2/tools/doomd_regress_cmp.py
+--- wt-perf/repo2/tools/doomd_regress_cmp.py	1969-12-31 19:00:00
++++ wt-test/repo2/tools/doomd_regress_cmp.py	2026-11-03 19:40:37
+@@ -0,0 +1,102 @@
++#!/usr/bin/env python3
++"""Comparison helpers of tools/doomd_regress.sh.
++
++  doomd_regress_cmp.py diff NAME GOLDEN ACTUAL      first divergent line of two "<tic> <hash>" files
++  doomd_regress_cmp.py tics NAME OUT_A.bin OUT_B.bin same "DOOMD_FRAME n tic t" sequence in two consoles
++  doomd_regress_cmp.py orig NAME ORIG.h FRAMES.txt   frame hashes equal the original build's (aligned)
++  doomd_regress_cmp.py stats NAME LOG BASELINE       print instr/tic + disk req/tic, warn vs baseline
++Exit status 1 on a divergence (stats only on --fail-perf).
++"""
++import re, sys
++
++
++def read(p):
++    return [l.split() for l in open(p) if l.strip()]
++
++
++def cmd_diff(name, golden, actual):
++    g, a = read(golden), read(actual)
++    n = min(len(g), len(a))
++    for i in range(n):
++        if g[i] != a[i]:
++            print(f'FAIL {name}: first divergence at line {i + 1}: golden tic {g[i][0]} {g[i][1]} != actual tic {a[i][0]} {a[i][1]}'
++                  f' ({sum(1 for k in range(n) if g[k] != a[k])} of {n} lines differ)')
++            return 1
++    if len(g) != len(a):
++        print(f'FAIL {name}: golden has {len(g)} lines, actual {len(a)}')
++        return 1
++    print(f'ok   {name}: {len(g)} lines identical to golden')
++    return 0
++
++
++def cmd_tics(name, a, b):
++    pat = re.compile(rb'DOOMD_FRAME (\d+) tic (\d+)')
++    x, y = pat.findall(open(a, 'rb').read()), pat.findall(open(b, 'rb').read())
++    if x != y:
++        print(f'FAIL {name}: production build reaches different frames/tics than the check build ({len(x)} vs {len(y)} frames)')
++        return 1
++    print(f'ok   {name}: production and check build run the same {len(x)} frame/tic sequence')
++    return 0
++
++
++def cmd_orig(name, orig, frames):
++    a = open(orig).read().split()
++    b = [h for _, h in read(frames)]
++    k = next((i for i in range(len(b)) if b[i] in a), None)
++    if k is None:
++        print(f'FAIL {name}: no frame in common with the original build')
++        return 1
++    j = a.index(b[k])
++    n = min(len(a) - j - 1, len(b) - k - 1)   # the last frame of either may be cut off
++    for i in range(n):
++        if a[j + i] != b[k + i]:
++            print(f'FAIL {name}: differs from the ORIGINAL build at aligned frame {i} (orig unique {j + i}, new {k + i})')
++            return 1
++    print(f'ok   {name}: {n} unique frames identical to the original build (aligned at new[{k}] = orig[{j}])')
++    return 0
++
++
++def parse_stats(log):
++    t = open(log, errors='replace').read()
++    r = {}
++    m = re.search(r'GAMETICS n=(\d+) mean=(\d+) median=(\d+) p90=(\d+) max=(\d+)', t)
++    if m:
++        r.update(zip(('n', 'mean', 'median', 'p90', 'max'), map(int, m.groups())))
++    m = re.search(r'DISK total_req=(\d+) req_per_tic=(\d+) bytes_per_tic=(\d+)', t)
++    if m:
++        r.update(zip(('disk_total', 'req_per_tic', 'bytes_per_tic'), map(int, m.groups())))
++    return r
++
++
++def cmd_stats(name, log, baseline, fail=False):
++    r = parse_stats(log)
++    if not r:
++        print(f'FAIL {name}: no GAMETICS/DISK lines in {log}')
++        return 1
++    print(f'stat {name}: game tics n={r["n"]} instr/tic mean={r["mean"]} median={r["median"]} p90={r["p90"]} max={r["max"]}; '
++          f'disk req/tic={r["req_per_tic"]} bytes/tic={r["bytes_per_tic"]} total req={r["disk_total"]}')
++    rc = 0
++    try:
++        base = {}
++        for l in open(baseline):
++            p = l.split()
++            if len(p) == 4 and p[0] == name:
++                base = dict(mean=int(p[1]), req_per_tic=int(p[2]), n=int(p[3]))
++        if base:
++            for key, lim in (('mean', 1.05), ('req_per_tic', 1.10)):
++                if r[key] > base[key] * lim:
++                    print(f'{"FAIL" if fail else "WARN"} {name}: {key} {r[key]} is {100 * (r[key] / base[key] - 1):.1f}% above the baseline {base[key]}')
++                    rc = 1 if fail else 0
++            if r['mean'] < base['mean'] * 0.97:
++                print(f'note {name}: mean instr/tic is {100 * (1 - r["mean"] / base["mean"]):.1f}% below the baseline {base["mean"]} (--update to adopt)')
++    except FileNotFoundError:
++        print(f'note {name}: no perf baseline file {baseline}')
++    return rc
++
++
++if __name__ == '__main__':
++    c, args = sys.argv[1], sys.argv[2:]
++    fail = '--fail-perf' in args
++    args = [a for a in args if a != '--fail-perf']
++    sys.exit({'diff': cmd_diff, 'tics': cmd_tics, 'orig': cmd_orig,
++              'stats': lambda *a: cmd_stats(*a, fail=fail)}[c](*args))
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tools/doomd_trace_cmp.py wt-test/repo2/tools/doomd_trace_cmp.py
+--- wt-perf/repo2/tools/doomd_trace_cmp.py	1969-12-31 19:00:00
++++ wt-test/repo2/tools/doomd_trace_cmp.py	2026-11-03 19:45:53
+@@ -0,0 +1,33 @@
++#!/usr/bin/env python3
++"""Field-by-field compare of the guest's hashed state of ONE tic with the host oracle's.
++
++  # guest: QTRACE=<tic> prints every hashed value of that tic ("T name idx value") on the console
++  DOOMD_MODE=1 QHASH=1 QTRACE=71 EXTRA_CF=-DQ_DUMP_ALL ports/doomdmc/build.sh OUT ; (merge, run rv32_fast)
++  # oracle: tools/build_oracle_mac.sh $DMC ; $DMC/build/oracle/dg_oracle -iwad freedoom1.wad -playdemo demo1 \
++  #             --tics 80 --hash-dump 71 d71.txt
++  doomd_trace_cmp.py guest_out.bin d71.txt
++
++Known benign difference: the guest lists dropped items / puffs in store order, the oracle in spawn order,
++so mo.* records appear swapped (same multiset); everything else must be equal.
++"""
++import sys,re
++bin_,orc=sys.argv[1],sys.argv[2]
++d=open(bin_,'rb').read().decode('latin1')
++g=[]
++for m in re.finditer(r'^T (\S+) (\d+) (-?\d+)$',d,re.M):
++    v=int(m.group(3)); v=v-(1<<32) if v>=1<<31 else v
++    g.append((m.group(1),int(m.group(2)),v))
++o=[]
++for l in open(orc):
++    l=l.strip()
++    if l.startswith('hash'):continue
++    m=re.match(r'([\w.]+)(?:\[(\d+)\])? (-?\d+)$',l)
++    o.append((m.group(1),int(m.group(2)) if m.group(2) else 0,int(m.group(3))))
++print(len(g),len(o))
++# guest idx printed is 0xffffffff for -1
++g=[(n,(0 if i==4294967295 else i),v) for n,i,v in g]
++c=0
++for i,(a,b) in enumerate(zip(g,o)):
++    if a!=b:
++        print(i,'guest',a,'oracle',b); c+=1
++        if c>25:break
+diff -ruN -x build -x __pycache__ -x .git -x *.pyc -x *.bak wt-perf/repo2/tools/rv32_fast.c wt-test/repo2/tools/rv32_fast.c
+--- wt-perf/repo2/tools/rv32_fast.c	2026-11-03 18:58:58
++++ wt-test/repo2/tools/rv32_fast.c	2026-11-03 19:39:26
+@@ -145,6 +145,7 @@
+       wr32(dbox+16,good?1:2);wr32(dbox+12,seq);}
+   }
+ done:
++  {const char*rd=getenv("REGDUMP");if(rd){FILE*g=fopen(rd,"w");if(g){fprintf(g,"pc %08x steps %llu\n",pc,(unsigned long long)steps);for(int i=0;i<32;i++)fprintf(g,"x%d %08x\n",i,reg[i]);fclose(g);}}}
+   fclose(out);if(reqlog)fclose(reqlog);if(reqprof){qsort(syms,nsyms,sizeof *syms,symcmp);for(int q=0;q<nrq;q++){uint32_t a=rqpc[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"REQ %8llu req %9llu B  ra=%x %s+%x\n",(unsigned long long)rqn[q],(unsigned long long)rqb[q],a,k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
+   if(prof)prof_report();tic_report();
+   fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);

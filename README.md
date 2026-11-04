@@ -1,10 +1,70 @@
-# QwenOS v0.11 — a RISC-V operating system experiment for Qwenputer
+# QwenOS: a RISC-V operating system that boots DOOM, built for Qwenputer
 
-QwenOS targets the **RV32IM CPU compiled into Qwenputer's transformer layers**:
-https://github.com/divagr18/qwenputer. The long-term goal is to run a genuine
-DOOM executable **as an application of an operating system**, rather than as
-standalone DOOM firmware. Architecture is inspired by
+QwenOS targets the **RV32IM CPU compiled into Qwenputer's transformer layers**
+(https://github.com/divagr18/qwenputer, 32 KiB RAM, 256 KiB exec ROM, 128 KiB data ROM).
+The goal is to run a genuine DOOM engine **as an application of an operating system**
+(`/bin/doomd`), not as standalone firmware. Architecture is inspired by
 https://github.com/Bobliuuu/bobliu-os, but the CPU and memory limits differ.
+
+## Status (read this first)
+
+| Claim | State |
+|---|---|
+| DOOM engine (DMC100-Doom, GPL-2.0, 32 KB-RAM port) builds as `/bin/doomd` and runs Freedoom E1M1 on the C emulator `tools/rv32_fast` | yes, regression-tested against goldens |
+| Typed flow: boot -> shell prompt -> `run /bin/doomd` -> E1M1 with keys, all as guest RV32 instructions | yes (emulator) |
+| Chunk ROM: disk reads served from the data ROM (165,054 -> 4 requests per 350 tics) | yes (emulator), costs about +10.6 % instructions |
+| Real Qwen model verified a cold boot to the first frame marker (1,552,382 instr, lockstep oracle, zero divergence, A100) | yes, on a **pre-merge** build |
+| Real model executed E1M1 gameplay frames / the 3 s clip | **not yet** (pending) |
+| Real-time or interactive play in the model | **no** (about 1.1 k instr/s measured; a game tic costs 0.5-5 M instr) |
+
+Boundaries: disk and keys are supplied by the host, the clock is virtual, pixels come
+from the emulator while the model verifies the instruction trace, and model runs are series
+of host-snapshotted segments. See `docs/research/HONESTY.md` for the full list, and
+`docs/research/` (STATUS, TIMELINE, REPRODUCE, experiments 01-21) for the evidence.
+`MERGE_NOTES.md` documents the final merged E1M1 build (addresses, numbers, known gaps).
+
+## Quick start
+
+Needs Clang/LLD, `readelf` and Python 3. No game data is in this repo.
+
+```sh
+make check          # kernel, layout, Python reference, unit tests
+make demo-elf       # scripted E1M1 model-run image -> build/demo/qwenos-e1m1.elf (+ chunk-ROM plan)
+CHUNKROM=1 make demo-live   # typed-flow image -> build/demo/qwenos-live-e1m1.elf
+tools/qwenos_live.sh        # interactive terminal: type `run /bin/doomd`; Ctrl-] quits
+```
+
+`demo-elf`, `demo-live` and the live terminal need the DOOM engine and a WAD (steps below).
+`make check` needs neither (the real-WAD tests are skipped or use synthetic fixtures).
+
+### Engine and Freedoom (not included)
+
+```sh
+mkdir -p ../engine ../wads
+git clone https://github.com/ArturBieniek4/DMC100-Doom ../engine/DMC100-Doom
+(cd ../engine/DMC100-Doom && git checkout 0cdc78e && patch -p1 < "$OLDPWD/engine-patches/dmc100-qwenos-merged.patch")
+# Freedoom (modified BSD): https://freedoom.github.io  -> unzip freedoom1.wad into ../wads/
+```
+
+`ports/doomdmc/mkimage.sh` builds the NOR disk image (`E1.img`) from the layout and the WAD;
+`ports/doomdmc/build.sh` builds `doomd`. Override locations with `DMC`, `IWAD`, `QOS_FREEDOOM_WAD`.
+The `engine-patches/` diff holds the QwenOS edits to DMC100-Doom (see `engine-patches/NOTICE`).
+
+### Tests
+
+`make check`; `tools/doomd_regress.sh` (state/frame goldens in `tests/golden/`); upstream
+lockstep needs a checkout of qwenputer on `PYTHONPATH` (see `MERGE_NOTES.md`).
+`tools/model_doom_qwen.py` and `tools/model_doom_chunks.py` drive the real model and need a GPU
+box plus the Qwen checkpoint; they are not run in CI.
+
+## License
+
+GPL-2.0-only, see `LICENSE` and `NOTICE`. DMC100-Doom, doomgeneric and DOOM are GPL-2.0;
+Freedoom is separate (BSD) and not included.
+
+---
+
+The sections below are the historical per-version README (v0.9 to v0.13), kept for reference.
 
 ## Current implementation (v0.11, November 2026)
 
@@ -65,6 +125,19 @@ Note that the asset demo specifically looks for the synthetic `QOSDEMO` lump
 and will report a mismatch on ordinary DOOM WADs; **the virtual disk adapter
 itself accepts arbitrary WAD bytes**. The actual DOOM engine has not been ported.
 
+## v0.12: real-WAD BSP viewer
+
+`/bin/doom` now renders Freedoom 0.13.0 `freedoom1.wad` E1M1 (fetch separately;
+tests skip if absent, override via `$QOS_FREEDOOM_WAD`): guest-side streamed
+NODES/SSECTORS/SEGS front-to-back BSP traversal, per-column clipping, sector
+light/sky shading, BLOCKMAP collision with step/headroom checks. ~225-290K guest
+instructions per frame on the reference emulator. Still a 32x24 flat-colour map
+viewer: no textures, sprites, monsters, doors, ticks or sound. `make check`: 32 tests.
+
+**Engine port feasibility:** vanilla doomgeneric on rv32im is ~168 KiB text (fits ROM
+after stripping) but needs far more than 22 KiB RAM; a DMC100-style port needs ~21.7 KB
+minimum, so it would require reclaiming kernel `.bss`. Not started.
+
 ## Upstream CPU verification
 
 With Qwenputer checked out, run its **real upstream reference CPU**:
@@ -78,8 +151,11 @@ Omit `--wad-device` to test no-device boot. Use `--wad /path/to/file.wad`
 to supply a real WAD. The tool uses upstream `chipformer.rv.elf.program` and
 `chipformer.rv.ref.Machine` and writes replies through the real reference
 machine's RAM word array. The adapter's memory logic is locally tested;
-**we could not run the upstream package here** because it is not installed
-and network fetching is unavailable.
+**Verified (2026-11-03):** upstream `ref.Machine` boots QwenOS with the WAD
+device (exit 0, `QWENOS_BOOT_OK`, 120,267 instructions, ~173k chip tokens) and
+`tools/upstream_probe.py` passes park/resume. Note upstream `generate()` defaults
+to `max_chip=60000`, so a full boot needs a larger chip-token budget on the model
+path. No GPU/checkpoint run has been done.
 
 ## DOOM platform HAL and genuine-engine status
 
@@ -246,6 +322,45 @@ prohibitively costly for full levels under present transformer inference.
 A proper BSP traversal and asset-cache/paging strategy are required before
 production maps can be efficient.
 
+## Live shell, typed keys, one-command terminal (v0.13)
+
+The OS can now be driven like a machine with a keyboard. `make live` builds `build/qwenos-live.elf`
+(kernel `-DQOS_LIVE` + `-DSHELL_LIVE` shell; the boot-script kernel/shell used by the old tests are unchanged).
+Cold boot prints **no banner**: the first thing the guest does is print `$ ` and park in `KEY_WAIT`
+(184 instructions after reset). The shell (apps/shell.c, 2 KiB of its 4 KiB slot) echoes typed characters via
+PUTC, handles backspace/Enter and runs `ls`, `cat F`, `echo a b [> /tmp/note]`, `run /bin/X`, `exit`;
+`run /bin/doomd` takes over RAM and, in the mode-3 doomd, starts straight at **E1M1** and then plays on whatever keys
+arrive (w/s move, a/d turn, f/space fire, e use, p = dump the next frame over PUTC).
+
+**Run it (one command)** - needs `make live`, the DMC100 NOR image and a doomd mode-3 image
+(`OS=live ports/doomdmc/mkmode.sh 3`; the launcher builds what is missing):
+
+    tools/qwenos_live.sh            # type: run /bin/doomd <Enter>      (add --auto to have it typed for you)
+    # Quit: Ctrl-]  (or Ctrl-C). Arrow keys are sent as w/s/d/a. --fps N paces the display (default 35, 0 = unlimited)
+
+The host (`tools/rv32_fast -L`) does only three things: raw tty keystrokes -> guest keyboard mailbox (flow-controlled by
+the guest's read counter), serving E1.img blocks, and display: guest PUTC bytes are the console and, once DOOM prints
+frame markers, the guest's 32x24 kernel framebuffer is drawn with 24-bit ANSI colours from the real PLAYPAL
+(`--wad`, default freedoom1.wad; half-block characters when the terminal is short). Prompt, echo, `ls`, `run`, DOOM and
+all game logic are guest RV32 instructions. On exit it prints the guest instruction count and frames shown.
+The 32x24 framebuffer is what the guest always maintains; full 320x240 frames exist only through the `p` dump (tools/os_demo.sh).
+
+**Keyboard mailbox** (include/qos.h): 8 bytes at 0x154 (merged build; qos_input_mailbox), a 4-deep ring: `u32 seq` + `u8 q[4]`; push = write
+`q[seq&3]`, then `seq+1` (last). The kernel's read counter lives in core RAM, so keys survive `run /bin/doomd`
+(exec/takeover) and queue while the engine is busy; `KEY_POLL` pops the oldest, `KEY_WAIT` parks until one arrives.
+**Scripted keys / model driver protocol**: `-K schedule.txt` for rv32_fast and `tools/keysched.py` for the Python
+reference (`shell_ready <key>`, `frame N <key>`, `<instr> <key>`); keysched.py documents the exact mailbox
+address/value writes and pause points (pc == `qos_key_park`, a single `ret`, one key pushed per park).
+`tools/os_demo.sh` replays boot -> typed `run /bin/doomd` -> E1M1 -> simulated play, prints instruction counts and writes PNG frames.
+Tests: `tests/test_shell_live.py` (Python reference CPU + rv32_fast), `tests/test_live.py` (pty-driven human session).
+
+Measured (rv32_fast, instructions; run tools/os_demo.sh to reproduce): cold boot -> prompt 184; typing the 15 keys of
+`run /bin/doomd<Enter>` 1,050 (70 each); Enter -> doomd_main 2,509; doomd init to level start 130.5K; level load + first frame 3.60M;
+**total cold boot -> first E1M1 frame 3.73M** (was 3.92M with the old boot script + doomd mode 2 on the same perf tree); later frames
+about 2.7M each with keys. Savings came from: no bss byte-clear loop at boot (22K), no boot script/banner, doomd's RAM
+zeroing moved to the kernel (only the 4.4 KB overlay when only the shell ran; saves 25K+), table CRC for the
+image header (-29K), direct framebuffer writes (FB_PTR, about -30K per frame), leaf fast paths for PUTC/KEY_WAIT/DISK_READ.
+
 ## 32-KiB RAM budgeting (v0.10)
 
 The kernel originally reserved 8 * 1536 = 12,288 bytes for application stacks,
@@ -267,3 +382,21 @@ firmware architecture uses externally loaded overlays and several megabytes
 of flash. It cannot simply be linked into our current 16-KiB `doom` ROM slot
 or loaded as runtime code on stock Qwenputer, whose ROM is immutable. Porting
 it requires rebuilding its platform layer and repacking the ROM/overlays.
+
+## /bin/doomd takeover mode and RAM map (v0.11)
+
+`/bin/doomd` (exec ROM `0x41000`, entry `app_main` from `apps/doomd_crt0.S`) is a
+*takeover* app: `exec("/bin/doomd")` (or `-DQOS_BOOT_DOOMD` kernel, `make
+build/qwenos-doomd.elf`) abandons the shell stack and RAMFS and gives the app all
+RAM from `0x0570` to `0x8000` (30,800 B), with its stack growing down from `0x8000`.
+Resident kernel **core** (`0x100..0x56f` behind a zero null guard `0x00..0xff`; fixed addresses: takeover stack 0x100, state 0x140, input ring 0x154, disk mailbox 0x15c, 32x24 framebuffer 0x270): the normal kernel stack lives in the overlay. While doomd runs only
+console, framebuffer, key, disk and getpid/yield syscalls work (file syscalls
+return -1). When doomd returns the kernel zeroes its overlay and warm-reboots
+(RAMFS content is lost). RAM is dirty at entry and `.data` is not preloaded:
+crt0 copies `.data` from its data-ROM image and zeroes `.bss`.
+
+Exec ROM was repacked: kernel `0x40000` (4 KiB), doomd `0x41000..0x77fff`
+(220 KiB), shell/paint/raycast/asset `0x78000..0x7bfff` (4 KiB each), WAD viewer
+`0x7c000`. Data ROM: kernel `0x20000`, doomd `0x21000..0x3efff` (120 KiB),
+small-app rodata `0x3f000..0x3ffff`. See `linker/doomd.ld`,
+`include/qos.h`, and `tools/check_layout.py` (enforces all of this).

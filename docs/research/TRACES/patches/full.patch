@@ -1,0 +1,685 @@
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/include/qos.h <WORKDIR>/wt-full/include/qos.h
+--- orig-full/include/qos.h	2026-11-03 18:33:08
++++ <WORKDIR>/wt-full/include/qos.h	2026-11-03 18:47:46
+@@ -45,6 +45,8 @@
+ #define QOS_SYS_DISK_REQUEST 18u /* byte offset, destination RAM pointer, length<=256; 0 accepted */
+ #define QOS_SYS_DISK_POLL 19u /* 0=pending, len=completed, negative=failure */
+ #define QOS_SYS_DISK_CANCEL 20u /* abort pending request */
++#define QOS_SYS_DISK_WRITE 21u /* byte offset, source RAM pointer, length<=256; completes via DISK_POLL (returns length). Mailbox length has bit 31 set for a write */
++#define QOS_DISK_WRITE_FLAG 0x80000000u
+ #define QOS_DISK_WINDOW 256u
+ #define QOS_O_READ 0u
+ #define QOS_O_WRITE 1u
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/kernel/main.c <WORKDIR>/wt-full/kernel/main.c
+--- orig-full/kernel/main.c	2026-11-03 18:33:08
++++ <WORKDIR>/wt-full/kernel/main.c	2026-11-03 18:48:16
+@@ -77,7 +77,7 @@
+  if(takeover)switch(n){
+   case QOS_SYS_PUTC:case QOS_SYS_FB_SET:case QOS_SYS_FB_CLEAR:case QOS_SYS_FB_GET:
+   case QOS_SYS_FB_ROW:case QOS_SYS_FB_PRESENT:case QOS_SYS_KEY_POLL:case QOS_SYS_DISK_REQUEST:
+-  case QOS_SYS_DISK_POLL:case QOS_SYS_DISK_CANCEL:case QOS_SYS_GETPID:case QOS_SYS_YIELD:break;
++  case QOS_SYS_DISK_POLL:case QOS_SYS_DISK_CANCEL:case QOS_SYS_DISK_WRITE:case QOS_SYS_GETPID:case QOS_SYS_YIELD:break;
+   default:return (unsigned)-1;
+  }
+  switch(n){
+@@ -132,11 +132,22 @@
+   qos_disk_mailbox.status=0;
+   qos_disk_mailbox.request_seq=disk_seq; /* publish LAST */
+   return 0;
++ case QOS_SYS_DISK_WRITE:
++  if(disk_active || c==0 || c>QOS_DISK_WINDOW || !readable(b,c) || a>0x7fffffffu-c)
++   return (unsigned)-1;
++  disk_dest=0;disk_length=(uint32_t)c;disk_active=1;
++  disk_seq++;
++  for(unsigned i=0;i<c;i++)qos_disk_mailbox.bytes[i]=((const uint8_t*)b)[i];
++  qos_disk_mailbox.offset=(uint32_t)a;
++  qos_disk_mailbox.length=(uint32_t)c|QOS_DISK_WRITE_FLAG;
++  qos_disk_mailbox.status=0;
++  qos_disk_mailbox.request_seq=disk_seq; /* publish LAST */
++  return 0;
+  case QOS_SYS_DISK_POLL:
+   if(!disk_active)return (unsigned)-1;
+   if(qos_disk_mailbox.ready_seq!=disk_seq)return 0;
+   if(qos_disk_mailbox.status!=1){disk_active=0;return (unsigned)-2;}
+-  for(unsigned i=0;i<disk_length;i++)((uint8_t*)(uintptr_t)disk_dest)[i]=qos_disk_mailbox.bytes[i];
++  if(disk_dest)for(unsigned i=0;i<disk_length;i++)((uint8_t*)(uintptr_t)disk_dest)[i]=qos_disk_mailbox.bytes[i];
+   disk_active=0;
+   return disk_length;
+  case QOS_SYS_KEY_POLL:
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/ports/doomdmc/README.txt <WORKDIR>/wt-full/ports/doomdmc/README.txt
+--- orig-full/ports/doomdmc/README.txt	2026-11-03 18:33:08
++++ <WORKDIR>/wt-full/ports/doomdmc/README.txt	2026-11-03 19:27:34
+@@ -5,5 +5,16 @@
+          (or tools/doomd_ref_run.py for the Python reference CPU). Host = dumb storage only.
+ Frames:  'p' key arms a serial dump over PUTC; tools/doomd_frames.py out.bin freedoom1.wad prefix -> PNGs.
+          The 32x24 kernel framebuffer is also filled (nearest sample) every frame.
+-Input:   none needed: title loop plays DEMO1 from the image (vanilla demo, real game logic).
+-Overlays are linked straight into ROM (ovl_rv.c); clock is virtual (qplat.c); no sound/save/USB.
++Input:   QOS_SYS_KEY_POLL keys (qplat.c dji_tic): w/s fwd/back, a/d turn (menu: up/down/left/right), space or f
++         fire (menu: enter), e use, q/r strafe, z run, Esc or m menu, Enter, y/n prompts, . , weapons, Tab map.
++         Test-only keys (build with -DQ_NODEBUGKEYS to drop): x exit level, X secret exit, g god, i give all,
++         t/T teleport (E1M1), ` print a STATE line. tools/rv32_fast takes -s SCRIPT (frame,key lines), -F maxframes,
++         -W disk-out; tools/doomd_play.py + tools/doomd_full_test.py drive scripted playthroughs, PNGs + PASS/FAIL.
++Sound:   no device; every I_StartSound emits console bytes 0x03, 0x80|sfx_id (S_sfx index) for a host to play.
++Save:    QOS_SYS_DISK_WRITE (21: offset, src, len<=256, completed via DISK_POLL) + qplat.c NOR erase/program on top;
++         the image needs a SAVE.DAT (mknor.py --save, 64 KB of 0xFF). Save/Load menu works and survives a restart
++         when the host writes the stored bytes back (rv32_fast -W).
++Episodes: the disk is up to four 8 MB NOR images, slot k = episode k+1 (tools/mkdisk.py, packs from DMC100's converter,
++         see patches/full-engine.patch). The menu shows an episode page when more than one slot is present and the
++         main loop re-opens the chosen image (qplat.c q_ep_*). E2M9, E4M2/6/7/9 do not fit the converter's limits.
++Overlays are linked straight into ROM (ovl_rv.c); clock is virtual (qplat.c); no USB.
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/ports/doomdmc/build.sh <WORKDIR>/wt-full/ports/doomdmc/build.sh
+--- orig-full/ports/doomdmc/build.sh	2026-11-03 18:33:08
++++ <WORKDIR>/wt-full/ports/doomdmc/build.sh	2026-11-03 18:36:20
+@@ -44,6 +44,6 @@
+   fi
+ done
+ wait
+-WRAP="--wrap=G_DoLoadLevel --wrap=G_DoNewGame --wrap=G_DoPlayDemo --wrap=G_DoCompleted --wrap=G_DoWorldDone --wrap=P_Init --wrap=D_PostEvent --wrap=P_CrossSpecialLine --wrap=P_ShootSpecialLine --wrap=P_UseSpecialLine"
++WRAP="--wrap=G_DoLoadLevel --wrap=G_DoNewGame --wrap=G_DoPlayDemo --wrap=G_DoCompleted --wrap=G_DoWorldDone --wrap=P_Init --wrap=I_StartSound --wrap=D_PostEvent --wrap=P_CrossSpecialLine --wrap=P_ShootSpecialLine --wrap=P_UseSpecialLine"
+ $LD --gc-sections --no-relax -T $REPO/linker/doomd.ld $HERE/frame.ld -z max-page-size=4 $WRAP --defsym=DOOMD_STACK_OVERRIDE=${STACK:-0x580} ${LDX} -Map $OUT/doomd.map -o $OUT/doomd.elf $objs
+ readelf -SW $OUT/doomd.elf | grep -E " \.(text|rodata|data|bss) "
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/ports/doomdmc/doomd_main.c <WORKDIR>/wt-full/ports/doomdmc/doomd_main.c
+--- orig-full/ports/doomdmc/doomd_main.c	2026-11-03 18:33:08
++++ <WORKDIR>/wt-full/ports/doomdmc/doomd_main.c	2026-11-03 19:02:03
+@@ -43,21 +43,17 @@
+     q_putc('\n');
+ }
+ 
+-int doomd_main(const qos_api *api)
++// Opens the NOR image of the episode in use and (re)builds the engine state that depends on it.
++static void pack_init(int first)
+ {
+-    qapi = api;
+-    // dirty RAM: zero everything between .bss and the stack reserve, paint the stack
+-    memset(__bss_end, 0, (uint32_t)(uintptr_t)(__stack_limit - __bss_end));
+-    {
+-        uint32_t *p = (uint32_t *)(void *)__stack_limit;
+-        uint32_t *e = (uint32_t *)(void *)((uintptr_t)__builtin_frame_address(0) - 96);
+-        for (; p < e; p++) *p = 0xA5A5A5A5u;
+-    }
+-    q_puts("doomd: DMC100-Doom on QwenOS\n");
+     int e = img_init();
+     q_puts("doomd: img_init -> "); q_putu((uint32_t)-e); q_putc('\n');
+     if (e) plat_panic("DOOM.DAT not usable");
+     q_puts("doomd: image bytes "); q_putu(img.size); q_putc('\n');
++    dmc_mapent_t me;
++    img_mapent(0, &me);
++    q_ep_set(me.episode, q_ep_probe());
++    q_puts("doomd: episode "); q_putu(me.episode); q_putc('\n');
+ 
+     // start-up of the engine as BOOT_E_ENGINE does it (dmc_boot.c)
+     rc_place(DMC_FRAME_BASE + PLAT_FRAME_MIN);
+@@ -65,15 +61,35 @@
+     flat_set_slots(0);
+     V_Init();
+     S_PcsInit(img_read, img.sect[DMC_SECT_SOUNDS].off, img.sect[DMC_SECT_SOUNDS].size);
+-    S_Init(sfxVolume * 8);
+-    D_CheckNetGame();
+-    HU_Init();
+-    ST_Init();
+-    II_Configure(ii_presets[0], 0, 1);
+-    q_puts("doomd: engine init done\n");
++    if (first) {
++        S_Init(sfxVolume * 8);
++        D_CheckNetGame();
++        HU_Init();
++        ST_Init();
++        II_Configure(ii_presets[0], 0, 1);
++        q_puts("doomd: engine init done\n");
++    }
+     R_Init();
+     P_Init();
+     R_ExecuteSetViewSize();
++}
++
++int doomd_main(const qos_api *api)
++{
++    qapi = api;
++    // dirty RAM: zero everything between .bss and the stack reserve, paint the stack
++    memset(__bss_end, 0, (uint32_t)(uintptr_t)(__stack_limit - __bss_end));
++    {
++        uint32_t *p = (uint32_t *)(void *)__stack_limit;
++        uint32_t *e = (uint32_t *)(void *)((uintptr_t)__builtin_frame_address(0) - 96);
++        for (; p < e; p++) *p = 0xA5A5A5A5u;
++    }
++    q_puts("doomd: DMC100-Doom on QwenOS\n");
++    int neps = q_ep_probe();
++    q_puts("doomd: episodes on disk "); q_putu((uint32_t)neps); q_putc('\n');
++    if (neps == 0) plat_panic("no episode image");
++    q_ep_slot(1);
++    pack_init(1);
+     q_puts("doomd: R_Init/P_Init done\n");
+ 
+     // play mode (fe_play.c)
+@@ -87,6 +103,14 @@
+     D_StartTitle();
+     q_puts("doomd: title loop\n");
+     for (;;) {
++        if (q_ep_pending) {
++            // the menu chose another episode: switch to its image between tics, back to the title loop
++            q_ep_slot(q_ep_pending);
++            q_ep_pending = 0;
++            pack_init(0);
++            R_PaletteChanged();
++            D_StartTitle();
++        }
+         I_StartFrame();
+         TryRunTics();
+         S_UpdateSounds(players[consoleplayer].mo);
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/ports/doomdmc/qplat.c <WORKDIR>/wt-full/ports/doomdmc/qplat.c
+--- orig-full/ports/doomdmc/qplat.c	2026-11-03 18:33:08
++++ <WORKDIR>/wt-full/ports/doomdmc/qplat.c	2026-11-03 19:04:07
+@@ -16,6 +16,12 @@
+ #include "dmc_dji.h"
+ #include "dmc_fw.h"
+ #include "r_strip.h"
++#include "sounds.h"
++#include "doomstat.h"
++#include "g_game.h"
++#include "d_player.h"
++#include "p_local.h"
++#include "tables.h"
+ 
+ const qos_api *qapi;
+ 
+@@ -53,13 +59,17 @@
+ // ---- NOR over the block device -------------------------------------------------------
+ volatile struct nor_stats nor_stats;
+ static uint32_t nor_ticket;
++// The disk holds the NOR images of up to four episodes, one per EP_STRIDE slot (slot k = episode k+1);
++// every NOR address of the engine is relative to the slot in use.
++#define EP_STRIDE 0x800000u
++uint32_t q_nor_base;
+ 
+ static void nor_hw(uint32_t phys, void *dst, uint32_t n)
+ {
+     uint8_t *out = dst;
+     while (n) {
+         uint32_t c = n > QOS_DISK_WINDOW ? QOS_DISK_WINDOW : n;
+-        if (qapi->syscall(QOS_SYS_DISK_REQUEST, phys, (uintptr_t)out, c))
++        if (qapi->syscall(QOS_SYS_DISK_REQUEST, q_nor_base + phys, (uintptr_t)out, c))
+             plat_panic("disk req");
+         uint32_t r = 0;
+         for (unsigned j = 0; j < 64; j++) {
+@@ -100,12 +110,74 @@
+     return 0;
+ }
+ void nor_col_wait(void) {}
+-int nor_erase(uint32_t phys, unsigned cmd) { (void)phys; (void)cmd; return -1; }
+-int nor_program(uint32_t phys, const void *src, uint32_t n) { (void)phys; (void)src; (void)n; return -1; }
++// Writes: the block device takes plain stores (QOS_SYS_DISK_WRITE, 256 B per request); NOR semantics
++// live here: an erase stores 0xFF, a program ANDs into the old bytes (read back first).
++static void nor_store(uint32_t phys, const uint8_t *src, uint32_t n)
++{
++    while (n) {
++        uint32_t c = n > QOS_DISK_WINDOW ? QOS_DISK_WINDOW : n;
++        if (qapi->syscall(QOS_SYS_DISK_WRITE, q_nor_base + phys, (uintptr_t)src, c))
++            plat_panic("disk wreq");
++        uint32_t r = 0;
++        for (unsigned j = 0; j < 64 && !r; j++) r = qapi->syscall(QOS_SYS_DISK_POLL, 0, 0, 0);
++        if (r != c) { qapi->syscall(QOS_SYS_DISK_CANCEL, 0, 0, 0); plat_panic("disk write"); }
++        phys += c; src += c; n -= c;
++    }
++}
++int nor_erase(uint32_t phys, unsigned cmd)
++{
++    uint32_t n = cmd == NOR_ERASE_4K ? 4096 : cmd == NOR_ERASE_64K ? 65536 : 0;
++    static const uint8_t ff[256] = {[0 ... 255] = 0xFF};
++    if (!n) return -1;
++    phys &= ~(n - 1);
++    for (uint32_t o = 0; o < n; o += 256) nor_store(phys + o, ff, 256);
++    return 0;
++}
++int nor_program(uint32_t phys, const void *src, uint32_t n)
++{
++    const uint8_t *s = src;
++    uint8_t old[256], buf[256];
++    while (n) {
++        uint32_t c = n > 256 ? 256 : n;
++        nor_hw(phys, old, c);
++        for (uint32_t i = 0; i < c; i++) buf[i] = old[i] & s[i];
++        nor_store(phys, buf, c);
++        phys += c; s += c; n -= c;
++    }
++    return 0;
++}
+ void nor_recover(void) {}
+ int nor_read16(uint32_t phys, void *dst, uint32_t n) { (void)phys; (void)dst; (void)n; return -1; }
+ int dmc_sector_write(uint32_t addr, const uint8_t *buf, uint32_t n) { (void)addr; (void)buf; (void)n; return -1; }
+ 
++// ---- episodes: one NOR image per slot (see EP_STRIDE) ---------------------------------------------
++// Probe: does slot k hold an image (the FAT boot sector of its data drive)? A failed read is not fatal.
++static int slot_present(unsigned k)
++{
++    uint8_t b[8];
++    if (qapi->syscall(QOS_SYS_DISK_REQUEST, k * EP_STRIDE + 0x100000u + 3, (uintptr_t)b, 8)) return 0;
++    uint32_t r = 0;
++    for (unsigned j = 0; j < 64 && !r; j++) r = qapi->syscall(QOS_SYS_DISK_POLL, 0, 0, 0);
++    if (r != 8) { qapi->syscall(QOS_SYS_DISK_CANCEL, 0, 0, 0); return 0; }
++    return !memcmp(b, "DMCDOOM ", 8);
++}
++int q_ep_pending;            // episode chosen in the menu, switched by the main loop between tics
++static int ep_cur = 1, ep_n;
++int dmc_episode_count(void) { return ep_n; }
++int dmc_cur_episode(void) { return ep_cur; }
++void q_ep_set(int cur, int n) { ep_cur = cur; ep_n = n; }
++void dmc_episode_select(int ep)
++{
++    if (ep != ep_cur && ep >= 1 && ep <= 4 && slot_present((unsigned)ep - 1)) q_ep_pending = ep;
++}
++int q_ep_probe(void)         // number of episodes on the disk (slots present from slot 0)
++{
++    int n = 0;
++    while (n < 4 && slot_present((unsigned)n)) n++;
++    return n;
++}
++void q_ep_slot(int ep) { q_nor_base = (uint32_t)(ep - 1) * EP_STRIDE; }
++
+ // ---- buttons, pad, sound, settings ------------------------------------------------------
+ static uint32_t btn_state;
+ static int ev_ring[8];
+@@ -131,13 +203,20 @@
+ // resolver, i_input.c); use/menu/enter go through the game pad state.
+ #define HOLD_MS 120
+ static uint32_t btn_until[BTN_COUNT];
+-static uint32_t pad_until;
++static uint32_t pad_until[PAD_NAXES + 16];   // [0..15] button bits, [16..] strafe left/right
+ static unsigned pad_bits;
++static int16_t pad_ax[PAD_NAXES];
+ uint32_t q_keys, q_dump_req;
+ 
++static void pad_hold(unsigned bit) { pad_bits |= bit; for (int i = 0; i < 16; i++) if (bit >> i & 1) pad_until[i] = vclock + HOLD_MS; }
++
+ void dji_start(void) {}
+ void dji_stop(void) {}
+ void dji_rx(const uint8_t *p, uint32_t n) { (void)p; (void)n; }
++// Keyboard (one key per poll, held HOLD_MS virtual ms):
++//   w/s fwd/back, a/d turn left/right (also menu up/down/left/right), space or f fire (menu: enter),
++//   e use, q/r strafe left/right (analog stick), z run, Esc or m menu, Enter or Return enter (prompt: y),
++//   y/n prompts, . / , next/prev weapon, Tab automap, p serial frame dump
+ void dji_tic(void)
+ {
+     uint32_t k = qapi->syscall(QOS_SYS_KEY_POLL, 0, 0, 0);
+@@ -149,24 +228,75 @@
+         case 'a': btn_set(BTN_MODE, 1); btn_until[BTN_MODE] = vclock + HOLD_MS; break;
+         case 'd': btn_set(BTN_SAVE, 1); btn_until[BTN_SAVE] = vclock + HOLD_MS; break;
+         case ' ': case 'f': btn_set(BTN_LIGHT, 1); btn_until[BTN_LIGHT] = vclock + HOLD_MS; break;
+-        case 'e': pad_bits |= PAD_USE; pad_until = vclock + HOLD_MS; break;
+-        case 27: case 'm': pad_bits |= PAD_MENU; pad_until = vclock + HOLD_MS; break;
+-        case 13: case '\n': pad_bits |= PAD_ENTER; pad_until = vclock + HOLD_MS; break;
++        case 'e': pad_hold(PAD_USE); break;
++        case 'z': pad_hold(PAD_RUN); break;
++        case 'q': pad_ax[PAD_LX] = -600; pad_until[16] = vclock + HOLD_MS; break;
++        case 'r': pad_ax[PAD_LX] = 600;  pad_until[17] = vclock + HOLD_MS; break;
++        case 27: case 'm': pad_hold(PAD_MENU); break;
++        case 13: case '\n': pad_hold(PAD_ENTER); break;
++        case 'y': pad_hold(PAD_ENTER); break;
++        case 'n': pad_hold(PAD_MENU); break;
++        case '.': pad_hold(PAD_NEXTW); break;
++        case ',': pad_hold(PAD_PREVW); break;
++        case 9: pad_hold(PAD_MAP); break;
++#ifndef Q_NODEBUGKEYS
++        // test-only keys (the cheat sequences are stripped from this engine build)
++        case 'x': if (gamestate == GS_LEVEL) G_ExitLevel(); break;
++        case 'X': if (gamestate == GS_LEVEL) G_SecretExitLevel(); break;
++        case 'h': case 'b': case 'c': case 'k': case 'l': {   // test: spawn a monster 160 units ahead
++            mobj_t *mo = players[consoleplayer].mo;
++            if (gamestate != GS_LEVEL || !mo) break;
++            int ty = k == 'h' ? MT_HEAD : k == 'b' ? MT_BRUISER : k == 'c' ? MT_CYBORG : k == 'k' ? MT_SPIDER : MT_SKULL;
++            unsigned an = mo->angle >> ANGLETOFINESHIFT;
++            P_SpawnMobj(mo->x + 160 * finecosine(an), mo->y + 160 * finesine(an), ONFLOORZ, (mobjtype_t)ty);
++            break; }
++        case 'g': players[consoleplayer].cheats ^= CF_GODMODE; break;
++        case 'i': {
++            player_t *pl = &players[consoleplayer];
++            for (int i = 0; i < NUMWEAPONS; i++) pl->weaponowned[i] = true;
++            for (int i = 0; i < NUMAMMO; i++) pl->ammo[i] = pl->maxammo[i];
++            for (int i = 0; i < NUMCARDS; i++) pl->cards[i] = true;
++            pl->armorpoints = 200; pl->armortype = 2; pl->health = pl->mo ? (pl->mo->health = 100) : 100;
++            break; }
++        case 't': case 'T': if (gamestate == GS_LEVEL && gameepisode == 1 && gamemap == 1) {  // E1M1 corridor east of the green armor door
++            mobj_t *mo = players[consoleplayer].mo;
++            if (k == 't') { P_TeleportMove(mo, 608 << 16, 730 << 16); mo->angle = 0xC0000000u; }   // facing a health bonus
++            else { P_TeleportMove(mo, 596 << 16, 712 << 16); mo->angle = 0x80000000u; }            // facing the door
++            mo->momx = mo->momy = 0; }
++            break;
++        case '`': {
++            player_t *pl = &players[consoleplayer];
++            q_puts("\nSTATE gs="); q_putu(gamestate); q_puts(" e="); q_putu(gameepisode); q_puts(" m="); q_putu(gamemap);
++            q_puts(" hp="); q_putu(pl->health > 0 ? pl->health : 0); q_puts(" ar="); q_putu(pl->armorpoints);
++            q_puts(" bul="); q_putu(pl->ammo[0]); q_puts(" kills="); q_putu(pl->killcount);
++            q_puts(" tk="); q_putu(totalkills); q_puts(" items="); q_putu(pl->itemcount); q_puts(" wpn="); q_putu(pl->readyweapon);
++            if (pl->mo) { q_puts(" x="); q_puthex(pl->mo->x); q_puts(" y="); q_puthex(pl->mo->y); q_puts(" ang="); q_puthex(pl->mo->angle); }
++            q_putc('\n');
++            break; }
++#endif
+         case 'p': q_dump_req = 1; R_PaletteChanged(); break; /* arm a full serial dump: resend the whole status band too */
+         }
+     }
+     for (int b = 0; b < BTN_COUNT; b++)
+         if ((btn_state & BTN_BIT(b)) && (int32_t)(vclock - btn_until[b]) >= 0)
+             btn_set(b, 0);
+-    if (pad_bits && (int32_t)(vclock - pad_until) >= 0) pad_bits = 0;
+-    if (pad_bits) {
+-        static const int16_t zero[PAD_NAXES];
+-        pad_set(zero, pad_bits);
+-    } else {
+-        pad_lost();
+-    }
++    for (int i = 0; i < 16; i++)
++        if ((pad_bits >> i & 1) && (int32_t)(vclock - pad_until[i]) >= 0) pad_bits &= ~(1u << i);
++    if (pad_ax[PAD_LX] < 0 && (int32_t)(vclock - pad_until[16]) >= 0) pad_ax[PAD_LX] = 0;
++    if (pad_ax[PAD_LX] > 0 && (int32_t)(vclock - pad_until[17]) >= 0) pad_ax[PAD_LX] = 0;
++    // The pad is always present, so the first press after idle is a new press (i_input.c pad_tic)
++    pad_set(pad_ax, pad_bits);
+ }
+ 
++// Sound events for a host that has speakers: console bytes 0x03, 0x80|sfx_id (sfx index into S_sfx,
++// < 128 so the byte can never be taken for a 0x01 packet start or a 0x02 frame mark).
++int __real_I_StartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep);
++int __wrap_I_StartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
++{
++    int id = (int)(sfxinfo - S_sfx);
++    if (id > 0 && id < 128) { q_putc(3); q_putc(0x80 | id); }
++    return __real_I_StartSound(sfxinfo, channel, vol, sep);
++}
+ void snd_volume(int vol) { (void)vol; }
+ void snd_play(const uint8_t *tones, uint32_t n) { (void)tones; (void)n; }
+ void snd_stop(void) {}
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/ports/doomdmc/qplat.h <WORKDIR>/wt-full/ports/doomdmc/qplat.h
+--- orig-full/ports/doomdmc/qplat.h	2026-11-03 18:33:08
++++ <WORKDIR>/wt-full/ports/doomdmc/qplat.h	2026-11-03 19:01:55
+@@ -7,3 +7,9 @@
+ void q_putu(uint32_t v);
+ void q_puthex(uint32_t v);
+ extern uint32_t q_dump_req, q_keys;
++extern uint32_t q_nor_base;
++extern int q_ep_pending;
++int q_ep_probe(void);
++void q_ep_slot(int ep);
++void q_ep_set(int cur, int n);
++int dmc_cur_episode(void);
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/tools/doomd_episode_test.py <WORKDIR>/wt-full/tools/doomd_episode_test.py
+--- orig-full/tools/doomd_episode_test.py	1969-12-31 19:00:00
++++ <WORKDIR>/wt-full/tools/doomd_episode_test.py	2026-11-03 19:18:20
+@@ -0,0 +1,42 @@
++#!/usr/bin/env python3
++"""Per-episode test of the multi-episode disk: pick the episode in the menu, play through the maps the
++pack has (exit key), spawn each boss type in front of the player, finale. usage: doomd_episode_test.py DISK OUTDIR [eps]"""
++import os, sys
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++import doomd_play as P
++def kv(l): return dict(x.split("=") for x in l.split())
++def leave(): return "tap x\nwait 40\ntap e\ntap e\ntap e\ntap e\nwait 40\n"
++def scen(ep, maps):
++    t = "wait 10\ntap esc\ntap ent\n" + "tap s\n" * (ep - 1) + "dump ep%d_menu\ntap ent\ntap s\ntap s\ntap ent\nwait 80\ntap g\n" % ep
++    t += "state\ndump m1\n"
++    ALL = {"h": "cacodemon", "b": "baron", "c": "cyberdemon", "k": "spider", "l": "lostsoul"}
++    # only the monsters of the pack's roster have sprites in its image
++    HAVE = {1: "bl", 2: "hbcl", 3: "hbckl", 4: "hbckl"}[ep]
++    for k in HAVE:
++        key = ALL[k]
++        t += "tap %s\nwait 30\ndump spawn_%s\n" % (k, key)
++    t += "hold w 40\nstate\ndump walk\n"
++    for i, m in enumerate(maps):
++        if i: t += "state\ndump m%d\n" % m
++        t += "tap x\nwait 40\nstate\ndump wi_m%d\ntap e\ntap e\ntap e\ntap e\nwait 60\n" % m
++    t += "state\ndump after_last\nwait 400\ndump finale_text\nstate\n"
++    return t
++def main():
++    disk, out = sys.argv[1], sys.argv[2]; eps = [int(c) for c in (sys.argv[3] if len(sys.argv) > 3 else "1234")]
++    os.makedirs(out, exist_ok=True); res = []
++    PLAY = {1: range(1, 9), 2: range(1, 9), 3: range(1, 9), 4: [1, 3, 4, 5, 8]}
++    for ep in eps:
++        maps = list(PLAY[ep]); pre = os.path.join(out, "ep%d" % ep)
++        st, snd, raw, err = P.run(disk, scen(ep, maps), pre, quiet=True)
++        S = [kv(s) for s in st]; panic = b"PANIC" in raw or "FAULT" in err
++        if panic:
++            import re as _re
++            m = _re.search(rb"PANIC: ([^\n]*)", raw); print("ep%d panic: %s" % (ep, m.group(1).decode() if m else err[:80]))
++        if not S: res.append("FAIL ep%d no state" % ep); continue
++        # states: [m1 start, after walk, (m_i start, m_i intermission) ..., after_last, finale_text]
++        seq = [int(s["m"]) for s in S]; gs = [int(s["gs"]) for s in S]
++        ok_ep = all(s["e"] == str(ep) for s in S[:-1] if s["gs"] != "3")
++        res.append("%s ep%d_loads_and_plays_maps %s episode=%s maps=%s gs=%s tk=%s%s" % ("PASS" if ok_ep and not panic and gs[-1] == 2 else "FAIL", ep, maps, S[0]["e"], seq, gs, S[0].get("tk"), " PANIC" if panic else ""))
++        print(res[-1])
++    open(os.path.join(out, "results.txt"), "w").write("\n".join(res) + "\n")
++main()
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/tools/doomd_full_test.py <WORKDIR>/wt-full/tools/doomd_full_test.py
+--- orig-full/tools/doomd_full_test.py	1969-12-31 19:00:00
++++ <WORKDIR>/wt-full/tools/doomd_full_test.py	2026-11-03 19:25:36
+@@ -0,0 +1,73 @@
++#!/usr/bin/env python3
++"""Full-game feature tests of /bin/doomd on tools/rv32_fast (scripted keys, frame PNGs, STATE probes).
++usage: doomd_full_test.py IMG_WITH_SAVE_DAT OUTDIR [--wad freedoom1.wad]
++Writes OUTDIR/<feature>-<tag>.png and OUTDIR/results.txt (PASS/FAIL per feature). Needs the build with the
++test-only keys (x exit, X secret exit, g god, i give all, t/T teleport, ` state)."""
++import os, re, sys, shutil, subprocess, argparse
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++import doomd_play as P
++
++START = "wait 10\ntap esc\ntap ent\ntap ent\ntap s\ntap s\ntap ent\nwait 60\n"      # menu -> New Game -> episode 1 -> Hurt me plenty
++def kv(line): return dict(x.split("=") for x in line.split())
++def leave_level(): return "tap x\nwait 40\ntap e\ntap e\ntap e\ntap e\nwait 40\n"
++
++SCEN = {}
++SCEN["menu"] = ("wait 10\ndump title\ntap esc\ndump main_menu\ntap ent\ndump episode_menu\ntap ent\ndump skill_menu\ntap esc\ntap esc\n"
++                "tap s\ntap ent\ndump options_menu\ntap esc\ntap s\ntap s\ntap ent\ndump load_menu\ntap esc\n"
++                "tap ent\ntap esc\ntap w\ntap ent\ndump quit_prompt\ntap n\ndump after_n\n", None)
++SCEN["play"] = (START + "state\ndump e1m1_start\nhold w 60\nstate\ndump walk_forward\nhold d 20\nstate\ndump turn_right\n"
++                "tap space\ntap space\nstate\ndump fire\ntap t\nhold w 14\nwait 10\nstate\ndump pickup_bonus\ntap T\ndump door_closed\n"
++                "tap e\nwait 30\ndump door_opening\nwait 90\ndump door_open\nhold w 40\nwait 10\nstate\ndump pickup_shells_damage\n", None)
++SCEN["levels"] = (START + "tap g\n" + "".join("state\ndump lvl_e1m%d\ntap x\nwait 40\nstate\ndump wi_stats_e1m%d\ntap e\ndump wi_stats2_e1m%d\ntap e\ntap e\ntap e\nwait 40\n" % (m, m, m) for m in range(1, 8))
++                  + "state\ndump lvl_e1m8\ntap x\nwait 40\nstate\ndump finale_0\ntap e\ndump finale_1\ntap e\ntap e\ndump finale_2\ntap e\nwait 300\ndump finale_text\nstate\n", None)
++SCEN["secret"] = (START + "tap g\n" + leave_level() + leave_level() + "state\ntap X\nwait 40\ndump wi_secret\ntap e\ntap e\ntap e\ntap e\nwait 40\nstate\ndump e1m9\n" + leave_level() + "state\ndump back_to_e1m4\n", None)
++SCEN["save"] = (START + "hold w 30\nstate\ntap esc\ntap s\ntap s\ntap s\ndump save_menu\ntap ent\ndump save_slots\ntap ent\nwait 60\ndump game_saved\n", "SAVEOUT")
++SCEN["load"] = ("wait 10\ntap esc\ntap s\ntap s\ntap ent\ndump load_slots\ntap ent\nwait 80\nstate\ndump loaded\nhold w 30\nstate\ndump loaded_walk\n", None)
++SCEN["quit"] = ("wait 10\ntap esc\ntap w\ntap ent\ndump quit_prompt\ntap y\nwait 40\nstate\n", None)
++
++def main():
++    ap = argparse.ArgumentParser(); ap.add_argument("img"); ap.add_argument("out"); ap.add_argument("--wad"); ap.add_argument("--elf")
++    a = ap.parse_args(); os.makedirs(a.out, exist_ok=True)
++    res = []; img = a.img
++    def check(name, ok, info=""):
++        res.append("%s %s %s" % ("PASS" if ok else "FAIL", name, info)); print(res[-1])
++    work = os.path.join(a.out, "_work"); os.makedirs(work, exist_ok=True)
++    saved = os.path.join(work, "saved.img")
++    R = {}
++    for name, (scen, special) in SCEN.items():
++        use = saved if name == "load" else img
++        if name == "load" and not os.path.exists(saved): check("load", False, "no saved image"); continue
++        pre = os.path.join(a.out, name)
++        st, snd, raw, err = P.run(use, scen, pre, a.elf, a.wad, saved if special else None, quiet=True)
++        R[name] = (st, snd, raw, err); S = [kv(s) for s in st]
++        panic = b"PANIC" in raw or "FAULT" in err
++        if name == "menu":
++            check("menu_title_to_menu_skill_options_load_quit_prompt", not panic and os.path.exists(pre + "-quit_prompt.png"))
++        if name == "play":
++            ok_move = S[1]["x"] != S[0]["x"]
++            check("move_forward", ok_move, "x %s -> %s" % (S[0]["x"], S[1]["x"]))
++            check("turn", S[2]["ang"] != S[1]["ang"], "ang %s -> %s" % (S[1]["ang"], S[2]["ang"]))
++            check("fire_ammo_decrements", int(S[3]["bul"]) < int(S[0]["bul"]), "bullets %s -> %s, sfx pistol(1) in %s" % (S[0]["bul"], S[3]["bul"], snd))
++            check("pickup_health_bonus", int(S[4]["hp"]) > 100 and int(S[4]["items"]) >= 1, "hp %s items %s" % (S[4]["hp"], S[4]["items"]))
++            xs = int(S[5]["x"], 16) >> 16
++            check("door_open_and_walk_through", xs < 540, "player x=%d, door line at x=544..560 (frames door_closed/door_opening/door_open)" % xs)
++            check("take_damage_from_monster", int(S[5]["hp"]) < int(S[4]["hp"]), "hp %s -> %s" % (S[4]["hp"], S[5]["hp"]))
++            check("sound_events_emitted", len(snd) > 5 and 1 in snd, "ids %s" % snd[:20])
++        if name == "levels":
++            maps = [int(s["m"]) for s in S[0:15:2]]; gs = [int(s["gs"]) for s in S]
++            check("levels_e1m1_to_e1m8_load_in_sequence", maps == [1, 2, 3, 4, 5, 6, 7, 8] and all(gs[i] == 0 for i in range(0, 16, 2)), "maps at level starts %s" % maps)
++            check("intermission_after_each_exit", all(gs[i] == 1 for i in range(1, 14, 2)), "gamestate after exit %s (1 = intermission)" % gs[1:14:2])
++            check("finale_after_e1m8", gs[-1] == 2, "gamestate %s (2 = finale)" % gs[-1])
++        if name == "secret":
++            check("secret_exit_e1m3_to_e1m9", int(S[-2]["m"]) == 9, "maps %s" % [s["m"] for s in S])
++            check("e1m9_exit_returns_to_e1m4", int(S[-1]["m"]) == 4, "maps %s" % [s["m"] for s in S])
++        if name == "save":
++            check("savegame_writes_to_block_device", "diskwrites=" in err and not re.search(r"diskwrites=0\b", err) and os.path.exists(pre + "-game_saved.png"), err.strip().splitlines()[-1] if err.strip() else "")
++        if name == "load":
++            check("loadgame_from_saved_image_after_restart", not panic and int(S[0]["m"]) == 1 and S[1]["x"] != S[0]["x"], "x %s -> %s" % (S[0]["x"], S[1]["x"]))
++        if name == "quit":
++            check("quit_prompt_y_powers_off", b"power off" in raw, "")
++        if panic: check(name + "_no_panic", False, err[:200])
++    open(os.path.join(a.out, "results.txt"), "w").write("\n".join(res) + "\n")
++    shutil.rmtree(work, ignore_errors=True)
++main()
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/tools/doomd_play.py <WORKDIR>/wt-full/tools/doomd_play.py
+--- orig-full/tools/doomd_play.py	1969-12-31 19:00:00
++++ <WORKDIR>/wt-full/tools/doomd_play.py	2026-11-03 19:02:59
+@@ -0,0 +1,70 @@
++#!/usr/bin/env python3
++"""Scripted key-sequence harness for /bin/doomd on tools/rv32_fast (host = keystrokes + dumb disk bytes).
++Scenario lines (frame counter advances by the given number of frames):
++  hold KEY N     inject KEY on N consecutive frames (held)     tap KEY   = hold KEY 3 then wait 3
++  wait N         idle frames
++  dump [TAG]     serial frame dump -> PNG named TAG (next frame)
++  state          print guest STATE line (needs the test keys)
++usage: doomd_play.py IMG SCENARIO PREFIX [--elf E] [--wad W] [--disk-out F]
++Keys: w s a d (fwd back turn), q r strafe, space fire, e use, esc, ent, y n, . , tab, z run, x exit level,
++g god, i give all, ` state."""
++import subprocess, sys, re, os, argparse
++HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(HERE)
++
++def compile_scenario(text):
++    text = re.sub(r'\bspace\b', 'sp', text)
++    f = 2; lines = []; dumps = []
++    for ln in text.splitlines():
++        ln = ln.split('#')[0].split()
++        if not ln: continue
++        c = ln[0]
++        if c == 'wait': f += int(ln[1])
++        elif c == 'hold': lines.append(f"{f}-{f+int(ln[2])-1} {ln[1]}"); f += int(ln[2])
++        elif c == 'tap': lines.append(f"{f}-{f+1} {ln[1]}"); f += 20
++        elif c == 'dump': lines.append(f"{f} p"); dumps.append(ln[1] if len(ln) > 1 else f"f{f}"); f += 4
++        elif c == 'state': lines.append(f"{f} `"); f += 2
++        else: raise SystemExit("bad line " + str(ln))
++    return "\n".join(lines) + "\n", dumps, f + 4
++
++def stream_sounds(d):
++    """Sound events (0x03, 0x80|sfx) of the console stream, skipping the 0x01 dump packets."""
++    i = 0; out = []
++    while i < len(d):
++        c = d[i]
++        if c == 1 and i + 1 < len(d):
++            t = chr(d[i + 1]); i += 2
++            if t == 'P': i += 1
++            elif t == 'W': i += 10
++            elif t == 'E': i += 2
++            elif t == 'D': n = d[i] | d[i + 1] << 8; i += 2 + n
++        elif c == 3 and i + 1 < len(d): out.append(d[i + 1] & 0x7f); i += 2
++        else: i += 1
++    return out
++
++def run(img, scen, prefix, elf=None, wad=None, disk_out=None, maxframes=None, quiet=False):
++    script, dumps, nf = compile_scenario(open(scen).read() if os.path.exists(scen) else scen)
++    sp = prefix + ".keys"; open(sp, "w").write(script)
++    cmd = [os.path.join(ROOT, "build/rv32_fast"), elf or os.path.join(ROOT, "build/qwenos-doomdmc.elf"), img, "100", "108",
++           prefix + ".bin", "40000000000", "-s", sp, "-F", str(maxframes or nf)]
++    if disk_out: cmd += ["-W", disk_out]
++    r = subprocess.run(cmd, capture_output=True, text=True)
++    if not quiet: print(r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "")
++    raw = open(prefix + ".bin", "rb").read()
++    wadp = wad or "<WORKDIR>/wads/freedoom1.wad"
++    subprocess.run([sys.executable, os.path.join(HERE, "doomd_frames.py"), prefix + ".bin", wadp, prefix + "-raw"], capture_output=True)
++    # rename dumps by tag
++    for i, t in enumerate(dumps):
++        a = f"{prefix}-raw-{i:02}.png"
++        if os.path.exists(a): os.replace(a, f"{prefix}-{t}.png")
++    states = re.findall(rb"STATE ([^\n]*)", raw)
++    sounds = stream_sounds(raw)
++    return [s.decode() for s in states], sounds, raw, r.stderr
++
++if __name__ == "__main__":
++    ap = argparse.ArgumentParser(); ap.add_argument("img"); ap.add_argument("scen"); ap.add_argument("prefix")
++    ap.add_argument("--elf"); ap.add_argument("--wad"); ap.add_argument("--disk-out")
++    a = ap.parse_args()
++    st, snd, raw, err = run(a.img, a.scen, a.prefix, a.elf, a.wad, a.disk_out)
++    for s in st: print("STATE", s)
++    print("sounds", snd)
++    if b"PANIC" in raw: print("PANIC in output")
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/tools/mkdisk.py <WORKDIR>/wt-full/tools/mkdisk.py
+--- orig-full/tools/mkdisk.py	1969-12-31 19:00:00
++++ <WORKDIR>/wt-full/tools/mkdisk.py	2026-11-03 19:02:44
+@@ -0,0 +1,15 @@
++#!/usr/bin/env python3
++"""Builds the QwenOS DOOM disk: one 8 MB NOR image per episode (slot k = episode k+1), each with a blank
++SAVE.DAT, concatenated. usage: mkdisk.py PACKS_DIR OUT.img [episodes e.g. 1234]
++PACKS_DIR holds E1.. (converter output, `tools/conv --packs E1,E2,E3,E4`), MKNOR is DMC100's tests/host/mknor.py."""
++import os, subprocess, sys, tempfile
++packs, out = sys.argv[1], sys.argv[2]
++eps = sys.argv[3] if len(sys.argv) > 3 else "1234"
++mknor = os.environ.get("MKNOR", "<WORKDIR>/engine/DMC100-Doom/tests/host/mknor.py")
++with tempfile.TemporaryDirectory() as t:
++    blank = os.path.join(t, "save.blank"); open(blank, "wb").write(b"\xff" * 65536)
++    with open(out, "wb") as f:
++        for e in eps:
++            img = os.path.join(t, "e%s.img" % e)
++            subprocess.check_call([sys.executable, mknor, os.path.join(packs, "E" + e), img, "--save", blank, "--nor-mb", "8"])
++            f.write(open(img, "rb").read())
+diff -ruN -x build -x __pycache__ -x *.pyc orig-full/tools/rv32_fast.c <WORKDIR>/wt-full/tools/rv32_fast.c
+--- orig-full/tools/rv32_fast.c	2026-11-03 18:33:08
++++ <WORKDIR>/wt-full/tools/rv32_fast.c	2026-11-03 18:47:54
+@@ -27,9 +27,22 @@
+   fseek(f,0,SEEK_END);long dn=ftell(f);fseek(f,0,SEEK_SET);uint8_t*disk=malloc(dn);if(fread(disk,1,dn,f)!=(size_t)dn)return 2;fclose(f);
+   uint32_t kbox=strtoul(argv[3],0,16),dbox=strtoul(argv[4],0,16);
+   FILE*out=fopen(argv[5],"wb");uint64_t maxi=strtoull(argv[6],0,10);
+-  int nkeys=argc-7;struct{int c;int fr;int done;}keys[256];
+-  for(int i=0;i<nkeys&&i<256;i++){keys[i].c=argv[7+i][0];keys[i].fr=atoi(argv[7+i]+2);keys[i].done=0;}
+-  uint32_t last_req=0,kseq=100;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
++  /* extra args: key@frame | -s SCRIPT | -F MAXFRAMES | -W DISK_OUT (disk image written back at exit)
++   * script lines: "F key", "F1-F2 key" (re-injected every frame of the range = held), '#' comments;
++   * key = one char, or sp ent esc tab; frames count 0x02 markers */
++  static struct{int c;int fr;int to;int done;}keys[8192];int nkeys=0;int maxframes=1<<30;const char*wout=0;
++  for(int i=7;i<argc;i++){
++    if(!strcmp(argv[i],"-F")&&i+1<argc){maxframes=atoi(argv[++i]);continue;}
++    if(!strcmp(argv[i],"-W")&&i+1<argc){wout=argv[++i];continue;}
++    if(!strcmp(argv[i],"-s")&&i+1<argc){FILE*sf=fopen(argv[++i],"r");if(!sf){perror("script");return 2;}char ln[256];
++      while(fgets(ln,sizeof ln,sf)&&nkeys<8192){if(ln[0]=='#'||ln[0]=='\n')continue;int a=0,b=0;char kn[32];
++        if(sscanf(ln,"%d-%d %31s",&a,&b,kn)==3){}else if(sscanf(ln,"%d %31s",&a,kn)==2)b=a;else continue;
++        int c=kn[0];if(!strcmp(kn,"sp"))c=' ';else if(!strcmp(kn,"ent"))c=13;else if(!strcmp(kn,"esc"))c=27;else if(!strcmp(kn,"tab"))c=9;
++        keys[nkeys].c=c;keys[nkeys].fr=a;keys[nkeys].to=b;keys[nkeys].done=0;nkeys++;}
++      fclose(sf);continue;}
++    if(nkeys<8192){keys[nkeys].c=argv[i][0];keys[nkeys].fr=atoi(argv[i]+2);keys[nkeys].to=keys[nkeys].fr;keys[nkeys].done=0;nkeys++;}
++  }
++  uint32_t last_req=0,kseq=100,ndw=0;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
+   uint64_t last_frame_step=0;
+   while(steps<maxi){
+     if(pc<0x40000||pc>0x7fffc||(pc&3))die("fetch",pc,steps);
+@@ -75,11 +88,12 @@
+     case 0x73:
+       if(reg[17]==1){int c=reg[10]&511;if(c<256){fputc(c,out);int mark=0;
+   if(pskip>0){pskip--;}
+-  else if(ps==0){if(c==1)ps=1;else if(c==2)mark=1;}
++  else if(ps==0){if(c==1)ps=1;else if(c==2)mark=1;else if(c==3)pskip=1;}
+   else if(ps==1){ps=0;if(c=='D'){ps=2;pn=0;plen=0;}else if(c=='W')pskip=10;else if(c=='P')pskip=1;else if(c=='E')pskip=2;}
+   else if(ps==2){plen|=c<<(8*pn);if(++pn==2){ps=0;pskip=plen;}}
+   if(mark){fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;
+-            for(int i=0;i<nkeys;i++)if(!keys[i].done&&frames>=keys[i].fr){keys[i].done=1;wr32(kbox+4,keys[i].c);wr32(kbox,kseq++);break;}}}}
++            for(int i=0;i<nkeys;i++)if(!keys[i].done&&frames>=keys[i].fr&&frames<=keys[i].to+0){if(frames>=keys[i].to)keys[i].done=1;wr32(kbox+4,keys[i].c);wr32(kbox,kseq++);break;}
++            if(frames>=maxframes){exitcode=0;goto done;}}}}
+       else if(reg[17]==93){exitcode=reg[10];goto done;}
+       else die("ecall",reg[17],steps);
+       break;
+@@ -88,16 +102,18 @@
+     if(rd&&op!=0x63&&op!=0x23&&op!=0x0f&&op!=0x73)reg[rd]=v;
+     reg[0]=0;pc=np;steps++;
+     uint32_t seq=rd32(dbox);
+-    if(seq&&seq!=last_req){uint32_t off=rd32(dbox+4),len=rd32(dbox+8);
++    if(seq&&seq!=last_req){uint32_t off=rd32(dbox+4),len=rd32(dbox+8);int wr=(len>>31)&1;len&=0x7fffffffu;
+       if(!len||len>256)die("bad disk request",len,steps);
+       last_req=seq;int good=off<=(uint32_t)dn&&len<=(uint32_t)dn-off;
+-      if(good)memcpy(mem+dbox+20,disk+off,len);
++      if(good&&wr){memcpy(disk+off,mem+dbox+20,len);ndw++;}
++      else if(good)memcpy(mem+dbox+20,disk+off,len);
+       wr32(dbox+16,good?1:2);wr32(dbox+12,seq);}
+   }
+ done:
+   fclose(out);
+-  fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);
+-  for(int i=0;i<frames&&i<100000;i++)fprintf(stderr,"frame %d at %llu delta %llu\n",i,(unsigned long long)fstep[i],(unsigned long long)(fstep[i]-(i?fstep[i-1]:0)));
++  if(wout){FILE*wf=fopen(wout,"wb");if(wf){fwrite(disk,1,dn,wf);fclose(wf);}}
++  fprintf(stderr,"steps=%llu exit=%d frames=%d diskwrites=%u\n",(unsigned long long)steps,exitcode,frames,ndw);
++  for(int i=0;i<frames&&i<100000&&getenv("FRAMELOG");i++)fprintf(stderr,"frame %d at %llu delta %llu\n",i,(unsigned long long)fstep[i],(unsigned long long)(fstep[i]-(i?fstep[i-1]:0)));
+   /* dump RAM for post-mortem */
+   char rn[512];snprintf(rn,sizeof rn,"%s.ram",argv[5]);FILE*r=fopen(rn,"wb");if(r){fwrite(mem,1,0x8000,r);fclose(r);}
+   return exitcode<0?1:0;

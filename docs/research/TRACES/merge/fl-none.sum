@@ -1,0 +1,6 @@
+tics 349 instr/tic 0-30 2609277  30-300 1214981  total(sum tic) 460492485
+req/tic 0-30 2126.5  30-300 880.2  total 340890
+GAMETICS n=347 mean=1310109 median=1091745 p90=2289261 max=2855097 total=454607987
+DISK total_req=341648 req_per_tic=966 bytes_per_tic=34297
+TICS n=349 first_tic_at=278891 mean=1319462 median=1092122 p90=2320833 max=3316365
+steps=461888056 exit=0 frames=350

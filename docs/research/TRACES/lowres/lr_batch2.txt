@@ -1,0 +1,109 @@
+== b0 []
+LEVEL boot_to_level_start=290455 load_to_first_frame=3629725 first_game_frame_at=3920180
+GAMETICS n=347 mean=1327330 median=1153019 p90=2433490 max=3050398 total=460583636
+DISK total_req=309189 req_per_tic=872 bytes_per_tic=30504
+TICS n=349 first_tic_at=290267 mean=1338030 median=1154197 p90=2471949 max=3631066
+steps=468839153 exit=0 frames=350
+== b0-dump
+LEVEL boot_to_level_start=290455 load_to_first_frame=7481677 first_game_frame_at=7772132
+GAMETICS n=347 mean=4553851 median=4359179 p90=5678109 max=6295977 total=1580186401
+DISK total_req=309189 req_per_tic=872 bytes_per_tic=30504
+TICS n=349 first_tic_at=290267 mean=4566285 median=4360357 p90=5705574 max=7483018
+steps=1599351982 exit=0 frames=350
+== b1 [-DQ_DUMP_COMPACT]
+LEVEL boot_to_level_start=290455 load_to_first_frame=3625847 first_game_frame_at=3916302
+GAMETICS n=347 mean=1325978 median=1151747 p90=2432218 max=3049030 total=460114710
+DISK total_req=309189 req_per_tic=872 bytes_per_tic=30504
+TICS n=349 first_tic_at=290267 mean=1336672 median=1152925 p90=2470677 max=3627188
+steps=468361199 exit=0 frames=350
+== b1-dump
+LEVEL boot_to_level_start=290455 load_to_first_frame=5921875 first_game_frame_at=6212330
+GAMETICS n=347 mean=2984203 median=2789208 p90=4108138 max=4726676 total=1035518482
+DISK total_req=309189 req_per_tic=872 bytes_per_tic=30504
+TICS n=349 first_tic_at=290267 mean=2996664 median=2790386 p90=4135603 max=5923216
+steps=1049994488 exit=0 frames=350
+== c1 [-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35]
+LEVEL boot_to_level_start=290457 load_to_first_frame=3625848 first_game_frame_at=3916305
+GAMETICS n=347 mean=638669 median=234158 p90=1479925 max=3046986 total=221618157
+DISK total_req=165061 req_per_tic=462 bytes_per_tic=15963
+TICS n=349 first_tic_at=290269 mean=645431 median=234158 p90=1488767 max=3627191
+steps=227112390 exit=0 frames=151
+== c1-dump
+LEVEL boot_to_level_start=290457 load_to_first_frame=5921876 first_game_frame_at=6212333
+GAMETICS n=347 mean=1362549 median=234158 p90=3158583 max=4724632 total=472804651
+DISK total_req=165061 req_per_tic=462 bytes_per_tic=15963
+TICS n=349 first_tic_at=290269 mean=1371742 median=234158 p90=3211506 max=5923219
+steps=482890940 exit=0 frames=151
+== c2 [-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35 -DQ_DETAIL=2 -DQ_XTVASH=2]
+LEVEL boot_to_level_start=290453 load_to_first_frame=2672921 first_game_frame_at=2963374
+GAMETICS n=347 mean=449208 median=233895 p90=1073166 max=1977368 total=155875417
+DISK total_req=138904 req_per_tic=389 bytes_per_tic=13143
+TICS n=349 first_tic_at=290265 mean=454326 median=233895 p90=1083201 max=2674264
+steps=160107651 exit=0 frames=151
+== c2-dump
+LEVEL boot_to_level_start=290453 load_to_first_frame=4150679 first_game_frame_at=4441132
+GAMETICS n=347 mean=821728 median=233895 p90=1927392 max=2962583 total=285139681
+DISK total_req=138904 req_per_tic=389 bytes_per_tic=13143
+TICS n=349 first_tic_at=290265 mean=828945 median=233895 p90=1936799 max=4152022
+steps=292327431 exit=0 frames=151
+== c3 [-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35 -DQ_DETAIL=2 -DQ_XTVASH=2 -DQ_VTOP=60 -DQ_VBOT=200]
+LEVEL boot_to_level_start=290453 load_to_first_frame=2497671 first_game_frame_at=2788124
+GAMETICS n=347 mean=414876 median=234080 p90=980595 max=1667586 total=143961978
+DISK total_req=137430 req_per_tic=385 bytes_per_tic=12692
+TICS n=349 first_tic_at=290265 mean=419688 median=234080 p90=1002362 max=2499014
+steps=147968631 exit=0 frames=151
+== c3-dump
+LEVEL boot_to_level_start=290453 load_to_first_frame=3730629 first_game_frame_at=4021082
+GAMETICS n=347 mean=682279 median=234080 p90=1578563 max=2670280 total=236751042
+DISK total_req=137430 req_per_tic=385 bytes_per_tic=12692
+TICS n=349 first_tic_at=290265 mean=689092 median=234080 p90=1606674 max=3731972
+steps=243223611 exit=0 frames=151
+== c4 [-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35 -DQ_DETAIL=2 -DQ_XTVASH=2 -DQ_VTOP=60 -DQ_VBOT=200 -DQ_DUMP_ROW2]
+LEVEL boot_to_level_start=290453 load_to_first_frame=2497733 first_game_frame_at=2788186
+GAMETICS n=347 mean=414902 median=234080 p90=980657 max=1667648 total=143971216
+DISK total_req=137430 req_per_tic=385 bytes_per_tic=12692
+TICS n=349 first_tic_at=290265 mean=419715 median=234080 p90=1002424 max=2499076
+steps=147977993 exit=0 frames=151
+== c4-dump
+LEVEL boot_to_level_start=290453 load_to_first_frame=3445091 first_game_frame_at=3735544
+GAMETICS n=347 mean=559671 median=234080 p90=1293025 max=2384742 total=194205880
+DISK total_req=137430 req_per_tic=385 bytes_per_tic=12692
+TICS n=349 first_tic_at=290265 mean=566368 median=234080 p90=1321136 max=3446434
+steps=200107373 exit=0 frames=151
+== c5 [-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35 -DQ_VTOP=40 -DQ_VBOT=200]
+LEVEL boot_to_level_start=290457 load_to_first_frame=3399177 first_game_frame_at=3689634
+GAMETICS n=347 mean=597894 median=234199 p90=1386884 max=2691279 total=207469462
+DISK total_req=163845 req_per_tic=459 bytes_per_tic=15502
+TICS n=349 first_tic_at=290269 mean=604241 median=234199 p90=1387485 max=3400520
+steps=212677046 exit=0 frames=151
+== c5-dump
+LEVEL boot_to_level_start=290457 load_to_first_frame=5368805 first_game_frame_at=5659262
+GAMETICS n=347 mean=1181620 median=234199 p90=2756590 max=4035791 total=410022356
+DISK total_req=163845 req_per_tic=459 bytes_per_tic=15502
+TICS n=349 first_tic_at=290269 mean=1190265 median=234199 p90=2758383 max=5370148
+steps=419169196 exit=0 frames=151
+== c6 [-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35 -DQ_VTOP=40 -DQ_VBOT=200 -DQ_DUMP_ROW2]
+LEVEL boot_to_level_start=290457 load_to_first_frame=3399298 first_game_frame_at=3689755
+GAMETICS n=347 mean=597946 median=234199 p90=1387005 max=2691400 total=207487491
+DISK total_req=163845 req_per_tic=459 bytes_per_tic=15502
+TICS n=349 first_tic_at=290269 mean=604293 median=234199 p90=1387606 max=3400641
+steps=212695317 exit=0 frames=151
+== c6-dump
+LEVEL boot_to_level_start=290457 load_to_first_frame=4716126 first_game_frame_at=5006583
+GAMETICS n=347 mean=901363 median=234199 p90=2103911 max=3383112 total=312773185
+DISK total_req=163845 req_per_tic=459 bytes_per_tic=15502
+TICS n=349 first_tic_at=290269 mean=909744 median=234199 p90=2105704 max=4717469
+steps=320614667 exit=0 frames=151
+== c7 [-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35 -DQ_DETAIL=2 -DQ_XTVASH=2 -DQ_VTOP=60 -DQ_VBOT=200 -DQ_DUMP_ROW2 -DQ_SOLID]
+LEVEL boot_to_level_start=290468 load_to_first_frame=2302320 first_game_frame_at=2592788
+GAMETICS n=347 mean=402548 median=234207 p90=962648 max=1506048 total=139684378
+DISK total_req=137029 req_per_tic=384 bytes_per_tic=12020
+TICS n=349 first_tic_at=290280 mean=406872 median=234207 p90=996095 max=2303663
+steps=143498851 exit=0 frames=151
+== c7-dump
+LEVEL boot_to_level_start=290468 load_to_first_frame=3249678 first_game_frame_at=3540146
+GAMETICS n=347 mean=547317 median=234207 p90=1292914 max=2367823 total=189919042
+DISK total_req=137029 req_per_tic=384 bytes_per_tic=12020
+TICS n=349 first_tic_at=290280 mean=553525 median=234207 p90=1298560 max=3251021
+steps=195628231 exit=0 frames=151
+ALLDONE

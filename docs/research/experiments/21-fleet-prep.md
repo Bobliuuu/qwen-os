@@ -1,0 +1,4 @@
+# 21 Fleet preparation on AWS
+
+From the private launch record (not published): 3 x g5.xlarge (A10G 24 GB, 16 GB RAM, 100 GB gp3), launched 2026-11-04 00:07 UTC with auto-shutdown +300 min. Each box had a Python venv, a copy of this repo with built ELFs and E1.img, an upstream qwenputer clone and the merged checkpoint (18 GB bf16). Cost about $3.05/h for the three, hard cap about $15. Some regions had no g5 capacity. Access details and instance identifiers are deliberately not published.
+Result: prepared and launched; no run results or logs from the fleet exist in `out/model/` at the time of this record. Whether any chunk ran is unknown here. An A10G is slower than the A100 (agent expectation, no measurement), so 3 boxes cannot cover 38 h of tokens in 5 h. Instances terminate themselves; verify with `aws ec2 describe-instances --profile lab` (see memory note: profile `lab`; unverified command in this pass).
