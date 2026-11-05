@@ -115,7 +115,7 @@ PYTHONPATH=<qwenputer>/experimental/riscv python3 tools/model_doom_qwen.py MODEL
 tools/model_doom_qwen.py --dry-run   # same plan on the reference machine, no GPU
 ```
 
-Honest limits of the model path: the model driver runs in segments between frame markers and disk requests, and typed keys can only land on segment boundaries (`--keys 'CHAR@MARKERS'`); it has not been updated to the live key-ring protocol, and the typed `run /bin/doomd` flow has not been model-verified (README, "What is real"). Cost: about 1.35 chip tokens per instruction, millions of instructions per frame, so budget GPU hours and confirm cost before launching.
+Honest limits of the model path: the model driver runs in segments between frame markers and disk requests, and typed keys can only land on segment boundaries (`--keys 'CHAR@MARKERS'`); it has not been updated to the live key-ring protocol, and the typed `run /bin/doomd` flow was model-verified in a separate run through frame marker 3 (README, "What is real"; docs/research/TYPED_FLOW_MODEL.md). Cost: about 1.35 chip tokens per instruction, millions of instructions per frame, so budget GPU hours and confirm cost before launching.
 `tools/qwenos_live.sh --model` prints this and exits.
 
 ## Tests
@@ -140,7 +140,7 @@ make check                                                      # everything (ne
 1. Intro card (4.5 s): tier T0, not the model.
 2. Explainer cards "What this is" and "What you are watching" (7 s each): Qwenputer compiles RV32IM into the weights of Qwen3.5-4B, RAM is Gated DeltaNet state, about 1.4 tokens per guest instruction; T0 is the host emulator, T1/T2 are upstream's reference CPU and the real model, identical on everything tested.
 3. Real captured terminal: boot, typed shell tour (`help`, `ls`, `cat /README`, `echo > /tmp/note`, `cat`), typed `run /bin/doomd`, then the DOOM frames with the instruction counter panel.
-4. Explainer cards "What the model actually did" (8 s), "How slow" (8 s), "Honest bits" (7 s): the verified typed flow (3 A100 chunks, 3,335,072 instructions, 26 segments, zero divergence), the 45-frame, 35-chunk clip, model-emitted pixel bytes (4 frames byte-exact so far, frames 12-15, per the model-pixels status file), about 8 to 10 minutes of A100 per frame now (about 18 before the speed-ups, 2.14x per chip token measured, about 8,000x off real time, footnote about 28 minutes by whole-clip division), and what the host does and does not do.
+4. Explainer cards "What the model actually did" (8 s), "How slow" (8 s), "Honest bits" (7 s): the verified typed flow (4 A100 chunks, 8,239,190 instructions, 27 segments, zero divergence), the 45-frame, 35-chunk clip, model-emitted pixel bytes (4 frames byte-exact so far, frames 12-15, per the model-pixels status file), about 8 to 10 minutes of A100 per frame now (about 18 before the speed-ups, 2.14x per chip token measured, about 8,000x off real time, footnote about 28 minutes by whole-clip division), and what the host does and does not do.
 5. Closing card (4 s): this recording is the host emulator (T0); model-run evidence is in the README and `docs/CLIP_LEDGER.md`.
 
 Reproduce:

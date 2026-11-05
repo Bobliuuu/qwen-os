@@ -57,7 +57,7 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 ### 🛠️ What we fixed since the first clip
 
 - Before, every instruction of the clip was verified, but **the emulator read the pixels out of memory**. Now the **model emits the pixels**, each byte lockstep-checked.
-- Before, the typed flow had not been run on the model. Now `boot -> shell -> help/ls -> run /bin/doomd -> first frame` is **model-verified** (3 Modal A100 chunks, 3,335,072 instructions, 26 segments, zero divergence; keys arrive at `qos_key_park` via the key ring).
+- Before, the typed flow had not been run on the model. Now `boot -> help, ls, run /bin/doomd -> first DOOM frame marker and two more (markers 2 and 3)` is **model-verified** (4 Modal A100 chunks, 8,239,190 instructions, about 11.7 M chip tokens, 27 segments, zero divergence; keys arrive at `qos_key_park` via the key ring; [details](docs/research/TYPED_FLOW_MODEL.md)).
 - Before, it ran at about 1.7 k instr/s. Now it is about **2x faster on the model** (block verification plus fused kernels, bit-exact, see below).
 - Before, the older build was used. The tuned build executes fewer instructions (-10.8 % on the clip, host emulator). The tuned build has **not** been re-verified over the whole clip.
 
@@ -66,7 +66,7 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 
 > ### 🧾 TL;DR
 > - 🧠 **What:** a 32-bit RISC-V CPU ([Qwenputer](https://github.com/divagr18/qwenputer)) is built into the layers of Qwen3.5. We wrote a small OS for it and ran the real DOOM engine on top.
-> - 🎨 **The model emits the pixels itself:** the model **emits the pixels itself**. The guest dumps each frame as about 32,100 console bytes, every byte comes out of the model as a BYTE token, and every token is checked against a lockstep oracle. The typed flow `boot -> shell -> help/ls -> run /bin/doomd -> first frame` is also model-verified.
+> - 🎨 **The model emits the pixels itself:** the model **emits the pixels itself**. The guest dumps each frame as about 32,100 console bytes, every byte comes out of the model as a BYTE token, and every token is checked against a lockstep oracle. The typed flow (`help`, `ls`, `run /bin/doomd`, then frame markers 1-3) is also model-verified ([details](docs/research/TYPED_FLOW_MODEL.md)).
 > - 🎯 **Progress:** see the progress line just below. We only count a frame once its model-emitted pixels match the emulator byte for byte.
 > - 🐌 **Catch:** slow. One displayed frame took about **18 minutes** of GPU time before (patched driver). With the speed-ups we project about **8 to 10 minutes** per frame (arithmetic, not a measurement). Real time is 0.067 s per frame, so we are still thousands of times too slow.
 > - 🔍 **Honest bit:** keys are scripted (or come through the key ring), the clock is virtual, the host serves the disk and collects the bytes into PNGs. Details below.
@@ -88,7 +88,7 @@ The same RISC-V program can be run by three executors that are meant to be **bit
 - **T1** is the upstream Qwenputer reference CPU (`chipformer.rv.ref.Machine`), the oracle. In a model run, every token the model predicts is compared with it, and slow blocks are re-decoded and checked too (`tools/model_doom_qwen.py`, `bridge.Session`). A mismatch stops the run.
 - **T0** is our fast C emulator `tools/rv32_fast.c` (plus our Python reference `tools/rv32_qwenputer.py`). It is a fast twin of the same CPU, used to plan chunks, snapshot, benchmark and run the live demo.
 - The oracle checks the **chip execution**. The host still handles keys, the disk, the roughly 30-token tool-call turn per segment, the 35 boundary instructions and the snapshots.
-- What we saw: the model run was compared token by token with the oracle with **zero divergence** for the 45-frame clip (35 chunks), the typed flow (26 segments) and the first model-decoded pixel frames. T0 equals T1 on everything we tested: per-tic state hashes and frame hashes against goldens (`tools/doomd_regress.sh`, `tests/golden`), a 3-way lockstep (`tests/test_upstream_doomd.py`), and `rv32_fast`'s token-cost model, which matched `ref.Machine` exactly on 3,000,000 instructions. This is observed equality, not a mathematical proof.
+- What we saw: the model run was compared token by token with the oracle with **zero divergence** for the 45-frame clip (35 chunks), the typed flow (27 segments) and the first model-decoded pixel frames. T0 equals T1 on everything we tested: per-tic state hashes and frame hashes against goldens (`tools/doomd_regress.sh`, `tests/golden`), a 3-way lockstep (`tests/test_upstream_doomd.py`), and `rv32_fast`'s token-cost model, which matched `ref.Machine` exactly on 3,000,000 instructions. This is observed equality, not a mathematical proof.
 
 | Tier | What runs it | Speed | Used for | What it shows |
 |---|---|---|---|---|
@@ -107,7 +107,7 @@ QwenOS is the little OS we gave it: a kernel, a shell, a keyboard, a 32x24 frame
 Then we asked it to run a *real* DOOM engine ([DMC100-Doom](https://github.com/ArturBieniek4/DMC100-Doom) on [Freedoom](https://freedoom.github.io) data) as an ordinary program, `/bin/doomd`.
 Architecture is inspired by [bobliu-os](https://github.com/Bobliuuu/bobliu-os).
 
-> **Honest summary:** the whole thing works on an emulator, and the real Qwen model has verified, in lockstep: a cold boot to the first frame marker, the typed flow to the first frame (3 Modal A100 chunks, 3,335,072 instructions, 26 segments, zero divergence, 273 console bytes identical to the emulator), and all 45 frames of the first 3 s clip (35 chunks) as an instruction trace. In that clip the emulator read the pixels out of memory; now the model emits them; the number of frames done so far is in the progress line above. We do not claim 45 of 45 model-decoded frames until it is true.
+> **Honest summary:** the whole thing works on an emulator, and the real Qwen model has verified, in lockstep: a cold boot to the first frame marker, the typed flow (`help`, `ls`, `run /bin/doomd`, first DOOM frame marker plus two more: 4 Modal A100 chunks, 8,239,190 instructions, 27 segments, zero divergence, 273 console bytes through marker 1 identical to the emulator; [details](docs/research/TYPED_FLOW_MODEL.md)), and all 45 frames of the first 3 s clip (35 chunks) as an instruction trace. In that clip the emulator read the pixels out of memory; now the model emits them; the number of frames done so far is in the progress line above. We do not claim 45 of 45 model-decoded frames until it is true.
 
 ## ⚡ What you can do in 30 seconds
 
@@ -234,9 +234,8 @@ FULL preset means a 160x200 low-detail view, game logic every tic, and 15 of eve
 | 🟦 T0 | C emulator `tools/rv32_fast` and our Python reference | Everything: typed flow, E1M1 gameplay, chunk ROM, regression goldens, a 1060-frame scripted E1M1 video |
 | 🟨 T1 | Upstream reference CPU (`chipformer.rv.ref.Machine`), the oracle (see [three ways to run the CPU](#-three-ways-to-run-the-same-cpu-t0-t1-t2)) | Lockstep equal to the emulator for 6,000,000 instr of the merged build (level load and 2 frames); upstream also boots the kernel (120,267 instr) |
 | 🟩 T2 | The real Qwen model (merged Qwen3.5-4B, A100) with a lockstep oracle | Probe; title frame (6,563 instr); **cold boot to the first frame marker: 1,552,382 instr, 292 segments, zero divergence**, on an earlier (pre-merge) build |
-| 🟩 T2, gameplay | The real Qwen model (Qwen3.5-4B, lockstep oracle) | The 3-second E1M1 clip: 45 frames, 35 chunks, 81,065,587 instr, zero divergence, scripted input (see [the clip](#-the-3-second-clip)). Not model-verified: the typed `run /bin/doomd` flow (ELF-build level only) |
-
-| 🟩 T2, typed flow | The real Qwen model, lockstep oracle | `boot -> shell -> help/ls -> run /bin/doomd -> first frame`: 3 Modal A100 chunks, 3,335,072 instr, 26 segments, zero divergence, console 273 bytes byte-identical to the emulator. Keys delivered at `qos_key_park` via the key ring |
+| 🟩 T2, gameplay | The real Qwen model (Qwen3.5-4B, lockstep oracle) | The 3-second E1M1 clip: 45 frames, 35 chunks, 81,065,587 instr, zero divergence, scripted input (see [the clip](#-the-3-second-clip)). The typed `run /bin/doomd` flow is a separate run, see the next row |
+| 🟩 T2, typed flow | The real Qwen model, lockstep oracle | Cold boot, `help`, `ls`, `run /bin/doomd`, first DOOM frame marker and markers 2 and 3: 8,239,190 instr in total, about 11.7 M chip tokens, 27 segments, 4 A100 chunks, zero divergence, every token checked against the oracle. Console through marker 1: 273 bytes byte-identical to the C emulator and the Python reference; through marker 3 the first 315 bytes are identical (the model segment stops at the first not-yet-executed pc after the marker, so it prints 20 extra bytes `DOOMD_FRAME 3 tic 5` and runs about 15k instructions past the emulator's marker). See [TYPED_FLOW_MODEL](docs/research/TYPED_FLOW_MODEL.md) |
 | 🟩 T2, pixels | The real Qwen model, lockstep oracle | The guest's LCD dump stream (about 32,100 console bytes per frame, rows 0-199) comes out as model BYTE tokens, each lockstep-checked; the host collects the bytes into PNGs. **Frames done: see the progress line at the top** |
 
 Things you should know before you get too excited 🧯:
@@ -245,6 +244,12 @@ Things you should know before you get too excited 🧯:
 - ⌨️ **Keyboard** input is simulated: the host pushes hardcoded keys through the input mailbox.
 - 🕰️ **Clock** is virtual (about 1 ms per idle call), not real time.
 - 🖼️ **Pixels**: all frames are genuine DOOM output. In the first clip the pixel bytes were read from guest memory by the emulator and the model verified the instruction trace. Now the model emits the pixel bytes (rows 0-199 only) and the host just collects them. A frame counts as model-decoded only when its bytes match the emulator.
+- ⌨️ **Typed-flow run, disclosures** ([details](docs/research/TYPED_FLOW_MODEL.md)):
+  - 22 boundary instructions (the park `ret`s) were executed by the host.
+  - Keys were delivered at `qos_key_park` through the key ring, one char per park, so each key is present at the same instruction the emulator consumed it.
+  - Only `help`, `ls` and `run /bin/doomd` were typed (no cat/echo tour), and no gameplay keys were sent during the frames.
+  - The run used the older non-Zba chunk-ROM live ELF (built 2026-11-03), whose shell prints `?` for `help`.
+  - The frames' pixels were not checked in that run (marker bytes only); model-decoded pixel frames are a separate run.
 - 🧩 **Segments**: a model run is a series of host-snapshotted segments, and "zero divergence" is per segment.
 - 🐌 **Not real-time.** See [how fast is it](#-how-fast-is-it-really).
 - The clip uses a dedicated E1M1 demo build with scripted input; the typed flow was verified separately. Scope is E1M1.
@@ -268,7 +273,7 @@ E1M1, FULL preset (160x200 low-detail view, status bar), 15 rendered frames per 
 | 🔢 Instructions | 81,065,587 in the run plan; 81,065,591 executed by the model plus 35 host-executed boundary instructions |
 | 💽 Disk requests | 4 in total (host-served disk replaced by chunk ROM) |
 
-What "verified" means here: the model executed the instruction trace in lockstep with the oracle, and the frame markers and console bytes matched. **The frames are real output of the real DOOM engine**; the pixel bytes are read from the guest's memory by the emulator (same ELF and state), so Qwen verified the computation that made them, not the pixel values themselves. Disclosures: keys are simulated, the clock is virtual, the disk is host-served through chunk-ROM windows, 35 boundary instructions are host-executed, and each chunk starts from a host-supplied snapshot. Not covered: the typed `run /bin/doomd` flow; a full Python-reference replay (only segments 1-4, the C twin covers 5-38); and a +5 instruction difference in chunk c02 that we have not decoded. The original run plan failed instruction-count bookkeeping at the c00-c02 split boundary and was reconciled; the ledger links both.
+What "verified" means here: the model executed the instruction trace in lockstep with the oracle, and the frame markers and console bytes matched. **The frames are real output of the real DOOM engine**; the pixel bytes are read from the guest's memory by the emulator (same ELF and state), so Qwen verified the computation that made them, not the pixel values themselves. Disclosures: keys are simulated, the clock is virtual, the disk is host-served through chunk-ROM windows, 35 boundary instructions are host-executed, and each chunk starts from a host-supplied snapshot. Not covered by the clip: the typed flow (a separate run, see above); a full Python-reference replay (only segments 1-4, the C twin covers 5-38); and a +5 instruction difference in chunk c02 that we have not decoded. The original run plan failed instruction-count bookkeeping at the c00-c02 split boundary and was reconciled; the ledger links both.
 
 ## 🙋 FAQ for humans
 

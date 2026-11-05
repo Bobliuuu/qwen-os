@@ -97,6 +97,8 @@ class Truth:
         from chipformer.rv import elf as relf, ref
         sy = symbols(kelf)
         self.kbox, self.dbox = sy['qos_input_mailbox'], sy['qos_disk_mailbox']
+        self.park_pc = sy.get('qos_key_park')   # typed-flow keys (--type): one key per arrival at the kernel key-park pc
+        self.pkeys, self.pk_i, self.pk_log = [], 0, []
         self.m = ref.Machine.from_program(relf.program(elf))
         self.dev = ReferenceDiskDevice(self.m, self.dbox, disk)
         self.par, self.seen, self.marks = MarkerParser(), 0, []
@@ -171,6 +173,24 @@ class Truth:
         one starts with the right window; only checked at frame markers)."""
         return bool(self.rom_chunks) and self.rom_index() != self.rom_cur
 
+    def park_push(self):
+        """Typed-flow key delivery, exactly like rv32_fast -K 'shell_ready': when the guest is about to execute qos_key_park
+        (a bare `ret`) and a typed char is left, write it into the key ring (q[seq&3] first, seq+1 LAST) and then let the
+        host execute that single `ret` (the segment starts right after it).  Returns True if a key was pushed."""
+        m = self.m
+        if self.park_pc is None or m.pc != self.park_pc or self.pk_i >= len(self.pkeys):
+            return False
+        c = self.pkeys[self.pk_i]
+        self.pk_i += 1
+        seq = m.ram[self.kbox // 4]
+        qa = self.kbox + 4 + (seq & 3)
+        sh = (qa & 3) * 8
+        m.ram[qa // 4] = (m.ram[qa // 4] & ~(0xff << sh) & 0xffffffff) | (ord(c) << sh)
+        m.ram[self.kbox // 4] = (seq + 1) & 0xffffffff
+        self.pk_log.append((m.steps, c))
+        self.step()   # host executes the park `ret`
+        return True
+
     def key_pending(self):
         return any(not k[2] and len(self.marks) >= k[1] for k in self.keys)
 
@@ -238,6 +258,7 @@ def plan(truth, args):
     nseg = 0
     while len(truth.marks) < target:
         truth.inject_due()
+        truth.park_push()
         if truth.hook_pc is not None and m.pc == truth.hook_pc:
             truth.step()  # leave the stop hook's entry pc on the host so a breakpoint on it can fire in this segment
         truth.apply_rom_window()
@@ -252,6 +273,12 @@ def plan(truth, args):
             if truth.armed and pc == truth.hook_pc and m.steps > s0:
                 # the guest, with the marker count at the boundary, is about to run q_stop_here (start of the next frame end): stop BEFORE it
                 ev, hooked = 'split', True
+                stop_pc, instr, tokens = pc, m.steps - s0, truth.tokens - t0
+                break
+            if truth.park_pc is not None and pc == truth.park_pc and truth.pk_i < len(truth.pkeys) and m.steps > s0:
+                # typed flow: the guest is parked and a typed key is due. Stop BEFORE the park `ret` (ROM ebreak there); the host
+                # pushes the key through the ring and executes the `ret` at the start of the next segment.
+                ev, hooked = 'park', True
                 stop_pc, instr, tokens = pc, m.steps - s0, truth.tokens - t0
                 break
             if sstep is not None and m.steps >= sstep and pc not in visited and m.steps > s0:
@@ -301,7 +328,7 @@ def plan(truth, args):
         nseg += 1
         yield dict(index=nseg, start=start, start_steps=s0, stop_pc=stop_pc, instr=instr,
                    tokens=tokens, out=bytes(m.out[o0:]),
-                   reason={'disk': 'disk', 'rom': 'rom', 'split': 'split', 'isplit': 'isplit'}.get(ev, 'marker'), rom_chunk=truth.rom_cur, markers=bytes(m.out[o0:]).count(b'\x02'))
+                   reason={'disk': 'disk', 'rom': 'rom', 'split': 'split', 'isplit': 'isplit', 'park': 'park'}.get(ev, 'marker'), rom_chunk=truth.rom_cur, markers=bytes(m.out[o0:]).count(b'\x02'))
     left = [k[0] for k in truth.keys if not k[2]]
     if left:
         raise RuntimeError(f'keys {left!r} were never injected: a key must be due before the final marker so that it falls on a '
@@ -351,6 +378,8 @@ def main():
                     help='per-segment instruction limit of the lockstep oracle (upstream default 1e6 is too small for zero-pause segments)')
     ap.add_argument('--split-markers', default='', help='comma list of frame-marker counts at which a segment must end (so a\n                    '
                     'model chunk can start there: --segment-range then selects segments between such boundaries)')
+    ap.add_argument('--type', default='', help="typed-flow text, e.g. 'help\\nls\\nrun /bin/doomd\\n': one char is pushed through the key ring each time "
+                    "the guest arrives at qos_key_park (needs --kernel-elf = the live kernel ELF); segments end before each park")
     ap.add_argument('--plan-json', default=None, help='write per-segment plan (instr, tokens, bytes) and exit')
     ap.add_argument('--result-json', default=None, help='write the final report here too')
     ap.add_argument('--dump-starts', default=None, metavar='DIR', help='[modal staging] host-only: one pass over the reference machine, '
@@ -379,6 +408,7 @@ def main():
     args.split_steps = sorted(int(x) for x in args.split_steps.split(',') if x)
     rom_plan = json.loads(Path(args.rom_plan).read_text()) if args.rom_plan else None
     truth = Truth(args.elf, Path(args.disk).read_bytes(), kelf, keys, not args.no_disk_pause, rom_plan, args.sym_elf)
+    truth.pkeys = list(args.type.replace('\\n', '\n'))
 
     chat = bridge = S = ids = None
     if not args.dry_run:
