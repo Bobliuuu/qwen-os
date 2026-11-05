@@ -2,7 +2,7 @@
 # tools/mkdemo.sh [PRESET] : the merged E1M1 demo build (make demo-elf).
 #   PRESET: full (default; 15 of 35 tics drawn, 160x200) | balanced | max | none (draw every tic, no skip)
 #   env: TICS (game tics to run, default 350)  CHUNKROM=0 (no chunk ROM: disk served through the mailbox)
-#        BUDGET (chunk window bytes, default 0x3f000-0x29000)  DMC (engine tree, default ../engine/DMC100-Doom)
+#        BUDGET (chunk window bytes, default 0x3f000-0x29000)  DMC (engine tree, default .deps/engine/DMC100-Doom)
 # Output (build/demo/): qwenos-e1m1.elf  the merged image (kernel + apps + /bin/doomd, mode 2 scripted E1M1)
 #   with CHUNKROM=1 also: crx-plan.bin (rv32_fast CRXPLAN= plan), crx-plan.json (model driver --rom-plan),
 #   reqlog.bin, and the verification run: "CRX chunk a-b reqs=N" lines must all say reqs=0.
@@ -11,7 +11,7 @@ set -e
 if [ "${1:-}" = live ]; then shift; exec "$(dirname "$0")/mkdemo_live.sh" "$@"; fi
 ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 P=${1:-full}; [ "$P" = none ] && P="-DQ_RN=1 -DQ_RD=1"
-export DMC=${DMC:-$ROOT/../engine/DMC100-Doom}
+export DMC=${DMC:-$ROOT/.deps/engine/DMC100-Doom}
 IMG=${IMG:-$DMC/build/sw/nor/E1.img}
 OUT=build/demo; mkdir -p $OUT
 cc -O2 -o build/rv32_fast tools/rv32_fast.c

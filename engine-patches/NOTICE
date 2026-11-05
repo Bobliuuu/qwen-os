@@ -10,8 +10,8 @@ DMC100-Doom is licensed GPL-2.0 and descends from doomgeneric and id Software's
 DOOM source (GPL). This patch is a derivative work of those sources and is
 distributed under GPL-2.0 as well. It contains no WAD data.
 
-Apply it to a checkout of upstream (the QwenOS build expects it at ../engine/DMC100-Doom):
+Apply it to a checkout of upstream (the QwenOS build expects it at .deps/engine/DMC100-Doom; tools/fetch_engine.sh does all of this):
 
-    git clone https://github.com/ArturBieniek4/DMC100-Doom ../engine/DMC100-Doom
-    cd ../engine/DMC100-Doom && git checkout 0cdc78e
+    git clone https://github.com/ArturBieniek4/DMC100-Doom .deps/engine/DMC100-Doom
+    cd .deps/engine/DMC100-Doom && git checkout 0cdc78e
     patch -p1 < ../../<this repo>/engine-patches/dmc100-qwenos-merged.patch
