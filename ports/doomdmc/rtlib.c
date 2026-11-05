@@ -20,3 +20,45 @@ float __floatsisf(int a){(void)a;return 0;}
 int __fixsfsi(float a){(void)a;return 0;}
 double __extendsfdf2(float a){(void)a;return 0;}
 int __ltdf2(double a,double b){return a<b;}
+
+/* ---- memcpy / memset / memmove: strong versions replacing the WEAK byte/word loops of platform/rt.c ----
+   Same results for every input (non-overlapping memcpy; memmove falls back to the backward byte loop for the
+   overlapping-forward case), 16 bytes per loop turn when aligned, word access when src and dst share their
+   alignment. Built with -fno-builtin-memcpy/-memset (build.sh CF_rtlib) so clang cannot turn the loops into calls. */
+#include <stddef.h>
+void *memcpy(void *restrict d, const void *restrict s, size_t n)
+{
+    uint8_t *p = d; const uint8_t *q = s;
+    if (n >= 8 && !(((uintptr_t)p ^ (uintptr_t)q) & 3u)) {
+        while ((uintptr_t)p & 3u) { *p++ = *q++; n--; }
+        uint32_t *pw = (uint32_t *)(void *)p; const uint32_t *qw = (const uint32_t *)(const void *)q;
+        for (; n >= 16; n -= 16, pw += 4, qw += 4) {
+            uint32_t a = qw[0], b = qw[1], c = qw[2], e = qw[3];
+            pw[0] = a; pw[1] = b; pw[2] = c; pw[3] = e;
+        }
+        for (; n >= 4; n -= 4) *pw++ = *qw++;
+        p = (uint8_t *)pw; q = (const uint8_t *)qw;
+    }
+    while (n--) *p++ = *q++;
+    return d;
+}
+void *memmove(void *d, const void *s, size_t n)
+{
+    uint8_t *p = d; const uint8_t *q = s;
+    if (p <= q || p >= q + n) return memcpy(d, s, n);
+    while (n--) p[n] = q[n];
+    return d;
+}
+void *memset(void *d, int c, size_t n)
+{
+    uint8_t *p = d;
+    if (n >= 4 && !((uintptr_t)p & 3u)) {
+        uint32_t v = (uint8_t)c * 0x01010101u;
+        uint32_t *pw = (uint32_t *)(void *)p;
+        for (; n >= 16; n -= 16, pw += 4) { pw[0] = v; pw[1] = v; pw[2] = v; pw[3] = v; }
+        for (; n >= 4; n -= 4) *pw++ = v;
+        p = (uint8_t *)pw;
+    }
+    while (n--) *p++ = (uint8_t)c;
+    return d;
+}

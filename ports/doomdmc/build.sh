@@ -20,6 +20,7 @@ if [ "${TUNED:-1}" = 1 ]; then
   : ${HOT:=r_inner cache r_segs qplat r_data r_plane p_mapdata trig r_things fastfix things rt fetch v_video p_sight r_main r_bsp rview r_frame qimg qlcd qsolid ovl_rv}
   : ${HOT_CF:=-O3}
   : ${COLD_CF:=-Os}
+  : ${CF_rtlib:=-O3 -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove}
   : ${CF_g_game:=-fno-lto}   # keep G_Ticker a real symbol: tools/rv32_fast.c counts game tics at its entry
   LDX="--lto-O2 -mllvm=-inline-threshold=${INLINE_T:-300} $LDX"
 fi
