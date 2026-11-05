@@ -132,3 +132,21 @@ make check                                                      # everything (ne
 * The display is the 32 x 24 kernel framebuffer, not the 320 x 240 game screen (that needs the 78 kB serial dump per frame).
 * T0 speed depends on your CPU; with `--fps 35` the display paces to 35 fps only when the emulator can keep up.
 * Walking in the game from the live terminal was exercised by tests with scheduled keys, not by hand in this write-up.
+
+## Screen-recording video
+
+`docs/assets/qwenos-live-boot.mp4` (1280x720, 20 fps, about 36 s) and `qwenos-live-boot.gif` (800 px, 10 fps) show the boot, the typed shell tour (`help`, `ls`, `cat /README`, `echo > /tmp/note`, `cat`), the typed `run /bin/doomd` and the first DOOM frames. Reproduce:
+
+```sh
+python3 -m venv /tmp/v && /tmp/v/bin/pip install pyte pillow     # outside the repo
+PATH=/opt/homebrew/opt/llvm/bin:$PATH make live-doom LIVE_ARGS=--help   # build once
+INSET_DIR=<dir with frame_01.png.. 320x240 clip frames> /tmp/v/bin/python tools/record_live_video.py all
+```
+
+`tools/record_live_video.py capture` types into `tools/qwenos_live.sh` in a pty (70 ms per key) and saves the timestamped byte stream; `render` replays it through `pyte` + Pillow and encodes with ffmpeg.
+What is honest in it:
+
+* Tier T0 (guest RV32IM on the host emulator `rv32_fast`) is in the title bar of every frame and on the intro and closing cards. The Qwen model ran none of it.
+* Terminal text and the 32 x 24 game picture are the real captured output. Idle gaps are capped at 0.9 s, and the DOOM frames are shown at about 1 s each: the emulator produced all 14 frames in 0.2 s (about 15 ms per frame, 1.8 M instructions each), so the slowdown (about 60x) is stated on screen.
+* The 320 x 240 inset is NOT from this session. It is from the separate scripted clip run (`CLIP_LEDGER.md` frames, walking), so it moves while the terminal picture (no keys pressed) stays still. It is labeled as such.
+* Closing card: on the real model a displayed frame costs about 18 minutes of GPU time (steady-state patched driver, median 1,679 instr/s, about 1.8 M instructions per frame), hence the 35 chunks. A footnote says that dividing the whole clip's chunk wall time (76,399 s) by 45 gives about 28 minutes, but that includes the slow early chunks on the unpatched driver, cold boot and mixed GPUs, so 18 minutes is the representative figure.
