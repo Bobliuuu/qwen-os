@@ -92,8 +92,8 @@ The same RISC-V program can be run by three executors that are meant to be **bit
 
 | Tier | What runs it | Speed | Used for | What it shows |
 |---|---|---|---|---|
-| T0 | `rv32_fast` (C) and our Python reference | millions of instr/s | planning, snapshots, benchmarks, the live demo | same hashes as the goldens and as T1 on the tested runs |
-| T1 | upstream `ref.Machine` | Python speed, far below T0 | oracle for every model token | the model's tokens match it, with no divergence on the runs listed |
+| T0 | `rv32_fast` (C) and our Python reference | tens of millions of instr/s (180 M instructions traced in about 4 s) | planning, snapshots, benchmarks, the live demo | same hashes as the goldens and as T1 on the tested runs |
+| T1 | upstream `ref.Machine` | about 140 k instr/s (measured in the model-driver runs) | oracle for every model token | the model's tokens match it, with no divergence on the runs listed |
 | T2 | the Qwen3.5-4B model on a GPU | about 3-4 thousand instr/s (A100) | the clip, the typed flow, the pixels | the circuit in the weights runs the program |
 
 **Caveats we know about.** The 3-way lockstep was run on the original build. The tuned build adds Zba (`sh1add/sh2add/sh3add`) to `rv32_fast.c`, and our Python reference `tools/rv32_qwenputer.py` has no Zba, so it cannot replay that build. The upstream oracle did accept the Zba instructions on the real-model runs with zero divergence, but the 3-way upstream lockstep test was not rerun for the newest tuned build ([`COMPILER_BENCH.md`](docs/research/COMPILER_BENCH.md)). More in [`HONESTY.md`](docs/research/HONESTY.md).
