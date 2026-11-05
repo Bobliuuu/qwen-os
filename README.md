@@ -84,16 +84,19 @@ Short answer: **very slow, and we are upfront about it.** 😅 Here it is in hum
 
 ### 🧪 Speed-up experiments (tonight's work)
 
-> ⚠️ **Host emulator numbers, not Qwen.** These count guest instructions and chip tokens on the host emulator (`rv32_fast`). They say how much less work the model would have to do; none of them has been run on the Qwen model yet. The branches are **not yet merged to main**.
+> ⚠️ **Host emulator numbers, not Qwen.** These count guest instructions and chip tokens on the host emulator (`rv32_fast`). They say how much less work the model would have to do; none of them has been run on the Qwen model yet (only Zba and the first chunks were confirmed on the real model). Compiler, hotloops, sim, bbtrace, combined and ktoken are **now merged to main**; presets, the B200 doc and the neural-executor research are still on their own branches.
+
+> ⚠️ **Which build made the 3 s clip?** The published 3 s clip was produced and model-verified with the **OLD build** (`TUNED=0` reproduces that build). The new default build (LTO + Zba + hot-loop + sim changes) is regress-verified on the host emulator, and Zba and the first chunks are confirmed on the real model, but the **full 3 s clip has NOT been re-verified on the model with the new build** (unless this note is later updated).
 
 | Experiment | Result (host emulator) | Branch | Status |
 |---|---|---|---|
-| 🛠️ Compiler: LTO + Zba, hot code `-O3`, cold code `-Os` | **-8.88 %** instructions, **-8.0 %** chip tokens | `perf/compiler` | on branch, not yet merged |
-| 🔁 Hot loop: fill magnified wall columns by texel runs | **-7.60 %** instructions, **-11.33 %** chip tokens (on top of the compiler row) | `perf/hotloops` | on branch, not yet merged |
-| ➕ Cumulative (both rows) | **-15.8 %** instructions, **-18.4 %** chip tokens vs the original | `perf/hotloops` | on branch, not yet merged |
-| 🧹 Sim: `memcpy`/`memset` and `FixedDiv` fast paths (exact, same output) | **-1.12 %** instructions, **-1.03 %** chip tokens | `perf/sim` | on branch, not yet merged |
+| 🛠️ Compiler: LTO + Zba, hot code `-O3`, cold code `-Os` | **-8.88 %** instructions, **-8.0 %** chip tokens | `perf/compiler` | merged to main |
+| 🔁 Hot loop: fill magnified wall columns by texel runs | **-7.60 %** instructions, **-11.33 %** chip tokens (on top of the compiler row) | `perf/hotloops` | merged to main |
+| ➕ Cumulative (both rows) | **-15.8 %** instructions, **-18.4 %** chip tokens vs the original | `perf/hotloops` | merged to main |
+| 🧹 Sim: `memcpy`/`memset` and `FixedDiv` fast paths (exact, same output) | **-1.12 %** instructions, **-1.03 %** chip tokens | `perf/sim` | merged to main |
+| 🧮 Combined (all of the above), 350-tic dry run | **150,159,521** instructions (**-16.83 %**) and **208,776,718** chip tokens (**-19.40 %**) vs the original; 3 s clip **72,277,308** vs **81,065,587** instructions (**-10.8 %**). Host emulator, see [`docs/research/COMBINED.md`](docs/research/COMBINED.md) | `perf/combined` | merged to main |
 | 🎚️ Visual presets `fast` / `lite` | **-40 %** / **-12 %** (at 15 fps) | `perf/presets` | on branch, not yet merged. A **visual tradeoff**, the picture looks worse |
-| 🔬 Basic-block trace: where the work is | hottest block `R_ColumnLoop` is 18.1 % of instructions; the top 100 blocks cover 65.7 %. Fusing blocks into the weights would save only **2-5 %** of tokens and needs a circuit rebuild, so we are not doing it | `perf/bbtrace` | on branch, not yet merged |
+| 🔬 Basic-block trace: where the work is | hottest block `R_ColumnLoop` is 18.1 % of instructions; the top 100 blocks cover 65.7 %. Fusing blocks into the weights would save only **2-5 %** of tokens and needs a circuit rebuild, so we are not doing it | `perf/bbtrace` | merged to main |
 | 🧾 Old vs combined **model** benchmark | <!-- PENDING:model-benchmark --> pending | | pending |
 
 ### 🖥️ Measured on the real model (Modal)
@@ -122,7 +125,7 @@ The GPU kernels (36 per token: attention head 50 %, FFN 32 %, apply 15 %) are th
 | 64 | 2,353 | 464 s | 1.52x |
 | 256 | 2,375 | 459 s | 1.54x |
 
-Branch `perf/ktoken`, not yet merged.
+Branch `perf/ktoken`, now merged to main.
 
 **E4: fixed costs.** A text token costs 45 ms warm, plus 0.21 s fixed per segment.
 

@@ -5,6 +5,9 @@
 # env: ENGINE_ROOT (default <repo>/.deps/engine)  WAD (use this freedoom1.wad instead of downloading)
 # Needs: git, python3, clang+ld.lld (riscv32), llvm-nm (brew install llvm; on macOS LLVM=/opt/homebrew/opt/llvm/bin), curl, unzip.
 # Pinned: DMC100-Doom 0cdc78e + engine-patches/dmc100-qwenos-merged.patch, Freedoom 0.13.0 (freedoom1.wad).
+# WARNING: this script builds E1.img with QFLAT_SLOTS=0. That image is NOT the one used for doomd_regress.sh
+# (the regress needs the QFLAT_SLOTS image, md5 6287a13cc1079b697e1885f8f6327e06 for the combined build). Do not use this
+# E1.img for regress checks; see docs/research/COMBINED.md.
 set -e
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 ENGINE_ROOT=${ENGINE_ROOT:-$REPO/.deps/engine}; DMC=$ENGINE_ROOT/DMC100-Doom
@@ -32,4 +35,5 @@ if [ ! -f "$IMG" ]; then
   QFLAT_SLOTS=0 python3 "$REPO/ports/doomdmc/mklayout.py" "$REPO/build/doomdmc-layout/doomd.elf" "$REPO/build/layout.json"
   IWAD="$WAD" "$REPO/ports/doomdmc/mkimage.sh" "$DMC" "$REPO/build/layout.json" "$DMC/build/sw/nor"
 fi
+echo "WARNING: E1.img above is built with QFLAT_SLOTS=0; do not use it for tools/doomd_regress.sh (see docs/research/COMBINED.md)" >&2
 echo "engine: $DMC"; echo "wad:    $WAD"; echo "disk:   $IMG"
