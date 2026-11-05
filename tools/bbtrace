@@ -1,0 +1,16 @@
+#!/bin/bash
+# tools/bbtrace: dynamic basic-block tracer (host emulator only; no model, no GPU).
+# Builds build/bbtrace = tools/rv32_fast.c compiled with -DBBTRACE (see tools/bbtrace.h) and runs it with the
+# same arguments as rv32_fast:   tools/bbtrace ELF DISK kbox_hex dbox_hex OUT.bin max_instr
+# env: BBOUT=dir (default build/bbtrace.out)  SYMELF=doomd.elf,kernel.elf (needed for per-tic stats; first file holds G_Ticker)
+# Then: python3 tools/bbtrace_report.py --elf ELF --dir $BBOUT --out docs/research/BBTRACE.md
+# One-shot E1M1 run: tools/bbtrace_e1m1.sh
+set -e
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+BIN=$ROOT/build/bbtrace
+mkdir -p "$ROOT/build"
+if [ ! -x "$BIN" ] || [ "$ROOT/tools/rv32_fast.c" -nt "$BIN" ] || [ "$ROOT/tools/bbtrace.h" -nt "$BIN" ]; then
+  cc -O2 -DBBTRACE -I"$ROOT/tools" -o "$BIN" "$ROOT/tools/rv32_fast.c"
+fi
+export BBOUT=${BBOUT:-$ROOT/build/bbtrace.out}
+exec "$BIN" "$@"

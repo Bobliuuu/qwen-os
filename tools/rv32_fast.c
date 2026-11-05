@@ -19,6 +19,9 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/ioctl.h>
+#ifdef BBTRACE
+#include "bbtrace.h"
+#endif
 static uint8_t mem[0x80000];static uint32_t syspc,sys_ra,sys_n;static uint64_t sys_st,sys_cnt[64],sys_ins[64];
 #define NSR 256
 static uint32_t sr_ra[NSR],sr_n[NSR];static uint64_t sr_c[NSR],sr_i[NSR];static int nsr;
@@ -196,6 +199,9 @@ int main(int argc,char**argv){
   reqprof=getenv("REQPROF")!=0;if(getenv("REQLOG"))reqlog=fopen(getenv("REQLOG"),"wb");
   if(getenv("CRXPLAN")){FILE*cf=fopen(getenv("CRXPLAN"),"rb");if(!cf){perror("CRXPLAN");return 2;}fseek(cf,0,SEEK_END);long cn=ftell(cf);fseek(cf,0,SEEK_SET);crxp=malloc(cn);if(fread(crxp,1,cn,cf)!=(size_t)cn)return 2;fclose(cf);crxn=cn/4;
     if(getenv("CRXBASE"))crxbase=strtoul(getenv("CRXBASE"),0,16);crx_fill(0,0);}
+#ifdef BBTRACE
+  bb_init();
+#endif
   uint32_t last_req=0;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
   uint64_t last_frame_step=0;
   while(steps<maxi){
@@ -210,11 +216,18 @@ int main(int argc,char**argv){
       else{fprintf(stderr,"IDLE: guest waits for a key at step %llu, nothing schedulable\n",(unsigned long long)steps);exitcode=-2;goto done;}}
     if(nw)for(int q=0;q<nw;q++)if(pc==wpc[q]&&!whit[q]){whit[q]=1;wstep[q]=steps;}
     if(pc==lvlpc&&!lvlseen){lvlseen=1;lvlstep=steps;lvlticidx=nticks;}
-    if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticstep[nticks++]=steps;while(phase<nph&&nticks>phb[phase])phase++;}
+    if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticstep[nticks++]=steps;
+#ifdef BBTRACE
+      bb_tic(nticks-1);
+#endif
+      while(phase<nph&&nticks>phb[phase])phase++;}
     if(syspc){if(pc==syspc&&!sys_ra){sys_ra=reg[1];sys_n=reg[10]&63;sys_st=steps;}
       else if(sys_ra&&pc==sys_ra){uint64_t d=steps-sys_st;sys_cnt[sys_n]++;sys_ins[sys_n]+=d;int q;for(q=0;q<nsr;q++)if(sr_ra[q]==sys_ra&&sr_n[q]==sys_n)break;
         if(q==nsr&&nsr<NSR){sr_ra[q]=sys_ra;sr_n[q]=sys_n;nsr++;}if(q<NSR){sr_c[q]++;sr_i[q]+=d;}sys_ra=0;}}
     if(prof)hist[phase][(pc-0x40000)>>2]++;
+#ifdef BBTRACE
+    bb_pre(pc);
+#endif
     uint32_t w=rd32(pc);
     if((w&3)!=3)die("rvc",pc,steps);
     uint32_t op=w&127,rd=(w>>7)&31,f3=(w>>12)&7,rs1=(w>>15)&31,rs2=(w>>20)&31,f7=w>>25;
@@ -230,10 +243,16 @@ int main(int argc,char**argv){
       if(c)np=pc+im;break;}
     case 0x03:{uint32_t ad=a+ii;int n=(f3&3)==0?1:(f3&3)==1?2:4;
       if(f3>5||f3==3)die("ld f3",pc,steps);
+#ifdef BBTRACE
+      bb_mem(pc,0,ad,n,rs1);
+#endif
       if(!((ad+n<=0x8000)||(ad>=0x20000&&ad+n<=0x40000)))die("load outside data memory",ad,steps);
       if(n==1)v=mem[ad];else if(n==2){uint16_t h;memcpy(&h,mem+ad,2);v=h;}else v=rd32(ad);
       if(f3==0)v=(uint32_t)(int8_t)v;if(f3==1)v=(uint32_t)(int16_t)v;break;}
     case 0x23:{uint32_t ad=a+is;int n=f3==0?1:f3==1?2:4;if(f3>2)die("st f3",pc,steps);
+#ifdef BBTRACE
+      bb_mem(pc,1,ad,n,rs1);
+#endif
       if(ad+n>0x8000)die("store outside RAM",ad,steps);
       if(n==1)mem[ad]=b;else if(n==2){uint16_t h=b;memcpy(mem+ad,&h,2);}else wr32(ad,b);break;}
     case 0x13:switch(f3){case 0:v=a+ii;break;case 2:v=S(a)<ii;break;case 3:v=a<(uint32_t)ii;break;case 4:v=a^ii;break;case 6:v=a|ii;break;case 7:v=a&ii;break;
@@ -273,7 +292,14 @@ int main(int argc,char**argv){
     default:die("opcode",w,steps);
     }
     if(rd&&op!=0x63&&op!=0x23&&op!=0x0f&&op!=0x73)reg[rd]=v;
-    reg[0]=0;pc=np;steps++;
+    reg[0]=0;
+#ifdef BBTRACE
+    uint32_t pc_old=pc;
+#endif
+    pc=np;steps++;
+#ifdef BBTRACE
+    bb_post(op,pc_old,np);
+#endif
     uint32_t seq=rd32(dbox);
     if(disklat){if(seq&&seq!=last_req&&seq!=pend_seq){pend_seq=seq;pend_due=steps+disklat;}
       if(!(pend_seq&&steps>=pend_due)){goto nodisk;} seq=pend_seq;pend_seq=0;if(rd32(dbox)!=seq){goto nodisk;}}
@@ -294,6 +320,9 @@ done:
   if(syspc){qsort(syms,nsyms,sizeof *syms,symcmp);uint64_t T=0;for(int n=0;n<64;n++)if(sys_cnt[n]){T+=sys_ins[n];fprintf(stderr,"SYS n=%2d calls=%9llu instr=%11llu avg=%.1f\n",n,(unsigned long long)sys_cnt[n],(unsigned long long)sys_ins[n],(double)sys_ins[n]/sys_cnt[n]);}
     fprintf(stderr,"SYS total instr in syscalls=%llu of %llu\n",(unsigned long long)T,(unsigned long long)steps);
     for(int q=0;q<nsr;q++){uint32_t a=sr_ra[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"SYSSITE n=%2u calls=%9llu instr=%11llu %s+%x\n",sr_n[q],(unsigned long long)sr_c[q],(unsigned long long)sr_i[q],k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
+#ifdef BBTRACE
+  bb_finish(steps,ticstep,nticks);
+#endif
   if(prof)prof_report();tic_report();
   for(int q=0;q<nw;q++)fprintf(stderr,"WATCH %s %s %llu\n",wn[q],whit[q]?"at":"never",(unsigned long long)wstep[q]);
   fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);
