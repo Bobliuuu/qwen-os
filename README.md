@@ -127,6 +127,10 @@ The CPU has no keyboard hardware, no interrupts and no privilege levels, so the 
 - 🎮 **After `run /bin/doomd`,** DOOM reads the same ring once per game tic and maps each byte to its own input. The engine was built for a handheld with physical buttons, so `w`, `s`, `a`, `d`, space or `f`, `e` and Esc or `m` become presses of its forward, back, turn, fire, use and menu buttons. A keyboard byte arrives once but a button must be held, so each key counts as a press held for 120 ms of virtual time (about 4 tics). The terminal viewer turns the arrow keys into `w`, `s`, `a`, `d`.
 - 🎞️ **The 3-second clip skipped all of this.** Its input was a compiled-in script (`q_script`), not the key ring.
 
+**Before and now.** The 3-second clip never used the key ring: its input was a script compiled into the game, and the typed boot-to-DOOM flow had not been run on the model. Now the typed flow has:
+
+<p align="center"><img src="docs/assets/keyboard-before-after.gif" alt="Animated before and now: scripted input (q_script) for the 3-second clip versus typed keys through the key ring, help, ls and run /bin/doomd, verified on the model" width="100%"><br><sub>Animated SVG version: <a href="docs/assets/keyboard-before-after.svg">docs/assets/keyboard-before-after.svg</a></sub></p>
+
 In a real OS the same job is done by a keyboard interrupt, a driver that translates scancodes, a kernel ring buffer, a TTY layer, and a scheduler that wakes the sleeping program. Here the host stands in for the keyboard hardware, polling and parking stand in for interrupts and sleeping, and there is no scancode layer.
 
 ## 💡 What is this?
