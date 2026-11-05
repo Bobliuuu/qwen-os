@@ -4,7 +4,7 @@
 
 # 🎮 QwenOS
 
-**A tiny operating system that boots, opens a shell, and runs real DOOM, on a CPU that lives inside a language model.** 🧠💾
+**A tiny operating system that boots, opens a shell, and runs real DOOM on [Qwenputer](https://github.com/divagr18/qwenputer): a 32-bit RISC-V CPU compiled into the weights of Qwen3.5-4B, with its RAM held in Gated DeltaNet state.** 🧠💾
 
 <!-- V2:HERO -->
 <img src="docs/assets/qwenos-doom-3s.gif" alt="3-second E1M1 clip (v1): 45 real DOOM frames whose instruction trace was verified through the Qwen model" width="480">
@@ -247,7 +247,7 @@ What "verified" means here: the model executed the instruction trace in lockstep
 <details>
 <summary><b>🤔 What is this, in one sentence?</b></summary>
 
-A real DOOM engine running on a tiny OS, on a CPU whose every instruction is carried out by a language model generating tokens. A computer made of attention layers, playing DOOM, very slowly.
+A real DOOM engine running on a tiny OS, on [Qwenputer](https://github.com/divagr18/qwenputer): an RV32IM CPU compiled (not trained) into the weights of Qwen3.5-4B. Every guest instruction is executed by the model's layers, one token at a time, and the 32 KiB of RAM lives in its Gated DeltaNet state (no KV cache). A computer made of transformer layers, playing DOOM, very slowly.
 </details>
 
 <details>
