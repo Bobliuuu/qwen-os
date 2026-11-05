@@ -135,8 +135,9 @@ make check                                                      # everything (ne
 
 ## Screen-recording video
 
-`docs/assets/qwenos-live-boot.mp4` (1280x720, 20 fps, about 67 s) and `qwenos-live-boot.gif` (800 px, 10 fps) are built from these segments, in order:
+`docs/assets/qwenos-live-boot.mp4` (1280x720, 20 fps, about 73 s) and `qwenos-live-boot.gif` (800 px, 10 fps) are built from these segments, in order:
 
+0. Cold-open hook (6 s): the published 3 s E1M1 clip (45 frames, 15 fps, native 320x240 frames scaled nearest-neighbour), played twice, with the caption "Real DOOM frames. Every instruction behind these 45 frames was checked on the Qwen model." It says nothing about the model emitting these pixels.
 1. Intro card (4.5 s): tier T0, not the model.
 2. Explainer cards "What this is" and "What you are watching" (7 s each): Qwenputer compiles RV32IM into the weights of Qwen3.5-4B, RAM is Gated DeltaNet state, about 1.4 tokens per guest instruction; T0 is the host emulator, T1/T2 are upstream's reference CPU and the real model, identical on everything tested.
 3. Real captured terminal: boot, typed shell tour (`help`, `ls`, `cat /README`, `echo > /tmp/note`, `cat`), typed `run /bin/doomd`, then the DOOM frames with the instruction counter panel.
