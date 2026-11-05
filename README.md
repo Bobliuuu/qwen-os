@@ -2,7 +2,7 @@
 
 <img src="docs/assets/hero-terminal.svg" alt="QwenOS boots, shows a prompt and types run /bin/doomd" width="100%">
 
-<img src="docs/assets/doom-e1m1.gif" alt="Real E1M1 frames from the QwenOS emulator" width="480">
+<img src="docs/assets/qwenos-doom-3s.gif" alt="3-second E1M1 clip: 45 frames, all verified through the Qwen model" width="480">
 
 <sub>Real E1M1 frames from the emulator. The model-verified part is the instruction trace; see below.</sub>
 
