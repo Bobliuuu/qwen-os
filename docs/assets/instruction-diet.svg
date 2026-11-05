@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" width="900" height="420" role="img" aria-labelledby="t"><title id="t">Instructions per 350 DOOM tics: down 16.8%</title>
+<rect width="900" height="420" rx="16" fill="#0d1117" stroke="#30363d"/>
+<g font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<text x="450" y="40" text-anchor="middle" font-size="22" font-weight="700" fill="#f1f3fa">📉 Instructions per 350 DOOM tics (E1M1)</text>
+<text x="450" y="62" text-anchor="middle" font-size="13" fill="#9aa3bb">host-emulator counts, picture bit-identical to the original</text>
+<text x="238" y="126" text-anchor="end" font-size="13" fill="#c9d1e6">Original build (-O2)</text>
+<rect x="250" y="100" width="0" height="38" rx="8" fill="#8b93a7"><animate attributeName="width" values="0;0;590.0;590.0;0" keyTimes="0;0.0857;0.2286;0.93;1" dur="7.0s" repeatCount="indefinite"/></rect>
+<text x="260" y="125" font-size="14" font-weight="700" fill="#10131c" opacity="0">180.6 M<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.2143;0.2429;0.93;1" dur="7.0s" repeatCount="indefinite"/></text>
+<text x="250" y="158" font-size="12.5" font-weight="700" fill="#8b93a7" opacity="0">baseline<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.2143;0.2429;0.93;1" dur="7.0s" repeatCount="indefinite"/></text>
+<text x="238" y="198" text-anchor="end" font-size="13" fill="#c9d1e6">+ LTO, Zba, hot -O3</text>
+<rect x="250" y="172" width="0" height="38" rx="8" fill="#5b8def"><animate attributeName="width" values="0;0;537.6;537.6;0" keyTimes="0;0.2143;0.3571;0.93;1" dur="7.0s" repeatCount="indefinite"/></rect>
+<text x="260" y="197" font-size="14" font-weight="700" fill="#10131c" opacity="0">164.5 M<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.3429;0.3714;0.93;1" dur="7.0s" repeatCount="indefinite"/></text>
+<text x="250" y="230" font-size="12.5" font-weight="700" fill="#5b8def" opacity="0">-8.9% instr · -8.0% tokens<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.3429;0.3714;0.93;1" dur="7.0s" repeatCount="indefinite"/></text>
+<text x="238" y="270" text-anchor="end" font-size="13" fill="#c9d1e6">+ wall columns in word runs</text>
+<rect x="250" y="244" width="0" height="38" rx="8" fill="#a77bff"><animate attributeName="width" values="0;0;496.7;496.7;0" keyTimes="0;0.3429;0.4857;0.93;1" dur="7.0s" repeatCount="indefinite"/></rect>
+<text x="260" y="269" font-size="14" font-weight="700" fill="#10131c" opacity="0">152.0 M<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.4714;0.5000;0.93;1" dur="7.0s" repeatCount="indefinite"/></text>
+<text x="250" y="302" font-size="12.5" font-weight="700" fill="#a77bff" opacity="0">-15.8% instr · -18.4% tokens<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.4714;0.5000;0.93;1" dur="7.0s" repeatCount="indefinite"/></text>
+<text x="238" y="342" text-anchor="end" font-size="13" fill="#c9d1e6">+ memcpy, FixedDiv (all)</text>
+<rect x="250" y="316" width="0" height="38" rx="8" fill="#3ecf8e"><animate attributeName="width" values="0;0;490.7;490.7;0" keyTimes="0;0.4714;0.6143;0.93;1" dur="7.0s" repeatCount="indefinite"/></rect>
+<text x="260" y="341" font-size="14" font-weight="700" fill="#10131c" opacity="0">150.2 M<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.6000;0.6286;0.93;1" dur="7.0s" repeatCount="indefinite"/></text>
+<text x="250" y="374" font-size="12.5" font-weight="700" fill="#3ecf8e" opacity="0">-16.8% instr · -19.4% tokens<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.6000;0.6286;0.93;1" dur="7.0s" repeatCount="indefinite"/></text>
+<text x="450" y="396" text-anchor="middle" font-size="12" fill="#7f88a3">Chip tokens fell more than instructions (259.0 M to 208.8 M): word stores cost 1 token, byte stores cost 4.</text>
+</g></svg>

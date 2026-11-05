@@ -154,6 +154,27 @@ make live-doom LIVE_ARGS=--auto   # same, but it types a shell tour and `run /bi
 Other handy targets: `CHUNKROM=1 make demo-live` (typed-flow image) and `tools/doomd_regress.sh` (frame and state goldens).
 
 
+## 📉 Fewer instructions: down 16.8%
+
+<p align="center"><img src="docs/assets/instruction-diet.gif" alt="Animated bars: instructions per 350 DOOM tics fall from 180.6 M to 150.2 M, down 16.8 percent" width="100%"><br><sub>Animated SVG version: <a href="docs/assets/instruction-diet.svg">docs/assets/instruction-diet.svg</a></sub></p>
+
+Every guest instruction costs the model about 1.4 tokens, so fewer instructions means less waiting. Over 350 tics of E1M1 (same picture, hashes identical to the goldens), these are **host-emulator counts**:
+
+| Step | Instructions | Chip tokens | vs the original build |
+|---|---|---|---|
+| Original build (-O2) | 180.55 M | 259.04 M | baseline |
+| + LTO, Zba, hot code at -O3 | 164.51 M | 238.22 M | **-8.9% instructions**, -8.0% tokens |
+| + wall columns drawn in word runs | 152.01 M | 211.24 M | **-15.8% instructions**, -18.4% tokens |
+| + faster `memcpy`/`memset` and `FixedDiv` (all combined) | 150.16 M | 208.78 M | **-16.8% instructions**, -19.4% tokens |
+| The 3-second clip (45 frames): published build vs combined build | 81.07 M | 72.28 M | **-10.8% instructions** |
+
+- 🧮 **Each change on its own** (vs the -O2-tuned build): the compiler step is -8.9%, the wall-column runs are -7.6%, and the memory and divide helpers are -1.1%. They do not add up exactly; the combined build is -8.7% vs the compiler step alone.
+- 🪙 **Tokens fall more than instructions** because a word store costs 1 chip token and a byte store costs 4.
+- ✅ **What did not help:** `-Os` (+2.1% instructions), `-Oz` (+11.5%), `-mno-relax` (+7.5%), plain `-O3` (-0.5%), and function reordering (no change). Details in [`docs/research/COMPILER_BENCH.md`](docs/research/COMPILER_BENCH.md), [`HOTLOOPS.md`](docs/research/HOTLOOPS.md) and [`COMBINED.md`](docs/research/COMBINED.md).
+- 💽 **Chunk ROM** removes host round trips, not instructions: the engine used to ask the host for each disk block (**165,054 host-served disk requests**, each pausing the guest), and now reads from a pre-filled data-ROM window (**4 requests**). It costs some instructions (about 180.5 M becomes 199.7 M on the original build), which is why the model run uses it anyway: the guest can no longer stop and wait for the host mid-run.
+- 🎚️ **Visual tradeoffs, not in the default build:** the `lite` preset cuts another 12.2% of instructions and `fast` cuts 40.2%, at the same 15 fps, by cropping, dropping the status bar and halving the columns (see [`PRESETS.md`](docs/research/PRESETS.md)).
+- ⚠️ These are instruction counts on the host emulator. The model-side speed-ups (block verification, fused kernels, 2.14x per chip token) are in the speed section below.
+
 ## 🐢 How fast is it, really?
 
 Short answer: **very slow, and we are upfront about it.** it needed about 18 minutes per frame before; the current stack projects to about 8 to 10. 😅 Here it is in human units. All of these are *derived from the clip ledger* ([`docs/CLIP_LEDGER.md`](docs/CLIP_LEDGER.md)), not separately measured.
