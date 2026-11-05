@@ -31,6 +31,7 @@ static uint32_t tr_pc[64],tr_sp[64],tr_to[64];static unsigned trn;
 static int ps,pskip,plen,pn;/* dump-packet parser state so pixel bytes are never taken for markers */
 /* profiler: PROF=1 PHASES=f1,f2,.. (frame-marker boundaries); self-instruction count per symbol per phase */
 #define NPH 8
+static uint8_t*pmask; /* PROFMASK=file: tic indices (one per line) whose instructions are profiled (e.g. sim-only tics) */
 static uint32_t *hist[NPH];static int prof,phase,nph,phb[NPH];
 struct sym{uint32_t a,sz;char n[56];};static struct sym*syms;static int nsyms;
 static int symcmp(const void*x,const void*y){uint32_t a=((struct sym*)x)->a,b=((struct sym*)y)->a;return a<b?-1:a>b;}
@@ -187,6 +188,7 @@ int main(int argc,char**argv){
    if(se&&(w||!parkpc)){char*t=strtok(strdup(se),",");while(t){uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);load_syms(el2);}t=strtok(0,",");}
      char*wl=strdup(w?w:"");for(char*t2=strtok(wl,",");t2&&nw<16;t2=strtok(0,",")){for(int q=0;q<nsyms;q++)if(!strcmp(syms[q].n,t2)){wn[nw]=strdup(t2);wpc[nw++]=syms[q].a;break;}}
      if(!parkpc)for(int q=0;q<nsyms;q++)if(!strcmp(syms[q].n,"qos_key_park"))parkpc=syms[q].a;}}
+  if(getenv("PROFMASK")){pmask=calloc(65536,1);FILE*pf=fopen(getenv("PROFMASK"),"r");int ti;while(pf&&fscanf(pf,"%d",&ti)==1)if(ti>=0&&ti<65536)pmask[ti]=1;if(pf)fclose(pf);}
   if(getenv("PROF")||getenv("REQPROF")){prof=getenv("PROF")!=0;{char*se=getenv("SYMELF");if(se){char*t=strtok(strdup(se),",");while(t){uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);load_syms(el2);}t=strtok(0,",");}}else load_syms(elf);}for(int i=0;i<NPH;i++)hist[i]=calloc(0x10000,4);
     char*ph=getenv("PHASES");if(ph){char*t=strtok(strdup(ph),",");while(t&&nph<NPH-1){phb[nph++]=atoi(t);t=strtok(0,",");}}}
   {const char*ts=getenv("TICSYM");if(!ts)ts="G_Ticker";const char*se=getenv("SYMELF");if(se){char*t=strtok(strdup(se),",");uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);
@@ -225,7 +227,7 @@ int main(int argc,char**argv){
     if(syspc){if(pc==syspc&&!sys_ra){sys_ra=reg[1];sys_n=reg[10]&63;sys_st=steps;}
       else if(sys_ra&&pc==sys_ra){uint64_t d=steps-sys_st;sys_cnt[sys_n]++;sys_ins[sys_n]+=d;int q;for(q=0;q<nsr;q++)if(sr_ra[q]==sys_ra&&sr_n[q]==sys_n)break;
         if(q==nsr&&nsr<NSR){sr_ra[q]=sys_ra;sr_n[q]=sys_n;nsr++;}if(q<NSR){sr_c[q]++;sr_i[q]+=d;}sys_ra=0;}}
-    if(prof)hist[phase][(pc-0x40000)>>2]++;
+    if(prof&&(!pmask||(nticks>0&&nticks<=65536&&pmask[nticks-1])))hist[phase][(pc-0x40000)>>2]++;
 #ifdef BBTRACE
     bb_pre(pc);
 #endif
