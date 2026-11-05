@@ -23,7 +23,9 @@ VOLS = {"/ckpt": ckpt_vol, "/bundle": bundle_vol, "/results": res_vol, "/snaps":
 TYPED = r"help\nls\nrun /bin/doomd\n"
 COMMON = ["--target", "boot-frame", "--snapshot-marker", "0", "--frames", "1", "--rom-plan", "build/live-crx-plan.json",
           "--sym-elf", "build/qwenos-live-e1m1.elf", "--type", TYPED, "--split-steps", "1112000,2224000"]
-CHUNKS = {"t0": "1:25", "t1": "25:26", "t2": "26:27"}   # segs 1-24 (boot, 23 typed keys, first 1.24M instr of doomd init), then 2 more pieces to the marker
+CHUNKS = {"t0": "1:25", "t1": "25:26", "t2": "26:27"}
+if os.environ.get("QOS_FRAMES", "1") == "3":   # frames 1 and 2 on top: ONE segment (marker 1 -> marker 3, 4.9M instr; no fresh pc to split at inside a frame)
+    CHUNKS = {"f3": "27:28"}   # segs 1-24 (boot, 23 typed keys, first 1.24M instr of doomd init), then 2 more pieces to the marker
 
 
 @app.function(gpu="A100-40GB", volumes=VOLS, timeout=3 * 3600, memory=32768,
