@@ -1,0 +1,53 @@
+{
+  "k_graph": 64,
+  "gpu_mem_peak_mb": 18859,
+  "kgraph_stats": {
+    "pipelined": 0,
+    "blocks": 22816,
+    "block_tokens": 1460224,
+    "slow_blocks": 0,
+    "single_tokens": 39
+  },
+  "gen_chip_seconds": 0.0,
+  "gen_text_seconds": 0.0,
+  "host": "modal",
+  "model_seconds": 429.9,
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 3396.5,
+  "instr_per_s": 2398.4,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "25:26",
+  "wall_seconds": 430.1,
+  "snapshot_marker": 0,
+  "frames": 1,
+  "segments": 1,
+  "total_segments": 25,
+  "first_segment": 25,
+  "instructions": 1031152,
+  "planned_chip_tokens": 1460252,
+  "tok_per_instr": 1.4161,
+  "model_chip_tokens": 1460263,
+  "model_text_tokens": 29,
+  "console_bytes": 0,
+  "extra_full_text_tokens_for_echo": 0,
+  "est_chip_seconds": 456.3,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 0,
+  "out": "/results/typed1/t1/console.bin",
+  "segments_by_reason": {
+    "isplit": 1
+  },
+  "rom_plan": "build/live-crx-plan.json",
+  "segment_detail": [
+    [
+      25,
+      true,
+      0,
+      1031152,
+      1460252
+    ]
+  ]
+}
