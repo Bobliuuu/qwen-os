@@ -11,11 +11,16 @@ N=${1:?name}; F=${2:-}; D=${3:-}
 #   full      160 columns x 200 rows, as the perf build, only frame skipping
 #   balanced  full + rows 40..199 only (ceiling letterbox) + dump sends every 2nd row
 #   max       80 columns (x4 on the host) + rows 40..199 + dump rows halved + frame skipping
+#   lite      160 columns, rows 40..199 only, no status bar, no light diminishing (15 fps)
+#   fast      lite with 80 columns (x2 on the host: max + no status bar + no light diminishing) (15 fps)
 SK="-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35"
 case "$F" in
   full)     F="$SK";;
   balanced) F="$SK -DQ_VTOP=40 -DQ_VBOT=200 -DQ_DUMP_ROW2";;
   max)      F="$SK -DQ_DETAIL=2 -DQ_XTVASH=2 -DQ_VTOP=40 -DQ_VBOT=200 -DQ_DUMP_ROW2";;
+  # TRADEOFF presets (visual quality is reduced, the game simulation still runs every tic; see docs/research/PRESETS.md)
+  fast)     F="$SK -DQ_DETAIL=2 -DQ_XTVASH=2 -DQ_VTOP=40 -DQ_VBOT=200 -DQ_NOBAR -DQ_FIXEDLIGHT=0 -DQ_DUMP_ROW2";;
+  lite)     F="$SK -DQ_VTOP=40 -DQ_VBOT=200 -DQ_NOBAR -DQ_FIXEDLIGHT=0 -DQ_DUMP_ROW2";;
 esac
 T=$N; [ -n "$D" ] && T=$N-dump
 OUT=$REPO/build/lr-$T
