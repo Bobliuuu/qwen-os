@@ -20,13 +20,57 @@
 
 ---
 
+## 🎥 Watch it boot, then play it
+
+```sh
+make live-doom                    # fetches engine + Freedoom on first run, boots QwenOS, shell prompt, then type `doom`
+make live-doom LIVE_ARGS=--auto   # same, with a typed shell tour
+```
+
+<p align="center"><img src="docs/assets/qwenos-live-boot.gif" alt="Recorded live terminal: QwenOS boots, a shell prompt, then DOOM E1M1" width="640"><br><a href="docs/assets/qwenos-live-boot.mp4">MP4</a> · <a href="docs/LIVE_DEMO.md">docs/LIVE_DEMO.md</a></p>
+
+**Honest label: this is tier T0, the host emulator** (`rv32_fast` on your CPU), not the Qwen model. The terminal banner says `tier T0`. On the model a frame took about 18 minutes in v1 and projects to 8-10 with the v2 speed-ups (see the speed section); the recording is the emulator running the same guest code (kernel, shell, DOOM). Guide, tiers and the model path (T2): [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md).
+
+
+---
+
+## 🧩 How it works in one picture
+
+<p align="center"><img src="docs/assets/stack.svg" alt="Animated stack: you, shell, doomd, DMC100 engine, kernel syscalls, Qwenputer circuit inside Qwen3.5" width="100%"></p>
+
+Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one animation per idea.
+
+## 🖼️ Where the pixels come from
+
+<p align="center"><img src="docs/assets/pixels-arch.svg" alt="Animated pipeline: DOOM engine, LCD dump routine, Qwen chip emitting BYTE tokens, lockstep oracle, host writing the PNG" width="100%"></p>
+
+1. 👾 The **real DOOM engine** (guest RISC-V code in ROM) draws a frame into the guest framebuffer.
+2. 📤 A **guest dump routine** (same ROM) writes the frame to the console: about **32,100 bytes** per frame, rows 0-199. The status-bar rows (208-239) are not in a frame's dump.
+3. 🧠 The **Qwen3.5-4B chip** executes every one of those instructions inside its weights, and each pixel byte comes out as a **BYTE token**.
+4. ✅ The **lockstep oracle** compares every token with a reference CPU. One wrong token would be a divergence. We count zero.
+5. 🖥️ The **host** only collects the bytes, applies the palette and writes the PNG.
+
+**What is a BYTE token?** The model normally generates "chip tokens" that carry out an instruction. When the guest writes a byte to the console, the model emits that byte itself as a special BYTE token. So a pixel is literally generated text.
+
+**Why were the pixels not model-decoded in v1?** Dumping a frame is extra work for the model (about 32,100 more bytes per frame), so for the first 3 s clip we had the emulator read the frame out of guest memory and spent the model's time verifying the instruction trace. The research notes list an early serial pixel dump (78 k tokens per frame) among the dead ends for the same reason. v2 pays that cost, which is why the model-decoded frames arrive over time.
+
+### 🆚 v1 to v2: what we fixed
+
+- v1 verified every instruction of the clip, but **the emulator read the pixels out of memory**. v2: the **model emits the pixels**, each byte lockstep-checked.
+- v1 never ran the typed flow on the model. v2: `boot -> shell -> help/ls -> run /bin/doomd -> first frame` is **model-verified** (3 Modal A100 chunks, 3,335,072 instructions, 26 segments, zero divergence; keys arrive at `qos_key_park` via the key ring).
+- v1 ran at about 1.7 k instr/s. v2 is about **2x faster on the model** (block verification plus fused kernels, bit-exact, see below).
+- v1 used the older build. The tuned build executes fewer instructions (-10.8 % on the clip, host emulator). The tuned build has **not** been re-verified over the whole clip.
+
+
+---
+
 > ### 🧾 TL;DR
 > - 🧠 **What:** a 32-bit RISC-V CPU ([Qwenputer](https://github.com/divagr18/qwenputer)) is built into the layers of Qwen3.5. We wrote a small OS for it and ran the real DOOM engine on top.
 > - 🎨 **v2, the story now:** the model **emits the pixels itself**. The guest dumps each frame as about 32,100 console bytes, every byte comes out of the model as a BYTE token, and every token is checked against a lockstep oracle. The typed flow `boot -> shell -> help/ls -> run /bin/doomd -> first frame` is also model-verified.
 > - 🎯 **Progress:** see the progress line just below. We only count a frame once its model-emitted pixels match the emulator byte for byte.
 > - 🐌 **Catch:** slow. One displayed frame took about **18 minutes** of GPU time in v1 (patched driver). With the v2 speed-ups we project about **8 to 10 minutes** per frame (arithmetic, not a measurement). Real time is 0.067 s per frame, so we are still thousands of times too slow.
 > - 🔍 **Honest bit:** keys are scripted (or come through the key ring), the clock is virtual, the host serves the disk and collects the bytes into PNGs. Details below.
-> - 🕹️ **Play it:** `make live-doom` on the host emulator (not the model). See [boot it yourself](#-boot-it-yourself).
+> - 🕹️ **Play it:** `make live-doom` on the host emulator (not the model). See [boot it yourself](#-watch-it-boot-then-play-it).
 
 <!-- V2:PROGRESS -->
 🎯 **Model-decoded frames: 0 of 45** (byte-exact vs the emulator). In flight: frames 12 to 19, 8 frames running or launching. Not yet counted until verified. <i>Last updated 22:12.</i>
@@ -58,33 +102,6 @@ make live-doom LIVE_ARGS=--auto   # same, but it types a shell tour and `run /bi
 `demo-elf` and the live terminal need the engine and a WAD, see [get the engine](#-get-the-engine-and-freedoom). In the live terminal, arrow keys (or w/s/a/d) move, f or space fires, e uses, and `Ctrl-]` quits.
 Other handy targets: `CHUNKROM=1 make demo-live` (typed-flow image) and `tools/doomd_regress.sh` (frame and state goldens).
 
-
-## 🧩 How it works in one picture
-
-<p align="center"><img src="docs/assets/stack.svg" alt="Animated stack: you, shell, doomd, DMC100 engine, kernel syscalls, Qwenputer circuit inside Qwen3.5" width="100%"></p>
-
-Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one animation per idea.
-
-## 🖼️ Where the pixels come from
-
-<p align="center"><img src="docs/assets/pixels-arch.svg" alt="Animated pipeline: DOOM engine, LCD dump routine, Qwen chip emitting BYTE tokens, lockstep oracle, host writing the PNG" width="100%"></p>
-
-1. 👾 The **real DOOM engine** (guest RISC-V code in ROM) draws a frame into the guest framebuffer.
-2. 📤 A **guest dump routine** (same ROM) writes the frame to the console: about **32,100 bytes** per frame, rows 0-199. The status-bar rows (208-239) are not in a frame's dump.
-3. 🧠 The **Qwen3.5-4B chip** executes every one of those instructions inside its weights, and each pixel byte comes out as a **BYTE token**.
-4. ✅ The **lockstep oracle** compares every token with a reference CPU. One wrong token would be a divergence. We count zero.
-5. 🖥️ The **host** only collects the bytes, applies the palette and writes the PNG.
-
-**What is a BYTE token?** The model normally generates "chip tokens" that carry out an instruction. When the guest writes a byte to the console, the model emits that byte itself as a special BYTE token. So a pixel is literally generated text.
-
-**Why were the pixels not model-decoded in v1?** Dumping a frame is extra work for the model (about 32,100 more bytes per frame), so for the first 3 s clip we had the emulator read the frame out of guest memory and spent the model's time verifying the instruction trace. The research notes list an early serial pixel dump (78 k tokens per frame) among the dead ends for the same reason. v2 pays that cost, which is why the model-decoded frames arrive over time.
-
-### 🆚 v1 to v2: what we fixed
-
-- v1 verified every instruction of the clip, but **the emulator read the pixels out of memory**. v2: the **model emits the pixels**, each byte lockstep-checked.
-- v1 never ran the typed flow on the model. v2: `boot -> shell -> help/ls -> run /bin/doomd -> first frame` is **model-verified** (3 Modal A100 chunks, 3,335,072 instructions, 26 segments, zero divergence; keys arrive at `qos_key_park` via the key ring).
-- v1 ran at about 1.7 k instr/s. v2 is about **2x faster on the model** (block verification plus fused kernels, bit-exact, see below).
-- v1 used the older build. The tuned build executes fewer instructions (-10.8 % on the clip, host emulator). The tuned build has **not** been re-verified over the whole clip.
 
 ## 🐢 How fast is it, really?
 
@@ -213,17 +230,6 @@ Things you should know before you get too excited 🧯:
 
 Full list: [`docs/research/HONESTY.md`](docs/research/HONESTY.md).
 
-## 🕹️ Boot it yourself
-
-```sh
-make live-doom                    # fetches engine + Freedoom on first run, boots QwenOS, shell prompt, then type `doom`
-make live-doom LIVE_ARGS=--auto   # same, with a typed shell tour
-```
-
-<p align="center"><img src="docs/assets/qwenos-live-boot.gif" alt="Recorded live terminal: QwenOS boots, a shell prompt, then DOOM E1M1" width="640"><br><a href="docs/assets/qwenos-live-boot.mp4">MP4</a> · <a href="docs/LIVE_DEMO.md">docs/LIVE_DEMO.md</a></p>
-
-**Honest label: this is tier T0, the host emulator** (`rv32_fast` on your CPU), not the Qwen model. The terminal banner says `tier T0`. On the model a frame took about 18 minutes in v1 and projects to 8-10 with the v2 speed-ups (see the speed section); the recording is the emulator running the same guest code (kernel, shell, DOOM). Guide, tiers and the model path (T2): [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md).
-
 ## 🎬 The 3-second clip (v1)
 
 <p align="center"><img src="docs/assets/qwenos-doom-3s.gif" alt="The 3-second E1M1 clip, 45 frames at 15 fps" width="480"><br><a href="docs/assets/qwenos-doom-3s.mp4">Full-quality MP4 (960x720, 15 fps)</a> · <a href="docs/assets/qwenos-doom-3s-contact.png">contact sheet</a> · <a href="docs/CLIP_LEDGER.md">per-frame and per-chunk ledger</a></p>
@@ -267,7 +273,7 @@ Yes. The model (merged Qwen3.5-4B carrying the Qwenputer circuit) executed 81,06
 <details>
 <summary><b>🕹️ Can I play it?</b></summary>
 
-Yes, on the host emulator (T0): `make live-doom` or `tools/qwenos_live.sh` gives an interactive terminal with arrows to move. Playing it on the model is not practical: one tic takes about 5 minutes. `make live-doom` is the one-command version (see [boot it yourself](#-boot-it-yourself)).
+Yes, on the host emulator (T0): `make live-doom` or `tools/qwenos_live.sh` gives an interactive terminal with arrows to move. Playing it on the model is not practical: one tic takes about 5 minutes. `make live-doom` is the one-command version (see [boot it yourself](#-watch-it-boot-then-play-it)).
 </details>
 
 <details>
