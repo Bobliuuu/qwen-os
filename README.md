@@ -78,6 +78,28 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 
 ---
 
+## 🧬 Three ways to run the same CPU (T0, T1, T2)
+
+<p align="center"><img src="docs/assets/tiers.svg" alt="Animated: one RISC-V program feeds three executors, T0 fast emulator, T1 reference oracle, T2 the Qwen model, and a compare step checks same state, same bytes" width="100%"></p>
+
+The same RISC-V program can be run by three executors that are meant to be **bit-identical**: they should produce the same state and the same bytes.
+
+- **T2** is the real Qwen3.5-4B model on a GPU. It is the point of the project, and it is slow (about 3-4 thousand instructions per second).
+- **T1** is the upstream Qwenputer reference CPU (`chipformer.rv.ref.Machine`), the oracle. In a model run, every token the model predicts is compared with it, and slow blocks are re-decoded and checked too (`tools/model_doom_qwen.py`, `bridge.Session`). A mismatch stops the run.
+- **T0** is our fast C emulator `tools/rv32_fast.c` (plus our Python reference `tools/rv32_qwenputer.py`). It is a fast twin of the same CPU, used to plan chunks, snapshot, benchmark and run the live demo.
+- The oracle checks the **chip execution**. The host still handles keys, the disk, the roughly 30-token tool-call turn per segment, the 35 boundary instructions and the snapshots.
+- What we saw: the model run was compared token by token with the oracle with **zero divergence** for the 45-frame clip (35 chunks), the typed flow (26 segments) and the first model-decoded pixel frames. T0 equals T1 on everything we tested: per-tic state hashes and frame hashes against goldens (`tools/doomd_regress.sh`, `tests/golden`), a 3-way lockstep (`tests/test_upstream_doomd.py`), and `rv32_fast`'s token-cost model, which matched `ref.Machine` exactly on 3,000,000 instructions. This is observed equality, not a mathematical proof.
+
+| Tier | What runs it | Speed | Used for | What it shows |
+|---|---|---|---|---|
+| T0 | `rv32_fast` (C) and our Python reference | millions of instr/s | planning, snapshots, benchmarks, the live demo | same hashes as the goldens and as T1 on the tested runs |
+| T1 | upstream `ref.Machine` | Python speed, far below T0 | oracle for every model token | the model's tokens match it, with no divergence on the runs listed |
+| T2 | the Qwen3.5-4B model on a GPU | about 3-4 thousand instr/s (A100) | the clip, the typed flow, the pixels | the circuit in the weights runs the program |
+
+**Caveats we know about.** The 3-way lockstep was run on the original build. The tuned build adds Zba (`sh1add/sh2add/sh3add`) to `rv32_fast.c`, and our Python reference `tools/rv32_qwenputer.py` has no Zba, so it cannot replay that build. The upstream oracle did accept the Zba instructions on the real-model runs with zero divergence, but the 3-way upstream lockstep test was not rerun for the newest tuned build ([`COMPILER_BENCH.md`](docs/research/COMPILER_BENCH.md)). More in [`HONESTY.md`](docs/research/HONESTY.md).
+
+**Which tier is which claim?** The live demo video is **T0 only**. The 3-second clip, the typed flow and the model-decoded pixels are **T2 with T1 as the oracle**. The speed numbers in [how fast is it](#-how-fast-is-it-really) are T0 instruction counts unless they say "real model".
+
 ## 💡 What is this?
 
 Imagine a computer made of attention layers. That is [Qwenputer](https://github.com/divagr18/qwenputer): a 32-bit RISC-V CPU (RV32IM) compiled into the layers of Qwen3.5, where every instruction is a few generated tokens.
@@ -209,8 +231,8 @@ FULL preset means a 160x200 low-detail view, game logic every tic, and 15 of eve
 
 | Tier | Who ran it | What it has verified |
 |---|---|---|
-| 🟦 T0 | C emulator `tools/rv32_fast` | Everything: typed flow, E1M1 gameplay, chunk ROM, regression goldens, a 1060-frame scripted E1M1 video |
-| 🟨 T1 | Upstream reference CPU (`chipformer.rv.ref.Machine`) and our Python reference | Lockstep equal to the emulator for 6,000,000 instr of the merged build (level load and 2 frames); upstream also boots the kernel (120,267 instr) |
+| 🟦 T0 | C emulator `tools/rv32_fast` and our Python reference | Everything: typed flow, E1M1 gameplay, chunk ROM, regression goldens, a 1060-frame scripted E1M1 video |
+| 🟨 T1 | Upstream reference CPU (`chipformer.rv.ref.Machine`), the oracle (see [three ways to run the CPU](#-three-ways-to-run-the-same-cpu-t0-t1-t2)) | Lockstep equal to the emulator for 6,000,000 instr of the merged build (level load and 2 frames); upstream also boots the kernel (120,267 instr) |
 | 🟩 T2 | The real Qwen model (merged Qwen3.5-4B, A100) with a lockstep oracle | Probe; title frame (6,563 instr); **cold boot to the first frame marker: 1,552,382 instr, 292 segments, zero divergence**, on an earlier (pre-merge) build |
 | 🟩 T2, gameplay | The real Qwen model (Qwen3.5-4B, lockstep oracle) | The 3-second E1M1 clip: 45 frames, 35 chunks, 81,065,587 instr, zero divergence, scripted input (see [the clip](#-the-3-second-clip)). Not model-verified: the typed `run /bin/doomd` flow (ELF-build level only) |
 
@@ -303,7 +325,7 @@ Yes. They are the genuine output of the real DOOM engine running as guest code, 
 | 🧱 **chunk** | One separate model run covering a slice of the trace. The clip is 35 chunks stitched together, each started from a host snapshot. |
 | 🔒 **lockstep** | The model executes each instruction while an oracle (a trusted reference) executes the same one. Any mismatch is a divergence. We saw zero. |
 | 🔤 **chip token** | A token the model generates as part of executing one guest instruction. About 1.345 per instruction. |
-| 🟦🟨🟩 **T0 / T1 / T2** | Who ran the code. T0: the C emulator. T1: reference CPUs (upstream and Python), checked against T0. T2: the real Qwen model with a lockstep oracle. |
+| 🟦🟨🟩 **T0 / T1 / T2** | Who ran the code. T0: the C emulator and our Python reference. T1: the upstream reference CPU, the oracle, checked against T0. T2: the real Qwen model with a lockstep oracle. |
 | 🔤 **BYTE token** | The model emitting one console byte as text. Every pixel byte of a frame comes out this way. |
 | 🧩 **segment** | A stretch of a model run between host interventions such as disk service. |
 | 📀 **chunk ROM** | Game data served from a read-only ROM window, which cut disk requests from 165,054 to 4. |
