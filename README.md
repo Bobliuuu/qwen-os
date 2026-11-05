@@ -51,7 +51,6 @@ make live-doom LIVE_ARGS=--auto   # same, but it types a shell tour and `run /bi
 `demo-elf` and the live terminal need the engine and a WAD, see [get the engine](#-get-the-engine-and-freedoom). In the live terminal, arrow keys (or w/s/a/d) move, f or space fires, e uses, and `Ctrl-]` quits.
 Other handy targets: `CHUNKROM=1 make demo-live` (typed-flow image) and `tools/doomd_regress.sh` (frame and state goldens).
 
-> 🕹️ A one-command interactive version (`make live-doom`, with a `docs/LIVE_DEMO.md` guide) exists on the branch `feat/live-demo`, not yet merged to main. It runs on the host emulator, not on the model.
 
 ## 🧩 How it works in one picture
 
@@ -86,7 +85,7 @@ Short answer: **very slow, and we are upfront about it.** 😅 Here it is in hum
 
 ### 🧪 Speed-up experiments (tonight's work)
 
-> ⚠️ **Host emulator numbers, not Qwen.** These count guest instructions and chip tokens on the host emulator (`rv32_fast`). They say how much less work the model would have to do; none of them has been run on the Qwen model yet (only Zba and the first chunks were confirmed on the real model). Compiler, hotloops, sim, bbtrace, combined and ktoken are **now merged to main**; presets, the B200 doc and the neural-executor research are still on their own branches.
+> ⚠️ **Host emulator numbers, not Qwen.** These count guest instructions and chip tokens on the host emulator (`rv32_fast`). They say how much less work the model would have to do; none of them has been run on the Qwen model yet (only Zba and the first chunks were confirmed on the real model). Compiler, hotloops, sim, bbtrace, combined, ktoken, presets, the B200 doc and the neural-executor research are **now merged to main**.
 
 > ⚠️ **Which build made the 3 s clip?** The published 3 s clip was produced and model-verified with the **OLD build** (`TUNED=0` reproduces that build). The new default build (LTO + Zba + hot-loop + sim changes) is regress-verified on the host emulator, and Zba and the first chunks are confirmed on the real model, but the **full 3 s clip has NOT been re-verified on the model with the new build** (unless this note is later updated).
 
@@ -97,8 +96,11 @@ Short answer: **very slow, and we are upfront about it.** 😅 Here it is in hum
 | ➕ Cumulative (both rows) | **-15.8 %** instructions, **-18.4 %** chip tokens vs the original | `perf/hotloops` | merged to main |
 | 🧹 Sim: `memcpy`/`memset` and `FixedDiv` fast paths (exact, same output) | **-1.12 %** instructions, **-1.03 %** chip tokens | `perf/sim` | merged to main |
 | 🧮 Combined (all of the above), 350-tic dry run | **150,159,521** instructions (**-16.83 %**) and **208,776,718** chip tokens (**-19.40 %**) vs the original; 3 s clip **72,277,308** vs **81,065,587** instructions (**-10.8 %**). Host emulator, see [`docs/research/COMBINED.md`](docs/research/COMBINED.md) | `perf/combined` | merged to main |
-| 🎚️ Visual presets `fast` / `lite` | **-40 %** / **-12 %** (at 15 fps) | `perf/presets` | on branch, not yet merged. A **visual tradeoff**, the picture looks worse |
+| 🎚️ Visual presets `fast` / `lite` | **-40 %** / **-12 %** (at 15 fps) | `perf/presets` | merged to main. A **visual tradeoff**, the picture looks worse |
 | 🔬 Basic-block trace: where the work is | hottest block `R_ColumnLoop` is 18.1 % of instructions; the top 100 blocks cover 65.7 %. Fusing blocks into the weights would save only **2-5 %** of tokens and needs a circuit rebuild, so we are not doing it | `perf/bbtrace` | merged to main |
+| ⚙️ Fused/split Triton executor kernels + block verification (**real model**, A100, chunk c34, lockstep 0 errors, bit-exact kernels) | **2.02x**: K=64 + `--fast-kernels` **4,510** chip tok/s, **3,121** instr/s, **349.4 s** vs baseline **2,233** tok/s, **1,546** instr/s, **705.6 s**. See [`docs/research/PERF_LEDGER.md`](docs/research/PERF_LEDGER.md) | `perf/ktoken` | merged to main |
+| 🧠 Neural-executor speed-up analysis (research and host-only prototypes) | analysis only, nothing run on the model; see [`docs/research/`](docs/research/) | `perf/neural-exec` | merged to main |
+| 🅱️ B200 microbenchmark attempt | see [`docs/research/B200.md`](docs/research/B200.md) | `perf/b200` | merged to main |
 | 🧾 Old vs combined **model** benchmark | <!-- PENDING:model-benchmark --> pending | | pending |
 
 ### 🖥️ Measured on the real model (Modal)
@@ -131,7 +133,7 @@ Branch `perf/ktoken`, now merged to main.
 
 **E4: fixed costs.** A text token costs 45 ms warm, plus 0.21 s fixed per segment.
 
-**18 minutes will not become significantly faster any time soon:** each token costs about 240 us of GPU kernel time on an A100 (the floor today), and a frame needs about 1.8 M instructions, roughly 2.5 M tokens. Three levers remain: fewer instructions (compiler, hot loops, presets), less overhead per token (block verification, 1.54x measured), and faster kernels (the `head` kernel is half the GPU time; being worked on). The final old-vs-combined benchmark is the pending row above.
+**18 minutes will not become significantly faster any time soon:** each token costs about 240 us of GPU kernel time on an A100 (the floor today), and a frame needs about 1.8 M instructions, roughly 2.5 M tokens. Three levers remain: fewer instructions (compiler, hot loops, presets), less overhead per token (block verification, 1.54x measured), and faster kernels (split/fused kernels measured 2.02x together with block verification, see the table above). The final old-vs-combined benchmark is the pending row above.
 
 <p align="center"><img src="docs/assets/bottleneck-pie.svg" alt="Pie chart of instruction share by function: R_ColumnLoop 18.7 percent, R_ReplayWall 12.2, rec_get 7.7, rc_fill 4.5, everything else 56.9" width="100%"></p>
 
@@ -179,9 +181,22 @@ Things you should know before you get too excited 🧯:
 
 Full list: [`docs/research/HONESTY.md`](docs/research/HONESTY.md).
 
+## 🕹️ Boot it yourself
+
+```sh
+make live-doom                    # fetches engine + Freedoom on first run, boots QwenOS, shell prompt, then type `doom`
+make live-doom LIVE_ARGS=--auto   # same, with a typed shell tour
+```
+
+<p align="center"><img src="docs/assets/qwenos-live-boot.gif" alt="Recorded live terminal: QwenOS boots, a shell prompt, then DOOM E1M1" width="640"><br><a href="docs/assets/qwenos-live-boot.mp4">MP4</a> · <a href="docs/LIVE_DEMO.md">docs/LIVE_DEMO.md</a></p>
+
+**Honest label: this is tier T0, the host emulator** (`rv32_fast` on your CPU), not the Qwen model. The terminal banner says `tier T0`. On the model a frame still takes about 18 minutes (see the footnote above); the recording is the emulator running the same guest code (kernel, shell, DOOM). Guide, tiers and the model path (T2): [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md).
+
 ## 🎬 The 3-second clip
 
 <p align="center"><img src="docs/assets/qwenos-doom-3s.gif" alt="The 3-second E1M1 clip, 45 frames at 15 fps" width="480"><br><a href="docs/assets/qwenos-doom-3s.mp4">Full-quality MP4 (960x720, 15 fps)</a> · <a href="docs/assets/qwenos-doom-3s-contact.png">contact sheet</a> · <a href="docs/CLIP_LEDGER.md">per-frame and per-chunk ledger</a></p>
+
+> 📝 **Note on this clip:** it was generated with an **older build**. Since then the build got faster: the host emulator runs **-10.8 %** instructions on this clip, and on the real model we measured **2x** from block verification plus fused kernels (chunk c34, see the speed-up table). The clip is being regenerated with model-decoded pixels.
 
 E1M1, FULL preset (160x200 low-detail view, status bar), 15 rendered frames per 35 game tics. The player walks forward, turns right, fires the pistol and keeps walking. The input is a compiled-in script (`q_script`), not typed live.
 
