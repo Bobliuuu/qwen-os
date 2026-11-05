@@ -38,6 +38,17 @@ LIVE_APPS = build/shell-live.elf build/paint.elf build/raycast.elf build/asset.e
 build/qwenos-live.elf: build/kernel-live.elf $(LIVE_APPS) tools/merge_elf.py
 	python3 tools/merge_elf.py $@ build/kernel-live.elf $(LIVE_APPS)
 live: build/qwenos-live.elf
+# `make live-doom` = THE one command: fetch engine+Freedoom on first use, build, boot QwenOS on the T0 emulator.
+# LIVE_ARGS=--auto scripts the shell tour + `run /bin/doomd`. See docs/LIVE_DEMO.md.
+LIVE_DOOM = build/qwenos-live-doomdmc-m3.elf
+ENGINE_IMG = .deps/engine/DMC100-Doom/build/sw/nor/E1.img
+$(ENGINE_IMG):
+	tools/fetch_engine.sh
+engine: $(ENGINE_IMG)
+$(LIVE_DOOM): $(LIVE_APPS) build/kernel-live.elf $(wildcard ports/doomdmc/*.c ports/doomdmc/*.h ports/doomdmc/build.sh) tools/merge_elf.py $(ENGINE_IMG)
+	OS=live ports/doomdmc/mkmode.sh 3
+live-doom: $(LIVE_DOOM) build/rv32_fast
+	tools/qwenos_live.sh $(LIVE_ARGS)
 build/qwenos-model-probe.elf: kernel/start.S kernel/app_call.S kernel/main.c include/qos.h linker/kernel.ld
 	mkdir -p build
 	$(CC) $(CFLAGS) -DQOS_MODEL_BRIDGE $(LINK) -Wl,-T,linker/kernel.ld kernel/start.S kernel/app_call.S kernel/main.c -o $@
@@ -69,7 +80,7 @@ check: all model-probe build/qwenos-doomd.elf build/qwenos-live.elf build/rv32_f
 	python3 -m unittest discover -s tests -v
 clean:
 	rm -rf build
-.PHONY: live doomdmc all check clean frame asset doom-frame model-probe
+.PHONY: live live-doom engine doomdmc all check clean frame asset doom-frame model-probe
 
 # ---- merged E1M1 build (see MERGE_NOTES.md) ----
 # make demo-elf          -> build/demo/qwenos-e1m1.elf  (mode 2 scripted E1M1, skip 15/35, chunk ROM plan, zero in-doomd disk requests)

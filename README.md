@@ -43,7 +43,9 @@ You need Clang/LLD, `readelf` and Python 3. No game data is in this repo.
 ```sh
 make check                    # kernel, layout, Python reference CPU, unit tests (no WAD needed)
 make demo-elf                 # scripted E1M1 image -> build/demo/qwenos-e1m1.elf (+ chunk-ROM plan)
-tools/qwenos_live.sh --auto   # live terminal demo: boots, types `run /bin/doomd` for you, then it is yours
+make live-doom                # THE command: fetches engine+Freedoom on first run, boots QwenOS (T0 emulator), shell, then type `doom`
+make live-doom LIVE_ARGS=--auto   # same, but it types a shell tour and `run /bin/doomd` for you
+# step by step + real-model (T2, GPU) path: docs/LIVE_DEMO.md
 ```
 
 `demo-elf` and the live terminal need the engine and a WAD, see [get the engine](#-get-the-engine-and-freedoom). In the live terminal, arrow keys (or w/s/a/d) move, f or space fires, e uses, and `Ctrl-]` quits.
@@ -272,10 +274,7 @@ Start with the [research README](docs/research/README.md), then the [timeline](d
 Neither is included.
 
 ```sh
-mkdir -p ../engine ../wads
-git clone https://github.com/ArturBieniek4/DMC100-Doom ../engine/DMC100-Doom
-(cd ../engine/DMC100-Doom && git checkout 0cdc78e && patch -p1 < "$OLDPWD/engine-patches/dmc100-qwenos-merged.patch")
-# Freedoom (modified BSD): https://freedoom.github.io  -> unzip freedoom1.wad into ../wads/
+make engine     # = tools/fetch_engine.sh: clone DMC100-Doom @0cdc78e into .deps/, apply the patch, fetch Freedoom 0.13.0, build E1.img
 ```
 
 `ports/doomdmc/mkimage.sh` builds the NOR disk image (`E1.img`) from the layout and the WAD; `ports/doomdmc/build.sh` builds `doomd`. Override locations with `DMC`, `IWAD`, `QOS_FREEDOOM_WAD`.
