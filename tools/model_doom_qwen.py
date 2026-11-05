@@ -246,11 +246,18 @@ def plan(truth, args):
         s0, t0, o0 = m.steps, truth.tokens, len(m.out)
         ev, visited, hooked = None, set(), False
         cold = truth.hook_pc is not None and not truth.marks
+        sstep = next((x for x in getattr(args, 'split_steps', ()) if x > s0), None)   # absolute instruction count to split at
         while len(truth.marks) < target or truth.armed:
             pc = m.pc
             if truth.armed and pc == truth.hook_pc and m.steps > s0:
                 # the guest, with the marker count at the boundary, is about to run q_stop_here (start of the next frame end): stop BEFORE it
                 ev, hooked = 'split', True
+                stop_pc, instr, tokens = pc, m.steps - s0, truth.tokens - t0
+                break
+            if sstep is not None and m.steps >= sstep and pc not in visited and m.steps > s0:
+                # instruction-count split (cold boot / level load): stop BEFORE the first pc at/after sstep that this segment has
+                # not executed yet (an ebreak fires on the first execution of its pc, so the stop pc must be fresh)
+                ev, hooked = 'isplit', True
                 stop_pc, instr, tokens = pc, m.steps - s0, truth.tokens - t0
                 break
             ev = truth.step()
@@ -294,7 +301,7 @@ def plan(truth, args):
         nseg += 1
         yield dict(index=nseg, start=start, start_steps=s0, stop_pc=stop_pc, instr=instr,
                    tokens=tokens, out=bytes(m.out[o0:]),
-                   reason={'disk': 'disk', 'rom': 'rom', 'split': 'split'}.get(ev, 'marker'), rom_chunk=truth.rom_cur, markers=bytes(m.out[o0:]).count(b'\x02'))
+                   reason={'disk': 'disk', 'rom': 'rom', 'split': 'split', 'isplit': 'isplit'}.get(ev, 'marker'), rom_chunk=truth.rom_cur, markers=bytes(m.out[o0:]).count(b'\x02'))
     left = [k[0] for k in truth.keys if not k[2]]
     if left:
         raise RuntimeError(f'keys {left!r} were never injected: a key must be due before the final marker so that it falls on a '
@@ -322,6 +329,8 @@ def main():
                     help='per-segment chip-token cap (default 1.25 x planned tokens + 1000)')
     ap.add_argument('--max-text', type=int, default=0,
                     help='per-segment text-token cap (default tool call + byte echoes + 400)')
+    ap.add_argument('--k-graph', type=int, default=64, help='K>1 (default 64; 0 or 1 = old per-token loop): K executor tokens per CUDA graph with bulk lockstep verification (tools/kgraph.py)')
+    ap.add_argument('--k-pipe', action='store_true', help='with --k-graph: launch block i+1 before syncing block i (speculative on the oracle tokens; every block is still verified)')
     ap.add_argument('--no-executor', action='store_true', help='HF chip layers (~250 tok/s), not the executor')
     ap.add_argument('--out', default='model_doom_out.bin', help='console bytes the run produced')
     ap.add_argument('--tok-per-s', type=float, default=3200.0, help='for the time estimate only')
@@ -335,12 +344,18 @@ def main():
                     'pause; segments are split at ROM-chunk boundaries (also honored by --segment-range and --plan-json)')
     ap.add_argument('--sym-elf', default=None, help='engine ELF with symbols (q_stop_in/q_stop_here) for the segment stop hook; '
                     'without it segments can only end at markers whose next pc is fresh')
+    ap.add_argument('--split-steps', default='', help='comma list of absolute instruction counts: a segment ends at the first pc not yet executed in it at/after each '
+                    '(splits the cold-boot/level-load stretch, where no frame marker exists, into model chunks)')
     ap.add_argument('--lock-max-records', type=int, default=10**9,
                     help='per-segment instruction limit of the lockstep oracle (upstream default 1e6 is too small for zero-pause segments)')
     ap.add_argument('--split-markers', default='', help='comma list of frame-marker counts at which a segment must end (so a\n                    '
                     'model chunk can start there: --segment-range then selects segments between such boundaries)')
     ap.add_argument('--plan-json', default=None, help='write per-segment plan (instr, tokens, bytes) and exit')
     ap.add_argument('--result-json', default=None, help='write the final report here too')
+    ap.add_argument('--dump-starts', default=None, metavar='DIR', help='[modal staging] host-only: one pass over the reference machine, '
+                    'pickle every segment (start machine + expected outputs) to DIR/seg<N>.pkl, then exit')
+    ap.add_argument('--load-starts', default=None, metavar='DIR', help='[modal staging] take segments from DIR/seg<N>.pkl instead of replaying the host '
+                    '(needs --segment-range A:B)')
     ap.add_argument('--dry-run', action='store_true', help='reference machine stands in for the model')
     args = ap.parse_args()
     if args.snapshot_marker is None:
@@ -360,6 +375,7 @@ def main():
         c, n = tok.rsplit('@', 1)
         keys.append(({'\\n': '\n', '\\r': '\r', '\\s': ' '}.get(c, c), int(n)))
     args.split_set = {int(x) for x in args.split_markers.split(',') if x}
+    args.split_steps = sorted(int(x) for x in args.split_steps.split(',') if x)
     rom_plan = json.loads(Path(args.rom_plan).read_text()) if args.rom_plan else None
     truth = Truth(args.elf, Path(args.disk).read_bytes(), kelf, keys, not args.no_disk_pause, rom_plan, args.sym_elf)
 
@@ -371,6 +387,10 @@ def main():
         # (instructions); chunk-ROM segments are whole frames (2.5M+ instr), so raise the limit (python ref ~100k instr/s).
         bridge.Session.qwen.__defaults__ = (args.lock_max_records, True)
         bridge.Session.run.__defaults__ = (args.lock_max_records,)
+        if args.k_graph > 1:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import kgraph
+            kgraph.install(chatmod, args.k_graph, pipe=args.k_pipe)
         chat = chatmod.RvChat(args.model, fast=not args.no_executor,
                               executor=(torch.cuda.is_available() and not args.no_executor))
         ids = chat.prompt_ids([{'role': 'user', 'content': 'Use calc to evaluate 1 + 1.'}])
@@ -392,9 +412,32 @@ def main():
     model_chip = 0
     nver = 0
     model_secs = 0.0
+    t_chipsum = t_textsum = 0.0
     detail = []
     reasons = {}
-    for seg in plan(truth, args):
+    def _loaded():
+        import pickle, os
+        for n in range(ra, rb):
+            p = Path(args.load_starts) / f'seg{n}.pkl'
+            while not p.exists():
+                time.sleep(15)
+                if hasattr(args, 'reload_hook'):
+                    args.reload_hook()
+            yield pickle.loads(p.read_bytes())
+    if args.dump_starts:
+        import pickle, os
+        Path(args.dump_starts).mkdir(parents=True, exist_ok=True)
+        for seg in plan(truth, args):
+            tmp = Path(args.dump_starts) / f'.seg{seg["index"]}.tmp'
+            tmp.write_bytes(pickle.dumps(seg, protocol=5))
+            os.replace(tmp, Path(args.dump_starts) / f'seg{seg["index"]}.pkl')
+            print(f'dumped seg {seg["index"]} instr={seg["instr"]} steps={seg["start_steps"]} ({time.time()-t0:.0f}s)', flush=True)
+        print('DUMP_DONE', flush=True)
+        return
+    if args.load_starts:
+        assert args.segment_range, '--load-starts needs --segment-range'
+        nseg = ra - 1
+    for seg in (_loaded() if args.load_starts else plan(truth, args)):
         nseg += 1
         if not (ra <= nseg < rb):
             continue  # host-only fast-forward: another chunk verifies this segment
@@ -429,6 +472,7 @@ def main():
             try:
                 res = chat.generate(ids, cpu, max_new=max_text, max_chip=max_chip, check_head=True,
                                     lock=lock, on_token=on_token, verbose=False)
+                t_chipsum += res['chip_seconds']; t_textsum += res['text_seconds']
                 if res['lock_error'] is not None:
                     sys.exit(f"segment {nseg}: model diverged from reference: {res['lock_error']}")
                 if not st['halt']:
@@ -457,6 +501,9 @@ def main():
         gpu = 'none'
     wall = max(model_secs, 1e-9) if not args.dry_run else max(time.time() - t0, 1e-9)
     rep = dict(
+        k_graph=args.k_graph, gpu_mem_peak_mb=(round(__import__('torch').cuda.max_memory_allocated() / 2**20) if not args.dry_run else None),
+        kgraph_stats=(__import__('kgraph').STATS if args.k_graph > 1 and not args.dry_run else None),
+        gen_chip_seconds=None if args.dry_run else round(t_chipsum, 2), gen_text_seconds=None if args.dry_run else round(t_textsum, 2),
         host=socket.gethostname(), model_seconds=round(model_secs, 1), gpu=gpu, executor=not args.no_executor, keys=args.keys,
         chip_tokens_per_s=round(model_chip / wall, 1), instr_per_s=round(tot_i / wall, 1),
         mode='dry-run (reference stand-in, NOT the model)' if args.dry_run else 'MODEL', target=args.target,
