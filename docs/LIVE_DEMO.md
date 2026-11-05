@@ -61,7 +61,7 @@ $ ls
 /tmp/note
 /tmp/log
 $ cat /README
-QwenOS: RV32IM kernel, ROM apps, RAMFS, framebuffer, ABI v1.
+QwenOS: RV32IM kernel, ROM apps, RAMFS, framebuffer, ABI version 1.
 $ echo hello qwenos > /tmp/note
 $ cat /tmp/note
 hello qwenos

@@ -1,10 +1,10 @@
 # How QwenOS runs DOOM (the picture book)
 
-Look, don't read. Every picture moves. This is the **v2** story: the model emits the pixels itself, the typed flow is model-verified, and it runs about 2x faster. (v1, the first 3 s clip, is the little section at the end.) For the headline numbers see the [README](../README.md); for the evidence see [research](research/README.md).
+Look, don't read. Every picture moves. This is the story now: the model emits the pixels itself, the typed flow is model-verified, and it runs about 2x faster. (The first 3 s clip is the little section at the end.) For the headline numbers see the [README](../README.md); for the evidence see [research](research/README.md).
 
 <p align="center"><img src="assets/hero-terminal.svg" alt="A terminal boots QwenOS, shows the dollar prompt and types run /bin/doomd" width="100%"><br><img src="assets/qwenos-doom-3s.gif" alt="3-second E1M1 clip: 45 frames, all verified through the Qwen model" width="480"></p>
 
-*This GIF is the v1 clip, shown until the v2 video is ready. Real DOOM frames: genuine output of the real DOOM engine running as RISC-V guest code. In v1 the model verified the instruction trace of every frame in lockstep and the emulator read the pixel bytes out of guest memory. In v2 the model emits them (see section 1b and the progress line in the [README](../README.md)).*
+*This GIF is the first clip. Real DOOM frames: genuine output of the real DOOM engine running as RISC-V guest code. In that clip the model verified the instruction trace of every frame in lockstep and the emulator read the pixel bytes out of guest memory. Now the model emits them (see section 1b and the progress line in the [README](../README.md)).*
 
 ## 1. The stack
 
@@ -14,7 +14,7 @@ A keystroke dives six layers down. A frame climbs back up.
 
 The host is a very dumb helper: it pushes key bytes and serves disk blocks. It never runs game logic.
 
-## 1b. Where the pixels come from (v2)
+## 1b. Where the pixels come from
 
 <p align="center"><img src="assets/pixels-arch.svg" alt="Animated pipeline: DOOM engine, LCD dump routine, Qwen chip emitting BYTE tokens, lockstep oracle, host writing the PNG" width="100%"></p>
 
@@ -62,15 +62,15 @@ The clip was split into 35 chunks and run on 29 Modal A100, 3 Lambda A100 and 3 
 
 ## Honesty box
 
-> **v2:** the model emits the pixel bytes of the frames counted in the README progress line (each byte lockstep-checked, byte-exact vs the emulator), and the typed `boot -> shell -> help/ls -> run /bin/doomd -> first frame` flow is model-verified (3 Modal A100 chunks, 3,335,072 instr, 26 segments, zero divergence). Disk is host-served, keys are scripted or come through the key ring, the clock is virtual, and it is not real time. Status-bar rows 208-239 are not in a frame's dump. The tuned build has not been re-verified over the whole clip. Full list: [HONESTY.md](research/HONESTY.md).
+> **Now:** the model emits the pixel bytes of the frames counted in the README progress line (each byte lockstep-checked, byte-exact vs the emulator), and the typed `boot -> shell -> help/ls -> run /bin/doomd -> first frame` flow is model-verified (3 Modal A100 chunks, 3,335,072 instr, 26 segments, zero divergence). Disk is host-served, keys are scripted or come through the key ring, the clock is virtual, and it is not real time. Status-bar rows 208-239 are not in a frame's dump. The tuned build has not been re-verified over the whole clip. Full list: [HONESTY.md](research/HONESTY.md).
 
-## v1 to v2, in five lines
+## What changed since the first clip, in five lines
 
-- v1: every instruction of the 3 s clip was verified, but the emulator read the pixels out of memory.
-- v1: the typed flow was not run on the model.
-- v2: the model emits the pixels; the typed flow is verified.
-- v2: about 2x faster on the model (block verification plus fused kernels, bit-exact), and a tuned build that runs fewer instructions.
-- Still true: not real time. One frame is projected at about 8 to 10 minutes of A100 time (v1: about 18).
+- Before: every instruction of the 3 s clip was verified, but the emulator read the pixels out of memory.
+- Before: the typed flow was not run on the model.
+- Now: the model emits the pixels; the typed flow is verified.
+- Now: about 2x faster on the model (block verification plus fused kernels, bit-exact), and a tuned build that runs fewer instructions.
+- Still true: not real time. One frame is projected at about 8 to 10 minutes of A100 time (before: about 18).
 
 ## Where to go next
 
