@@ -4,7 +4,7 @@ Look, don't read. Every picture moves. For the headline numbers see the [README]
 
 <p align="center"><img src="assets/hero-terminal.svg" alt="A terminal boots QwenOS, shows the dollar prompt and types run /bin/doomd" width="100%"><br><img src="assets/qwenos-doom-3s.gif" alt="3-second E1M1 clip: 45 frames, all verified through the Qwen model" width="480"></p>
 
-*Real E1M1 frames from the emulator (the C emulator renders the pixels; see the honesty box below).*
+*Real DOOM frames: genuine output of the real DOOM engine running as RISC-V guest code. The model verified the instruction trace of every frame in lockstep; the emulator read the pixel bytes out of guest memory (see the honesty box below).*
 
 ## 1. The stack
 
