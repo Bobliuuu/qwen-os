@@ -113,6 +113,22 @@ The same RISC-V program can be run by three executors that are meant to be **bit
 
 **Which tier is which claim?** The live demo video is **T0 only**. The 3-second clip, the typed flow and the model-decoded pixels are **T2 with T1 as the oracle**. The speed numbers in [how fast is it](#-how-fast-is-it-really) are T0 instruction counts unless they say "real model".
 
+## ⌨️ How a keypress reaches the OS
+
+<p align="center"><img src="docs/assets/keyring.gif" alt="Animated: the host writes the ASCII byte 0x68 into the mailbox at 0x154 while the guest is parked; the kernel compares the mailbox counter with its read count and returns the key to the shell" width="100%"><br><sub>Animated SVG version: <a href="docs/assets/keyring.svg">docs/assets/keyring.svg</a></sub></p>
+
+The CPU has no keyboard hardware, no interrupts and no privilege levels, so the OS cannot be told that a key arrived. It has to ask, and the host has to hand the key over at a safe moment. That is the key ring:
+
+- 📮 **The mailbox.** 8 bytes of RAM at the hardcoded address `0x154` (it lives in the model's state): a `u32 seq` counting the keys the host has pushed, and a ring of four byte slots `q[4]`. Key number `n` lives in `q[n & 3]`. A key is a plain ASCII byte (`h` is `0x68`); 0 means "no key".
+- 🖥️ **The host pushes.** It writes the byte into `q[seq & 3]` first and adds 1 to `seq` last, so the guest never sees a count without its byte. The host only does this while the guest is parked (below).
+- 🧠 **The kernel notices by comparing two counters.** The shell calls the `KEY_WAIT` syscall (number 22). The kernel keeps its own read count at `0x140` and compares it with `seq`: if they match there is no new key; if `seq` is ahead it returns `q[count & 3]` and bumps its read count. If the host gets more than 4 keys ahead, the oldest are dropped.
+- ⏸️ **Parking.** When there is no key, `key_wait` loops through `qos_key_park`, a single `ret` in kernel ROM at pc `0x40044`. It does nothing, but it is a known address where the guest is idle. In the model run, the driver put a ROM breakpoint there: the segment stops before the `ret`, the host pushes one character, runs that `ret`, and the next segment starts from that state. Every key is therefore present at the same instruction where the emulator consumed it, and the guest itself chooses where the pause is.
+- 🔤 **Typed in the model run:** `help`, `ls`, `run /bin/doomd`, each followed by Enter: 23 keys. The park `ret`s are among the host-executed boundary instructions counted in [what is real](#-what-is-real-and-what-is-not).
+- 🎮 **After `run /bin/doomd`,** DOOM reads the same ring once per game tic and maps each byte to its own input. The engine was built for a handheld with physical buttons, so `w`, `s`, `a`, `d`, space or `f`, `e` and Esc or `m` become presses of its forward, back, turn, fire, use and menu buttons. A keyboard byte arrives once but a button must be held, so each key counts as a press held for 120 ms of virtual time (about 4 tics). The terminal viewer turns the arrow keys into `w`, `s`, `a`, `d`.
+- 🎞️ **The 3-second clip skipped all of this.** Its input was a compiled-in script (`q_script`), not the key ring.
+
+In a real OS the same job is done by a keyboard interrupt, a driver that translates scancodes, a kernel ring buffer, a TTY layer, and a scheduler that wakes the sleeping program. Here the host stands in for the keyboard hardware, polling and parking stand in for interrupts and sleeping, and there is no scancode layer.
+
 ## 💡 What is this?
 
 Imagine a computer made of attention layers. That is [Qwenputer](https://github.com/divagr18/qwenputer): a 32-bit RISC-V CPU (RV32IM) compiled into the layers of Qwen3.5, where every instruction is a few generated tokens.
