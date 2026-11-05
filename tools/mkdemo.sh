@@ -1,6 +1,6 @@
 #!/bin/bash
 # tools/mkdemo.sh [PRESET] : the merged E1M1 demo build (make demo-elf).
-#   PRESET: full (default; 15 of 35 tics drawn, 160x200) | balanced | max | none (draw every tic, no skip)
+#   PRESET: full (default; 15 of 35 tics drawn, 160x200) | balanced | max | lite | fast (lite/fast are visual TRADEOFFS, see docs/research/PRESETS.md) | none (draw every tic, no skip)
 #   env: TICS (game tics to run, default 350)  CHUNKROM=0 (no chunk ROM: disk served through the mailbox)
 #        BUDGET (chunk window bytes, default 0x3f000-0x29000)  DMC (engine tree, default .deps/engine/DMC100-Doom)
 # Output (build/demo/): qwenos-e1m1.elf  the merged image (kernel + apps + /bin/doomd, mode 2 scripted E1M1)

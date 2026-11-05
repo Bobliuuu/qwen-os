@@ -56,7 +56,7 @@ static void prof_report(void){qsort(syms,nsyms,sizeof *syms,symcmp);
       unsigned long long ent=b<nsyms?hist[ph][(syms[b].a-0x40000)>>2]:0;
       fprintf(stderr,"%10llu %5.1f%% %-28s calls=%llu avg=%.1f\n",(unsigned long long)acc[b],100.0*acc[b]/tot,b<nsyms?syms[b].n:"?",ent,ent?(double)acc[b]/ent:0.0);acc[b]=0;}}}
 /* tic stats: TICSYM (default G_Ticker) entry = one game tic; reports per-tic instruction deltas */
-static FILE*reqlog;static int reqprof,nrq;static uint32_t rqpc[512];static uint64_t rqn[512],rqb[512];static uint64_t nreq,nbytes,ticreq[1<<20],ticbytes[1<<20];static uint32_t ticpc,lvlpc;static uint64_t lvlstep,lvlframe;static int lvlseen,lvlticidx=-1;static uint64_t ticstep[1<<20];static int nticks;
+static FILE*reqlog;static int reqprof,nrq;static uint32_t rqpc[512];static uint64_t rqn[512],rqb[512];static uint64_t nreq,nbytes,ticreq[1<<20],ticbytes[1<<20];static uint32_t ticpc,lvlpc;static uint64_t lvlstep,lvlframe;static int lvlseen,lvlticidx=-1;static uint64_t ticstep[1<<20],ticTok[1<<20];static int nticks;
 static int u64cmp(const void*a,const void*b){uint64_t x=*(uint64_t*)a,y=*(uint64_t*)b;return x<y?-1:x>y;}
 static void tic_report(void){
   if(lvlseen)fprintf(stderr,"LEVEL boot_to_level_start=%llu load_to_first_frame=%llu first_game_frame_at=%llu\n",(unsigned long long)lvlstep,(unsigned long long)(lvlframe-lvlstep),(unsigned long long)lvlframe);
@@ -67,7 +67,7 @@ static void tic_report(void){
   if(nticks<2)return;static uint64_t d[1<<20];int n=nticks-1;uint64_t sum=0,mx=0;
   for(int i=0;i<n;i++){d[i]=ticstep[i+1]-ticstep[i];sum+=d[i];if(d[i]>mx)mx=d[i];}
   uint64_t tot=ticstep[n]-ticstep[0];
-  if(getenv("TICLIST"))for(int i=0;i<n;i++)fprintf(stderr,"tic %d at %llu cost %llu req %llu\n",i,(unsigned long long)ticstep[i],(unsigned long long)d[i],(unsigned long long)(ticreq[i+1]-ticreq[i]));
+  if(getenv("TICLIST"))for(int i=0;i<n;i++)fprintf(stderr,"tic %d at %llu cost %llu tok %llu req %llu\n",i,(unsigned long long)ticstep[i],(unsigned long long)d[i],(unsigned long long)(ticTok[i+1]-ticTok[i]),(unsigned long long)(ticreq[i+1]-ticreq[i]));
   qsort(d,n,8,u64cmp);
   fprintf(stderr,"TICS n=%d first_tic_at=%llu mean=%llu median=%llu p90=%llu max=%llu\n",n,(unsigned long long)ticstep[0],(unsigned long long)(tot/n),(unsigned long long)d[n/2],(unsigned long long)d[n*9/10],(unsigned long long)mx);}
 
@@ -219,7 +219,7 @@ int main(int argc,char**argv){
       else{fprintf(stderr,"IDLE: guest waits for a key at step %llu, nothing schedulable\n",(unsigned long long)steps);exitcode=-2;goto done;}}
     if(nw)for(int q=0;q<nw;q++)if(pc==wpc[q]&&!whit[q]){whit[q]=1;wstep[q]=steps;}
     if(pc==lvlpc&&!lvlseen){lvlseen=1;lvlstep=steps;lvlticidx=nticks;}
-    if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticstep[nticks++]=steps;
+    if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticTok[nticks]=tok_tot;ticstep[nticks++]=steps;
 #ifdef BBTRACE
       bb_tic(nticks-1);
 #endif
