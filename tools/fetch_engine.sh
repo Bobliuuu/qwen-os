@@ -4,7 +4,7 @@
 #                                       .deps/engine/DMC100-Doom/build/sw/nor/E1.img
 # env: ENGINE_ROOT (default <repo>/.deps/engine)  WAD (use this freedoom1.wad instead of downloading)
 # Needs: git, python3, clang+ld.lld (riscv32), llvm-nm (brew install llvm; on macOS LLVM=/opt/homebrew/opt/llvm/bin), curl, unzip.
-# Pinned: DMC100-Doom 0cdc78e + engine-patches/dmc100-qwenos-merged.patch, Freedoom 0.13.0 (freedoom1.wad).
+# Pinned: DMC100-Doom 0cdc78e + engine-patches/dmc100-qwenos-merged.patch + dmc100-hotloops.patch, Freedoom 0.13.0 (freedoom1.wad).
 # WARNING: this script builds E1.img with QFLAT_SLOTS=0. That image is NOT the one used for doomd_regress.sh
 # (the regress needs the QFLAT_SLOTS image, md5 6287a13cc1079b697e1885f8f6327e06 for the combined build). Do not use this
 # E1.img for regress checks; see docs/research/COMBINED.md.
@@ -16,7 +16,8 @@ export LLVM=${LLVM:-/opt/homebrew/opt/llvm/bin}; export PATH=$LLVM:$PATH
 if [ ! -d "$DMC/.git" ]; then git clone -q https://github.com/ArturBieniek4/DMC100-Doom "$DMC"; fi
 if [ ! -f "$DMC/.qwenos-patched" ]; then
   git -C "$DMC" checkout -q 0cdc78e
-  (cd "$DMC" && patch -p1 < "$REPO/engine-patches/dmc100-qwenos-merged.patch" >/dev/null) && touch "$DMC/.qwenos-patched"
+  (cd "$DMC" && patch -p1 < "$REPO/engine-patches/dmc100-qwenos-merged.patch" >/dev/null \
+    && patch -p1 < "$REPO/engine-patches/dmc100-hotloops.patch" >/dev/null) && touch "$DMC/.qwenos-patched"
 fi
 if [ -z "$WAD" ]; then
   WAD=$WADDIR/freedoom1.wad
