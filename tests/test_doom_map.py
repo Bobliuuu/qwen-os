@@ -4,7 +4,7 @@ These assert actual RV32 guest execution, not Python rendering. The guest
 renders with a real BSP front-to-back traversal; textures, sprites, monsters
 and game logic are absent. Pixel format: bits 7-6 class (0 wall, 1 floor,
 2 ceiling, 3 sky), bits 5-0 brightness.
-The real-WAD test needs Freedoom (BSD) at ../wads/freedoom1.wad
+The real-WAD test needs Freedoom (BSD) at .deps/wads/freedoom1.wad
 or $QOS_FREEDOOM_WAD, and is skipped when absent.
 """
 import os
@@ -141,7 +141,7 @@ class DoomMapTests(unittest.TestCase):
         self.assertEqual(cpu.exitcode,0)
         self.assertIn('doom: no valid E1M1/MAP01 WAD map',log)
 
-FREEDOOM=Path(os.environ.get('QOS_FREEDOOM_WAD','../wads/freedoom1.wad'))
+FREEDOOM=Path(os.environ.get('QOS_FREEDOOM_WAD','.deps/wads/freedoom1.wad'))
 
 @unittest.skipUnless(FREEDOOM.exists(),'Freedoom IWAD not present')
 class RealWadTests(unittest.TestCase):

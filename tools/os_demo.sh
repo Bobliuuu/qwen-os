@@ -11,8 +11,8 @@ HERE=$(cd "$(dirname "$0")" && pwd); REPO=$HERE/..
 OUT=${1:-$REPO/build/os_demo}; NF=${2:-40}
 ELF=${ELF:-$REPO/build/qwenos-live-doomdmc-m3.elf}
 KELF=$REPO/build/kernel-live.elf; DOOMELF=${DOOMELF:-$REPO/build/doomdmc-m3/doomd.elf}
-DISK=${DISK:-$REPO/../engine/DMC100-Doom/build/sw/nor/E1.img}
-if [ -z "$WAD" ]; then for w in "$REPO/../wads/freedoom1.wad" "$REPO/../../wads/freedoom1.wad"; do [ -f "$w" ] && WAD=$w && break; done; fi
+DISK=${DISK:-$REPO/.deps/engine/DMC100-Doom/build/sw/nor/E1.img}
+if [ -z "$WAD" ]; then for w in "$REPO/.deps/wads/freedoom1.wad"; do [ -f "$w" ] && WAD=$w && break; done; fi
 mkdir -p "$OUT/frames"
 [ -x "$REPO/build/rv32_fast" ] || cc -O2 -o "$REPO/build/rv32_fast" "$REPO/tools/rv32_fast.c"
 if [ ! -f "$ELF" ]; then

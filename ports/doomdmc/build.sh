@@ -4,7 +4,7 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$HERE/../..
-DMC=${DMC:-$REPO/../engine/DMC100-Doom}
+DMC=${DMC:-$REPO/.deps/engine/DMC100-Doom}
 GEN=${GEN:-$DMC/build/sw/gen}
 OUT=${1:-$HERE/../../build/doomd}
 LLVM=${LLVM:-/opt/homebrew/opt/llvm/bin}

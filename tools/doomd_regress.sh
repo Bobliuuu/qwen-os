@@ -23,7 +23,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 GOLD=$ROOT/tests/golden
 OUT=${REGRESS_OUT:-$ROOT/build/regress}
-export DMC=${DMC:-$ROOT/../engine/DMC100-Doom}
+export DMC=${DMC:-$ROOT/.deps/engine/DMC100-Doom}
 IMG=${IMG:-$DMC/build/sw/nor/E1.img}
 [ -z "${ORIG_H:-}" ] && [ -f "$ROOT/../base/v0long.h" ] && ORIG_H=$ROOT/../base/v0long.h
 UPDATE= NOBUILD= CLEAN= FAILPERF= T1=260 T2=100

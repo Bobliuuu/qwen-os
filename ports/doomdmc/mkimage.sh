@@ -1,9 +1,9 @@
 #!/bin/bash
 # usage: mkimage.sh DMC_WORKCOPY LAYOUT.json OUTDIR   -> OUTDIR/E1/{DOOM.DAT,..}, OUTDIR/E1.img
 # DMC_WORKCOPY must be a writable DMC100-Doom checkout (the converter builds its host dumper in
-# its build/ dir). IWAD defaults to ../wads/freedoom1.wad.
+# its build/ dir). IWAD defaults to .deps/wads/freedoom1.wad.
 set -e
-DMC=$1; LAY=$2; OUT=$3; IWAD=${IWAD:-../wads/freedoom1.wad}
+DMC=$1; LAY=$2; OUT=$3; IWAD=${IWAD:-.deps/wads/freedoom1.wad}
 LLVM=${LLVM:-/opt/homebrew/opt/llvm/bin}; export PATH=$LLVM:$PATH
 W=$(mktemp -d); printf '#!/bin/bash\nllvm-nm "$@" | sed -E "s/^_//"\n' > $W/nm; chmod +x $W/nm   # macOS: strip the _ prefix
 mkdir -p "$OUT"
