@@ -29,6 +29,10 @@ class LiveShell(unittest.TestCase):
         self.assertEqual(cpu.exitcode,0)
         self.assertTrue(out.startswith('$ ls\n/README\n/bin/sh\n'))
         self.assertIn('/bin/doomd\n/tmp/note\n/tmp/log\n$ echo hi there > /tmp/note\n$ cat /tmp/note\nhi there\n$ nope\n?\n$ run /bin/nope\n?\n$ run /bin/paint\npaint: framebuffer changed\n$ exit\n',out)
+    def test_help_and_doom_alias(self):
+        cpu,d,out=session('help\ndoom\nexit\n',limit=2000000)
+        self.assertEqual(cpu.exitcode,0)
+        self.assertRegex(out,r'(?s)\$ help\nls cat echo.*\$ doom\ndoomd: takeover\n.*QWENOS_DOOMD_EXIT\n\$ exit\n')
     def test_backspace_and_empty_line(self):
         cpu,d,out=session('lx\x08s\n\n')
         self.assertIn('$ lx\x08 \x08s\n/README',out); self.assertTrue(out.endswith('$ \n$ '))
@@ -44,7 +48,7 @@ class LiveShell(unittest.TestCase):
         self.assertEqual(cpu.exitcode,0)
         self.assertRegex(out,r'(?s)doomd: takeover\n.*DOOMD_STUB_OK\nQWENOS_DOOMD_EXIT\n\$ exit\n')
 
-DOOM=ROOT/'build/qwenos-live-doomdmc-m3.elf';E1=ROOT/'../engine/DMC100-Doom/build/sw/nor/E1.img'
+DOOM=ROOT/'build/qwenos-live-doomdmc-m3.elf';E1=ROOT/'.deps/engine/DMC100-Doom/build/sw/nor/E1.img'
 FAST=ROOT/'build/rv32_fast'
 @unittest.skipUnless(DOOM.exists() and E1.exists() and FAST.exists(),'live DOOM image / E1.img / rv32_fast needed')
 class LiveDoom(unittest.TestCase):

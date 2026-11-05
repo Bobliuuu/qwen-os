@@ -3,7 +3,7 @@ The test plays the human: it types into a pseudo-terminal and reads what a termi
 import fcntl,os,pty,re,select,struct,subprocess,sys,termios,time,unittest
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-E1=ROOT/'../engine/DMC100-Doom/build/sw/nor/E1.img'
+E1=ROOT/'.deps/engine/DMC100-Doom/build/sw/nor/E1.img'
 FAST=ROOT/'build/rv32_fast'
 
 class Term:
@@ -77,5 +77,17 @@ class LiveDoomPty(unittest.TestCase):
         t.type('\x1d');self.assertEqual(t.finish(),0)
         m=re.search(rb'QwenOS live: quit key after (\d+) guest instructions, (\d+) frames shown',t.buf)
         self.assertTrue(m);self.assertGreater(int(m.group(1)),3_000_000);self.assertGreaterEqual(int(m.group(2)),10)
+
+@unittest.skipUnless(need(FAST,DOOM,E1),'live DOOM image needed (make live-doom builds it)')
+class LiveTranscript(unittest.TestCase):
+    def test_auto_tour_then_doom_frames_as_ascii(self):
+        sys.path.insert(0,str(ROOT/'tools'))
+        import live_transcript
+        buf=live_transcript.run(2)
+        self.assertIn(b'tier T0',buf)
+        for pat in (rb'\$ help\r\n',rb'\$ ls\r\n/README',rb'hello qwenos\r\n',rb'\$ run /bin/doomd',rb'DOOMD_LEVEL_START e1m1'):
+            self.assertRegex(buf,pat)
+        fr=live_transcript.frames_ascii(buf)
+        self.assertGreaterEqual(len(fr),2);self.assertGreater(len(set(''.join(fr[0]))),2)   # a real picture, not blank
 
 if __name__=='__main__':unittest.main()

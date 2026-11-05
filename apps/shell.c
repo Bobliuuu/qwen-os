@@ -1,7 +1,7 @@
 #ifdef SHELL_LIVE
 /* Interactive shell: reads typed keys from the keyboard mailbox (KEY_WAIT parks the guest until
  * the device injects a key), echoes them, handles backspace/Enter and runs ls, cat, echo [> file],
- * run /bin/X, exit. ~1.3 KiB; must stay inside its 4 KiB ROM slot. */
+ * run /bin/X, help, doom (= run /bin/doomd), exit. ~1.3 KiB; must stay inside its 4 KiB ROM slot. */
 #include "qos.h"
 #define PC(c) qcall(a,QOS_SYS_PUTC,(c),0,0)
 static void ps(const qos_api *a,const char *s){while(*s)PC((uint8_t)*s++);}
@@ -47,6 +47,8 @@ int app_main(const qos_api *a){
    say(a,fd,"\n");
    if(fd!=~0u)qcall(a,QOS_SYS_CLOSE,fd,0,0);
   }
+  else if(eq(cmd,"help"))ps(a,"ls cat echo [> f] run /bin/X doom exit\n");
+  else if(eq(cmd,"doom")){if(qcall(a,QOS_SYS_EXEC,(uintptr_t)"/bin/doomd",0,0)==~0u)ps(a,"?\n");}
   else if(eq(cmd,"run")&&ac>1){if(qcall(a,QOS_SYS_EXEC,(uintptr_t)av[1],0,0)==~0u)ps(a,"?\n");}
   else if(eq(cmd,"exit"))return 0;
   else ps(a,"?\n");
