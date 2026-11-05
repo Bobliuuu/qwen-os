@@ -165,8 +165,9 @@ def render():
                         ('Real screen capture of tools/qwenos_live.sh, typed by a script with human-like delays.', small, GR)])
     outro = title_card([('What this video is not', big, LB),
                         ('Tier T0 only. The Qwen model ran none of this.', med, AM),
-                        ('On the real Qwen model each displayed frame takes about 28 minutes of GPU time on average (ledger: 76,399 s of chunk wall time for 45 frames, 81 M guest instructions at about 1.1 k instr/s).', med, WH),
+                        ('On the real Qwen model each displayed frame takes about 18 minutes of GPU time (steady-state patched driver, median 1,679 instr/s, about 1.8 M guest instructions per frame).', med, WH),
                         ('That is why the model run was cut into 35 chunks (29 Modal A100, 3 Lambda A100, 3 AWS A10G) to produce the 3 s, 45-frame E1M1 clip. Emulator speed here is not model speed.', med, WH),
+                        ('Dividing the whole clip\'s chunk wall time by 45 gives ~28 min, but that includes the slow early chunks on the unpatched driver, cold boot and mixed GPUs, so 18 min is the representative figure.', small, GR),
                         ('Source: docs/CLIP_LEDGER.md and README "What is real". The typed run /bin/doomd flow itself is not model-verified.', small, GR)])
     def chrome(img, phase, instr, frame, doomstate):
         d = ImageDraw.Draw(img)
@@ -234,7 +235,7 @@ def render():
         if k < 7:
             d.text((px_inset, 200), '+%s instr since previous frame' % '{:,}'.format(s[2] - prev_instr), font=small, fill=AM)
             d.text((px_inset, 226), 'T0 emulator: %.2f s wall for this frame' % 0.0 if False else 'T0 emulator: about 15 ms per frame (measured here)', font=small, fill=GR)
-            d.text((px_inset, 252), 'Qwen model: ~28 min per frame (ledger avg)', font=small, fill=AM)
+            d.text((px_inset, 252), 'Qwen model: ~18 min per frame (steady state)', font=small, fill=AM)
         prev_instr = s[2]
         emit(im, frame_secs[min(k, len(frame_secs) - 1)])
     emit(outro, 10.0)
