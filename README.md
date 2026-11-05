@@ -73,7 +73,7 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 > - 🕹️ **Play it:** `make live-doom` on the host emulator (not the model). See [boot it yourself](#-watch-it-boot-then-play-it).
 
 <!-- V2:PROGRESS -->
-🎯 **Model-decoded frames: 0 of 45** (byte-exact vs the emulator). In flight: frames 12 to 19, 8 frames running or launching. Not yet counted until verified. <i>Last updated 22:12.</i>
+🎯 **Model-decoded frames: 4 of 45** (frames 12 to 15, byte-exact vs the emulator, rows 0-199, every byte a model-emitted token checked in lockstep with zero divergence). In flight: frames 16 to 19. <i>Last updated 22:26.</i>
 <!-- /V2:PROGRESS -->
 
 ---
