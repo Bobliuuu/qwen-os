@@ -227,6 +227,18 @@ def render():
     def emit(im, secs):
         nonlocal n
         for _ in range(int(round(secs * FPS))): im.save(outdir / ('f%05d.png' % n), compress_level=1); n += 1
+    # cold-open hook: the published 3 s E1M1 clip (45 frames, 15 fps), shown twice, nearest-neighbour, caption bar throughout
+    hook = []
+    for k in range(len(insets)):
+        im = Image.new('RGB', (W, H), BG); d = ImageDraw.Draw(im)
+        im.paste(Image.open(insets[k]).convert('RGB').resize((896, 672), Image.NEAREST), ((W - 896) // 2, 0))
+        d.rectangle([0, H - 48, W, H], fill=(30, 34, 44))
+        d.text((24, H - 38), 'Real DOOM frames. Every instruction behind these 45 frames was checked on the Qwen model.', font=small, fill=WH)
+        hook.append(im)
+    for _ in range(2):
+        acc = 0.0
+        for im in hook:  # 15 fps content on the 20 fps timeline
+            nxt = acc + FPS / 15.0; emit(im, (round(nxt) - round(acc)) / FPS); acc = nxt
     emit(intro, 4.5); emit(c_what, 7.0); emit(c_watch, 7.0)
     # shell/boot timeline in virtual time; skip states before first output
     pre = [s for s in states if s[4] != 'doom']
