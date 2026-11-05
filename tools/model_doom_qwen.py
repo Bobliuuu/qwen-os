@@ -331,6 +331,7 @@ def main():
                     help='per-segment text-token cap (default tool call + byte echoes + 400)')
     ap.add_argument('--k-graph', type=int, default=64, help='K>1 (default 64; 0 or 1 = old per-token loop): K executor tokens per CUDA graph with bulk lockstep verification (tools/kgraph.py)')
     ap.add_argument('--k-pipe', action='store_true', help='with --k-graph: launch block i+1 before syncing block i (speculative on the oracle tokens; every block is still verified)')
+    ap.add_argument('--fast-kernels', action='store_true', help='split/fused Triton executor kernels (needs the patched tritonexec.py of perf/ktoken: tools/tritonexec_fast.py shipped in qwenputer/chipformer/rv)')
     ap.add_argument('--no-executor', action='store_true', help='HF chip layers (~250 tok/s), not the executor')
     ap.add_argument('--out', default='model_doom_out.bin', help='console bytes the run produced')
     ap.add_argument('--tok-per-s', type=float, default=3200.0, help='for the time estimate only')
@@ -387,6 +388,10 @@ def main():
         # (instructions); chunk-ROM segments are whole frames (2.5M+ instr), so raise the limit (python ref ~100k instr/s).
         bridge.Session.qwen.__defaults__ = (args.lock_max_records, True)
         bridge.Session.run.__defaults__ = (args.lock_max_records,)
+        if args.fast_kernels:
+            from chipformer.rv import tritonexec as _tx
+            for k_, v_ in dict(SPLIT=True, CH=16, GW=4, H2W=4, BLOCK=4, FW=1, FUSE=True).items():
+                setattr(_tx.Executor2, k_, v_)
         if args.k_graph > 1:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
             import kgraph
