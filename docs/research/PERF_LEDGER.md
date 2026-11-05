@@ -83,4 +83,13 @@ PASS (real model, lockstep, A100, `--k-graph 64`): combined ELF segments 1:4 run
 
 ## OLD vs COMBINED build
 
-COMBINED_PENDING
+A100-40GB, first chunk from reset (segments 1:4), lockstep on, each row one run. OLD = published ELF (81,065,587 instr clip), plan with `--split-steps 1708864`; COMBINED = final build 1a718be0 (compiler + hotloops + sim; clip 72,277,308 instr, -10.8%), plan `chunks35.plan` c00. The two chunks cover different amounts of boot work (boundaries differ), so compare per million.
+
+| build | driver | instructions | chip tokens | model s | instr/s | chip tok/s | s per M instr | s per M chip tok | slow blocks / lockstep errors |
+|---|---|---|---|---|---|---|---|---|---|
+| OLD | K=0, old kernels | 1,819,896 | 2,564,928 | 1,088.5 | 1,672 | 2,356 | 598.1 | 424.4 | n.a. / 0 |
+| OLD | K=64, old kernels | 1,819,896 | 2,564,928 | 745.6 | 2,441 | 3,440 | 409.7 | 290.7 | 0 / 0 |
+| COMBINED | K=64 + fast kernels | 3,111,015 | 4,410,315 | 873.4 | 3,562 | 5,050 | 280.7 | 198.0 | 0 / 0 |
+
+GPU memory peak 19.08 GB (combined, fast kernels). Not run (cut to free Modal containers for other work): COMBINED with K=0 and with K=64 old kernels. So the combined row mixes the build gain and the driver/kernel gain; use the per-instruction column to separate: the driver+kernel gain alone is OLD K=0 598.1 -> 280.7 s/M instr only if the instruction mix of the two chunks were equal, which it is not exactly (compiler gain also changes cost per instruction through tokens per instruction: 1.4175 combined vs 1.4094 old here).
+Per M chip token: 424.4 -> 198.0 s = 2.14x (K=64 + fast kernels, plus the build). Arithmetic projection for the whole 45-frame clip at the combined rate, serial on one A100: 72.28M instr x 280.7 s = about 20,300 s (5.6 h) versus the old clip at the old K=0 rate 81.07M x 598.1 s = about 48,500 s (13.5 h); chunks are independent so wall time with N GPUs is about that divided by N (plus the largest chunk). This projection is arithmetic from one chunk, not a measured end-to-end run.
