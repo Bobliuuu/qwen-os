@@ -444,6 +444,7 @@ def main():
               f'{sum(g["tokens"] for g in segs)} tokens')
         return
     produced, tot_i, tot_t, tot_text, nseg, t0 = bytearray(), 0, 0, 0, 0, time.time()
+    model_emitted = bytearray()   # the BYTE tokens the MODEL generated (compared with the host console bytes per segment)
     model_chip = 0
     nver = 0
     model_secs = 0.0
@@ -518,6 +519,7 @@ def main():
             ok = (st['halt'] and bytes(got) == seg['out']
                   and oracle.steps - seg['start_steps'] == seg['instr'] + 1)
             model_chip += st['chip']; tot_text += st['text']
+            model_emitted += bytes(got)
         detail.append([nseg, bool(ok), seg['markers'], seg['instr'], seg['tokens']])
         reasons[seg['reason']] = reasons.get(seg['reason'], 0) + 1
         tot_i += seg['instr']; tot_t += seg['tokens']
@@ -528,6 +530,8 @@ def main():
             print(f'seg {nseg} {seg["reason"]} instr={seg["instr"]} tokens={seg["tokens"]} '
                   f'stop_pc={seg["stop_pc"]:#x} ok ({time.time()-t0:.0f}s)', flush=True)
     Path(args.out).write_bytes(bytes(produced))
+    if model_emitted:
+        Path(str(args.out) + '.model').write_bytes(bytes(model_emitted))
     import socket
     try:
         import torch
