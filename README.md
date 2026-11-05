@@ -126,7 +126,7 @@ Branch `perf/ktoken`, not yet merged.
 
 **E4: fixed costs.** A text token costs 45 ms warm, plus 0.21 s fixed per segment.
 
-**Why 18 minutes will not become 18 seconds:** with the GPU kernel floor (about 240 us per token on A100), only the host overhead can be trimmed. The final old-vs-combined benchmark is the pending row above.
+**Why 18 minutes will not become 18 seconds any time soon:** each token costs about 240 us of GPU kernel time on an A100 (the floor today), and a frame needs about 1.8 M instructions, roughly 2.5 M tokens. Three levers remain: fewer instructions (compiler, hot loops, presets), less overhead per token (block verification, 1.54x measured), and faster kernels (the `head` kernel is half the GPU time; being worked on). The final old-vs-combined benchmark is the pending row above.
 
 <p align="center"><img src="docs/assets/bottleneck-pie.svg" alt="Pie chart of instruction share by function: R_ColumnLoop 18.7 percent, R_ReplayWall 12.2, rec_get 7.7, rc_fill 4.5, everything else 56.9" width="100%"></p>
 
