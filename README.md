@@ -154,26 +154,41 @@ make live-doom LIVE_ARGS=--auto   # same, but it types a shell tour and `run /bi
 Other handy targets: `CHUNKROM=1 make demo-live` (typed-flow image) and `tools/doomd_regress.sh` (frame and state goldens).
 
 
-## 📉 Fewer instructions: down 16.8%
+## 📉 How much we pushed down, in total
 
-<p align="center"><img src="docs/assets/instruction-diet.gif" alt="Animated bars: instructions per 350 DOOM tics fall from 180.6 M to 150.2 M, down 16.8 percent" width="100%"><br><sub>Animated SVG version: <a href="docs/assets/instruction-diet.svg">docs/assets/instruction-diet.svg</a></sub></p>
+<p align="center"><img src="docs/assets/total-reduction.gif" alt="Animated before and after bars: instructions per tic 10.47 M to 0.43 M, disk pauses 165,054 to 4, model speed 1,100 to 3,562 instructions per second, time per frame 27 to 7.5 minutes" width="100%"><br><sub>Animated SVG version: <a href="docs/assets/total-reduction.svg">docs/assets/total-reduction.svg</a></sub></p>
 
-Every guest instruction costs the model about 1.4 tokens, so fewer instructions means less waiting. Over 350 tics of E1M1 (same picture, hashes identical to the goldens), these are **host-emulator counts**:
+From the first working DOOM port to now, across the instruction count, the disk traffic, the model's speed and the time per frame:
+
+| What | Before | Now | Change | How we know |
+|---|---|---|---|---|
+| 🎲 Instructions per game tic (mean) | 10.47 M (first profiled E1M1 build) | 0.43 M (150.16 M over 350 tics) | **about 24x fewer** | host emulator; includes visual choices (drawing 15 of 35 tics for 15 fps, the 160x200 FULL preset) |
+| 🧮 Of that, the exact cuts only (same picture) | 180.55 M per 350 tics | 150.16 M | **-16.8%** instructions, -19.4% chip tokens | host emulator, hashes identical to the goldens |
+| 💽 Disk pauses (350 tics) | 165,054 | 4 | **-99.998%** | host emulator; costs about 10% more instructions (180.5 M to 199.7 M on the original build) |
+| 🎞️ The 3-second clip (45 frames) | 81.07 M instructions | 72.28 M | **-10.8%** | host emulator, published build vs combined build |
+| ⚡ Model speed, A100 | about 1,100 instr/s (672 with the original driver) | 3,562 instr/s | **3.2x** (5.3x vs the original driver) | measured, lockstep on, boot chunk |
+| 🪙 Chip tokens per second | 1,454 | 5,050 | **3.5x** | measured, different chunks |
+| 🔧 GPU time per token | 242 µs | 162 µs | **-33%** | measured microbench, A100, bit-exact kernels |
+| ⏱️ Time per game tic on the model | about 7.4 min | about 2.0 min | **3.7x faster** | derived from the rows above |
+| 🖼️ Time per displayed frame on the model | about 27 min (45 min with the original driver) | about 7.5 min | **3.6x faster** (6x vs the original driver) | projection from measured chunk speeds |
+| 🏁 Gap to real time (15 fps = 0.067 s per frame) | about 24,000x (40,000x originally) | about 6,700x | | projection |
+
+How the first row came about: the early build (DEMO1/E1M1, one draw per tic) cost 10.47 M instructions per tic; caches and inline disk reads took that to 3.52 M, then the render, syscall and RAM patches, flat floors and low detail, and finally drawing 15 of 35 tics brought the mean to about 0.5 M. Drawing every tic would still cost 979 k per tic, about twice the 15 fps mean. The second row is the part that is exact, with an identical picture. Details: [`HISTORY.md`](docs/HISTORY.md), [`TIMELINE.md`](docs/research/TIMELINE.md), [`COMPILER_BENCH.md`](docs/research/COMPILER_BENCH.md), [`HOTLOOPS.md`](docs/research/HOTLOOPS.md), [`COMBINED.md`](docs/research/COMBINED.md), [`PRESETS.md`](docs/research/PRESETS.md).
+
+<details>
+<summary><b>📉 The exact instruction cuts, step by step</b></summary>
+
+<p align="center"><img src="docs/assets/instruction-diet.gif" alt="Animated bars: instructions per 350 DOOM tics fall from 180.6 M to 150.2 M, down 16.8 percent" width="100%"></p>
 
 | Step | Instructions | Chip tokens | vs the original build |
 |---|---|---|---|
 | Original build (-O2) | 180.55 M | 259.04 M | baseline |
-| + LTO, Zba, hot code at -O3 | 164.51 M | 238.22 M | **-8.9% instructions**, -8.0% tokens |
-| + wall columns drawn in word runs | 152.01 M | 211.24 M | **-15.8% instructions**, -18.4% tokens |
-| + faster `memcpy`/`memset` and `FixedDiv` (all combined) | 150.16 M | 208.78 M | **-16.8% instructions**, -19.4% tokens |
-| The 3-second clip (45 frames): published build vs combined build | 81.07 M | 72.28 M | **-10.8% instructions** |
+| + LTO, Zba, hot code at -O3 | 164.51 M | 238.22 M | -8.9% instructions, -8.0% tokens |
+| + wall columns drawn in word runs | 152.01 M | 211.24 M | -15.8%, -18.4% |
+| + faster `memcpy`/`memset` and `FixedDiv` (combined) | 150.16 M | 208.78 M | -16.8%, -19.4% |
 
-- 🧮 **Each change on its own** (vs the -O2-tuned build): the compiler step is -8.9%, the wall-column runs are -7.6%, and the memory and divide helpers are -1.1%. They do not add up exactly; the combined build is -8.7% vs the compiler step alone.
-- 🪙 **Tokens fall more than instructions** because a word store costs 1 chip token and a byte store costs 4.
-- ✅ **What did not help:** `-Os` (+2.1% instructions), `-Oz` (+11.5%), `-mno-relax` (+7.5%), plain `-O3` (-0.5%), and function reordering (no change). Details in [`docs/research/COMPILER_BENCH.md`](docs/research/COMPILER_BENCH.md), [`HOTLOOPS.md`](docs/research/HOTLOOPS.md) and [`COMBINED.md`](docs/research/COMBINED.md).
-- 💽 **Chunk ROM** removes host round trips, not instructions: the engine used to ask the host for each disk block (**165,054 host-served disk requests**, each pausing the guest), and now reads from a pre-filled data-ROM window (**4 requests**). It costs some instructions (about 180.5 M becomes 199.7 M on the original build), which is why the model run uses it anyway: the guest can no longer stop and wait for the host mid-run.
-- 🎚️ **Visual tradeoffs, not in the default build:** the `lite` preset cuts another 12.2% of instructions and `fast` cuts 40.2%, at the same 15 fps, by cropping, dropping the status bar and halving the columns (see [`PRESETS.md`](docs/research/PRESETS.md)).
-- ⚠️ These are instruction counts on the host emulator. The model-side speed-ups (block verification, fused kernels, 2.14x per chip token) are in the speed section below.
+Tokens fall more than instructions because a word store costs 1 chip token and a byte store costs 4. These did not help: `-Os` (+2.1%), `-Oz` (+11.5%), `-mno-relax` (+7.5%), plain `-O3` (-0.5%), function reordering (no change). Visual tradeoffs outside the default build: the `lite` preset cuts another 12.2% and `fast` cuts 40.2%, at the same 15 fps.
+</details>
 
 ## 🐢 How fast is it, really?
 
