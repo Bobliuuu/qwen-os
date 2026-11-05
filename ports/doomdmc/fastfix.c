@@ -67,6 +67,10 @@ fixed_t FixedDiv(fixed_t a, fixed_t b)
     uint32_t q;
     if (!(ua >> 16))
         q = (ua << 16) / ub;
+    else if (ub < 65536u) {   /* ua >> 14 < ub: q_hi < 2^14; r < ub < 2^16 so r << 16 fits and (q_hi << 16) + (r << 16) / ub is exact */
+        uint32_t qh = ua / ub, r = ua - qh * ub;
+        q = (qh << 16) + (r << 16) / ub;
+    }
     else if ((ua >> 14) < ub)
         q = divlu(ua >> 16, ua << 16, ub);
     else
