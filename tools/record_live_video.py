@@ -163,12 +163,43 @@ def render():
                         ('tier T0: guest RV32IM on the host emulator, not the Qwen model', med, AM),
                         ('Everything in the terminal is guest code (kernel, shell, DOOM) executed by build/rv32_fast on a laptop CPU. The host only forwards keys, serves disk blocks and paints the framebuffer.', med, WH),
                         ('Real screen capture of tools/qwenos_live.sh, typed by a script with human-like delays.', small, GR)])
+    def info(head, lines, foot=None):
+        im = Image.new('RGB', (W, H), BG); d = ImageDraw.Draw(im)
+        d.rectangle([0, 0, W, 52], fill=(30, 34, 44))
+        d.text((24, 13), 'QwenOS live   |   tier T0: guest RV32IM on the host emulator, not the Qwen model', font=sansb, fill=AM)
+        d.text((60, 90), head, font=big, fill=LB); y = 175
+        for txt, c in lines:
+            for ln in wrap(txt, med, W - 140, d):
+                d.text((60, y), ln, font=med, fill=c); y += 42
+            y += 16
+        if foot: d.text((60, H - 50), foot, font=small, fill=GR)
+        return im
+    c_what = info('1. What this is', [
+        ('Qwenputer (upstream divagr18/qwenputer) compiles a 32-bit RISC-V CPU (RV32IM) into the WEIGHTS of Qwen3.5-4B. No training.', WH),
+        ('The 32 KiB of RAM is Gated DeltaNet state. There is no KV cache.', WH),
+        ('Every guest instruction costs about 1.4 tokens.', AM)])
+    c_watch = info('2. What you are watching', [
+        ('Tier T0: our fast host emulator running the same program. NOT the model.', AM),
+        ('The same program has been run on the real Qwen model (tier T2), with upstream\'s reference CPU (T1) checking every token.', WH),
+        ('Identical results on everything tested (T0, T1, T2).', WH)])
+    c_model = info('3. What the model actually did', [
+        ('Verified the typed boot, shell, run /bin/doomd flow to the first frame: 3 A100 chunks, 3,335,072 instructions, 26 segments, zero divergence, console output byte-identical.', WH),
+        ('Verified the 3 s E1M1 clip: 45 frames, 35 chunks.', WH),
+        ('Emitted frame pixel bytes itself as console BYTE tokens (~32,100 bytes per frame, lockstep-checked). First model-decoded frames: in progress.', AM)])
+    c_slow = info('4. How slow', [
+        ('About 8 to 10 minutes of A100 time per displayed frame now (projection from measured chunk speeds). About 18 minutes before the speed-ups.', WH),
+        ('Real time at 15 fps needs 0.067 s per frame: we are about 8,000x off.', AM),
+        ('Speed-ups measured on the model: 2.14x per chip token (block verification + fused kernels, bit-exact).', WH)],
+        foot='Footnote: dividing the whole clip\'s wall time by 45 frames gives about 28 minutes.')
+    c_honest = info('5. Honest bits', [
+        ('The host forwards keys, serves disk blocks and writes PNGs.', WH),
+        ('Input is scripted in the clip. The clock is virtual.', WH),
+        ('The 3 s clip is stitched from separately verified chunks.', WH),
+        ('The Qwen model did not run this recording. Emulator speed here is not model speed.', AM)],
+        foot='Source: docs/CLIP_LEDGER.md, docs/LIVE_DEMO.md and README "What is real".')
     outro = title_card([('What this video is not', big, LB),
                         ('Tier T0 only. The Qwen model ran none of this.', med, AM),
-                        ('On the real Qwen model each displayed frame takes about 18 minutes of GPU time (steady-state patched driver, median 1,679 instr/s, about 1.8 M guest instructions per frame).', med, WH),
-                        ('That is why the model run was cut into 35 chunks (29 Modal A100, 3 Lambda A100, 3 AWS A10G) to produce the 3 s, 45-frame E1M1 clip. Emulator speed here is not model speed.', med, WH),
-                        ('Dividing the whole clip\'s chunk wall time by 45 gives ~28 min, but that includes the slow early chunks on the unpatched driver, cold boot and mixed GPUs, so 18 min is the representative figure.', small, GR),
-                        ('Source: docs/CLIP_LEDGER.md and README "What is real". The typed run /bin/doomd flow itself is not model-verified.', small, GR)])
+                        ('Model-run evidence: docs/CLIP_LEDGER.md', med, WH)])
     def chrome(img, phase, instr, frame, doomstate):
         d = ImageDraw.Draw(img)
         d.rectangle([0, 0, W, 52], fill=(30, 34, 44))
@@ -197,7 +228,7 @@ def render():
     def emit(im, secs):
         nonlocal n
         for _ in range(int(round(secs * FPS))): im.save(outdir / ('f%05d.png' % n), compress_level=1); n += 1
-    emit(intro, 4.5)
+    emit(intro, 4.5); emit(c_what, 7.0); emit(c_watch, 7.0)
     # shell/boot timeline in virtual time; skip states before first output
     pre = [s for s in states if s[4] != 'doom']
     doom_states = []
@@ -235,10 +266,10 @@ def render():
         if k < 7:
             d.text((px_inset, 200), '+%s instr since previous frame' % '{:,}'.format(s[2] - prev_instr), font=small, fill=AM)
             d.text((px_inset, 226), 'T0 emulator: %.2f s wall for this frame' % 0.0 if False else 'T0 emulator: about 15 ms per frame (measured here)', font=small, fill=GR)
-            d.text((px_inset, 252), 'Qwen model: ~18 min per frame (steady state)', font=small, fill=AM)
+            d.text((px_inset, 252), 'Qwen model: ~8-10 min per frame (A100, projected)', font=small, fill=AM)
         prev_instr = s[2]
         emit(im, frame_secs[min(k, len(frame_secs) - 1)])
-    emit(outro, 10.0)
+    emit(c_model, 8.0); emit(c_slow, 8.0); emit(c_honest, 7.0); emit(outro, 4.0)
     print('frames', n, 'duration %.1f s' % (n / FPS))
     OUT.mkdir(parents=True, exist_ok=True)
     mp4 = OUT / 'qwenos-live-boot.mp4'; gif = OUT / 'qwenos-live-boot.gif'

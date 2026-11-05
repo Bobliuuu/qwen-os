@@ -135,7 +135,15 @@ make check                                                      # everything (ne
 
 ## Screen-recording video
 
-`docs/assets/qwenos-live-boot.mp4` (1280x720, 20 fps, about 36 s) and `qwenos-live-boot.gif` (800 px, 10 fps) show the boot, the typed shell tour (`help`, `ls`, `cat /README`, `echo > /tmp/note`, `cat`), the typed `run /bin/doomd` and the first DOOM frames. Reproduce:
+`docs/assets/qwenos-live-boot.mp4` (1280x720, 20 fps, about 67 s) and `qwenos-live-boot.gif` (800 px, 10 fps) are built from these segments, in order:
+
+1. Intro card (4.5 s): tier T0, not the model.
+2. Explainer cards "What this is" and "What you are watching" (7 s each): Qwenputer compiles RV32IM into the weights of Qwen3.5-4B, RAM is Gated DeltaNet state, about 1.4 tokens per guest instruction; T0 is the host emulator, T1/T2 are upstream's reference CPU and the real model, identical on everything tested.
+3. Real captured terminal: boot, typed shell tour (`help`, `ls`, `cat /README`, `echo > /tmp/note`, `cat`), typed `run /bin/doomd`, then the DOOM frames with the instruction counter panel.
+4. Explainer cards "What the model actually did" (8 s), "How slow" (8 s), "Honest bits" (7 s): the verified typed flow (3 A100 chunks, 3,335,072 instructions, 26 segments, zero divergence), the 45-frame, 35-chunk clip, model-emitted pixel bytes (count of byte-exact frames: in progress, taken from `out/clip_modelpixels/STATUS.md`), about 8 to 10 minutes of A100 per frame now (about 18 before the speed-ups, 2.14x per chip token measured, about 8,000x off real time, footnote about 28 minutes by whole-clip division), and what the host does and does not do.
+5. Closing card (4 s).
+
+Reproduce:
 
 ```sh
 python3 -m venv /tmp/v && /tmp/v/bin/pip install pyte pillow     # outside the repo
@@ -149,4 +157,4 @@ What is honest in it:
 * Tier T0 (guest RV32IM on the host emulator `rv32_fast`) is in the title bar of every frame and on the intro and closing cards. The Qwen model ran none of it.
 * Terminal text and the 32 x 24 game picture are the real captured output. Idle gaps are capped at 0.9 s, and the DOOM frames are shown at about 1 s each: the emulator produced all 14 frames in 0.2 s (about 15 ms per frame, 1.8 M instructions each), so the slowdown (about 60x) is stated on screen.
 * The 320 x 240 inset is NOT from this session. It is from the separate scripted clip run (`CLIP_LEDGER.md` frames, walking), so it moves while the terminal picture (no keys pressed) stays still. It is labeled as such.
-* Closing card: on the real model a displayed frame costs about 18 minutes of GPU time (steady-state patched driver, median 1,679 instr/s, about 1.8 M instructions per frame), hence the 35 chunks. A footnote says that dividing the whole clip's chunk wall time (76,399 s) by 45 gives about 28 minutes, but that includes the slow early chunks on the unpatched driver, cold boot and mixed GPUs, so 18 minutes is the representative figure.
+* Explainer cards: model-side numbers (about 8 to 10 minutes of A100 per displayed frame now, a projection from measured chunk speeds; about 18 minutes before the speed-ups; about 28 if the whole clip's chunk wall time is divided by 45, which includes slow early chunks, cold boot and mixed GPUs) are stated as such. The DOOM panel caption uses the same projection. The cards are text only; the model did not produce any frame in this recording.
