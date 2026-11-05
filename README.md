@@ -73,6 +73,8 @@ Short answer: **very slow, and we are upfront about it.** 😅 Here it is in hum
 
 **The derivation, step by step** 🧮
 
+> 📝 **Footnote:** you may see about 28 min per frame if you divide the whole 3 s clip's chunk wall time (76,399 s over 45 frames, see [`docs/CLIP_LEDGER.md`](docs/CLIP_LEDGER.md)) by 45. That number is not representative: it includes the slow early chunks that ran on the original, unpatched driver (672 instr/s, GPU about 15% busy), cold-boot cost, and mixed GPU types. 18 min is the steady-state speed of the patched driver at the 1,679 instr/s median.
+
 1. The clip has 45 frames and the run plan is **81,065,587** guest instructions. 81,065,587 / 45 = **1.80 M instructions per frame**.
 2. The model's measured speed (A100) is the median over the 35 chunks: **1,679 instr/s** on the patched driver. The original run was **672 instr/s**.
 3. 1.80 M / 1,679 = about 1,072 s, which is about **18 minutes**. At 672 instr/s the same frame would take about 45 minutes.
@@ -89,10 +91,42 @@ Short answer: **very slow, and we are upfront about it.** 😅 Here it is in hum
 | 🛠️ Compiler: LTO + Zba, hot code `-O3`, cold code `-Os` | **-8.88 %** instructions, **-8.0 %** chip tokens | `perf/compiler` | on branch, not yet merged |
 | 🔁 Hot loop: fill magnified wall columns by texel runs | **-7.60 %** instructions, **-11.33 %** chip tokens (on top of the compiler row) | `perf/hotloops` | on branch, not yet merged |
 | ➕ Cumulative (both rows) | **-15.8 %** instructions, **-18.4 %** chip tokens vs the original | `perf/hotloops` | on branch, not yet merged |
+| 🧹 Sim: `memcpy`/`memset` and `FixedDiv` fast paths (exact, same output) | **-1.12 %** instructions, **-1.03 %** chip tokens | `perf/sim` | on branch, not yet merged |
 | 🎚️ Visual presets `fast` / `lite` | **-40 %** / **-12 %** (at 15 fps) | `perf/presets` | on branch, not yet merged. A **visual tradeoff**, the picture looks worse |
 | 🔬 Basic-block trace: where the work is | hottest block `R_ColumnLoop` is 18.1 % of instructions; the top 100 blocks cover 65.7 %. Fusing blocks into the weights would save only **2-5 %** of tokens and needs a circuit rebuild, so we are not doing it | `perf/bbtrace` | on branch, not yet merged |
-| 🧾 Old vs new **model** benchmark | <!-- PENDING:model-benchmark --> pending | | pending |
-| 🖥️ GPU experiments E1-E4 / B200 | <!-- PENDING:gpu-experiments --> pending | | pending |
+| 🧾 Old vs combined **model** benchmark | <!-- PENDING:model-benchmark --> pending | | pending |
+
+### 🖥️ Measured on the real model (Modal)
+
+> These rows were **measured on the real model, on Modal GPUs**, not on the host emulator.
+
+**E1: how fast can one token go?** Microseconds per chip token (lower is better), on the real model. Columns: graph only / with the host loop / K=16 tokens per graph.
+
+| GPU | graph only | host loop | K=16 per graph |
+|---|---|---|---|
+| A100 | 242 | 283 | 242 |
+| A10G | 319 | 372 | 319 |
+| L4 | 193 | 239 | 193 |
+| L40S | 165 | 186 | 167 |
+| H100 | 203 | 225 | 205 |
+| B200 | could not be scheduled on Modal, $0 spent, unavailable | | |
+
+The GPU kernels (36 per token: attention head 50 %, FFN 32 %, apply 15 %) are the floor. Faster GPUs barely help: an H100 is only 1.19x an A100. The host loop adds about 15 % on top, and K=16 per graph removes it. Branch status: measurement only, no code change to merge.
+
+**E3: verify K tokens in bulk (A100, one chunk, c34, 1.58 M chip tokens).** Every token is still compared to the oracle, with zero lockstep errors.
+
+| K | instr/s | chunk time | speed-up |
+|---|---|---|---|
+| 0 (baseline) | 1,546 | 705.6 s | 1.00x |
+| 16 | 2,275 | 479 s | 1.47x |
+| 64 | 2,353 | 464 s | 1.52x |
+| 256 | 2,375 | 459 s | 1.54x |
+
+Branch `perf/ktoken`, not yet merged.
+
+**E4: fixed costs.** A text token costs 45 ms warm, plus 0.21 s fixed per segment.
+
+**Why 18 minutes will not become 18 seconds:** with the GPU kernel floor (about 240 us per token on A100), only the host overhead can be trimmed. The final old-vs-combined benchmark is the pending row above.
 
 <p align="center"><img src="docs/assets/bottleneck-pie.svg" alt="Pie chart of instruction share by function: R_ColumnLoop 18.7 percent, R_ReplayWall 12.2, rec_get 7.7, rc_fill 4.5, everything else 56.9" width="100%"></p>
 
@@ -168,6 +202,8 @@ A real DOOM engine running on a tiny OS, on a CPU whose every instruction is car
 <summary><b>🐌 Why is it so slow?</b></summary>
 
 Every guest instruction costs about 1.345 generated tokens, and the model produces tokens one after another. One DOOM frame is about 1.8 million instructions, so the GPU does millions of tiny sequential steps per frame. At the median 1,679 instr/s that is about 18 minutes. A normal CPU does the same work in a fraction of a millisecond.
+
+Where do the instructions go? Mostly into drawing. Tics that draw a frame cost 1.1 to 2.2 M instructions, while a tic with no draw costs only about 16 to 37 k, so the median over all tics (about 138 k) looks small. Over the whole run, game logic is about 6 % and rendering about 94 %.
 </details>
 
 <details>
