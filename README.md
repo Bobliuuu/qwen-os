@@ -6,13 +6,15 @@
 
 **A tiny operating system that boots, opens a shell, and runs real DOOM, on a CPU that lives inside a language model.** 🧠💾
 
-<img src="docs/assets/qwenos-doom-3s.gif" alt="3-second E1M1 clip: 45 real DOOM frames whose instruction trace was verified through the Qwen model" width="480">
+<!-- V2:HERO -->
+<img src="docs/assets/qwenos-doom-3s.gif" alt="3-second E1M1 clip (v1): 45 real DOOM frames whose instruction trace was verified through the Qwen model" width="480">
 
-<sub>🔥 <b>These are real DOOM frames</b>: genuine output of the real DOOM engine (DMC100-Doom + Freedoom) running as RISC-V guest code, not mockups. The engine's RISC-V instructions were executed, and the instruction trace behind each of the 45 frames (81,065,591 instructions in all) was verified instruction by instruction through the real Qwen3.5-4B-based CPU, in lockstep with an oracle. The pixel bytes were read out of the guest's memory, as produced by that code, by the emulator; Qwen verified the trace, it did not decode the pixels. Disclosed plainly: 35 boundary instructions were executed by the host, the input is scripted, the clock is virtual, and each chunk starts from a host snapshot. See <a href="#-what-is-real-and-what-is-not">what is real</a>.</sub>
+<sub>🎞️ <b>v2 is being generated.</b> This is the <b>v1</b> clip, shown until the v2 video is ready. In v2 the Qwen model itself emits the pixel bytes; see <a href="#-where-the-pixels-come-from">where the pixels come from</a> and the progress line below.<br>🔥 <b>These are real DOOM frames</b>: genuine output of the real DOOM engine (DMC100-Doom + Freedoom) running as RISC-V guest code, not mockups. In v1, the engine's RISC-V instructions were executed and the instruction trace behind each of the 45 frames (81,065,591 instructions in all) was verified instruction by instruction through the real Qwen3.5-4B-based CPU, in lockstep with an oracle. In this v1 clip the pixel bytes were read out of the guest's memory, as produced by that code, by the emulator; Qwen verified the trace there, it did not emit the pixels. Disclosed plainly: 35 boundary instructions were executed by the host, the input is scripted, the clock is virtual, and each chunk starts from a host snapshot. See <a href="#-what-is-real-and-what-is-not">what is real</a>.</sub>
+<!-- /V2:HERO -->
 
 ![ISA](https://img.shields.io/badge/CPU-RV32IM-5b8def) ![RAM](https://img.shields.io/badge/RAM-32%20KiB-f2c14e) ![engine](https://img.shields.io/badge/engine-DMC100--Doom-c0392b) ![model](https://img.shields.io/badge/model-Qwen3.5--4B-7e57c2) ![license](https://img.shields.io/badge/license-MIT%20%2B%20GPL--2.0-lightgrey) ![status](https://img.shields.io/badge/status-research%20demo-lightgrey)
 
-[⚡ Quick start](#-what-you-can-do-in-30-seconds) · [🧩 How it works](#-how-it-works-in-one-picture) · [🐢 How fast?](#-how-fast-is-it-really) · [📊 Numbers](#-the-numbers) · [🔍 What is real](#-what-is-real-and-what-is-not) · [🎬 The clip](#-the-3-second-clip) · [🙋 FAQ](#-faq-for-humans) · [📖 Glossary](#-glossary) · [📜 License](#license)
+[⚡ Quick start](#-what-you-can-do-in-30-seconds) · [🧩 How it works](#-how-it-works-in-one-picture) · [🐢 How fast?](#-how-fast-is-it-really) · [📊 Numbers](#-the-numbers) · [🔍 What is real](#-what-is-real-and-what-is-not) · [🎬 The clip](#-the-3-second-clip-v1) · [🙋 FAQ](#-faq-for-humans) · [📖 Glossary](#-glossary) · [📜 License](#license)
 
 </div>
 
@@ -20,10 +22,15 @@
 
 > ### 🧾 TL;DR
 > - 🧠 **What:** a 32-bit RISC-V CPU ([Qwenputer](https://github.com/divagr18/qwenputer)) is built into the layers of Qwen3.5. We wrote a small OS for it and ran the real DOOM engine on top.
-> - 🎞️ **Proof:** a 3-second E1M1 clip, 45 frames. Every frame's instruction trace was checked, step by step, by the real model. Zero divergence.
-> - 🐌 **Catch:** one displayed frame takes the model about **18 minutes** of GPU time. Real time would be 0.067 seconds. That is a gap of about **16,000x**. The 3-second clip is about **13 hours** of serial GPU time, run in parallel across 35 chunks.
-> - 🔍 **Honest bit:** pixels are read from guest memory by the emulator, keys are scripted, the clock is virtual. Details below.
-> - 🕹️ **Play it:** on an emulator on your laptop (not on the model). See the [quick start](#-what-you-can-do-in-30-seconds).
+> - 🎨 **v2, the story now:** the model **emits the pixels itself**. The guest dumps each frame as about 32,100 console bytes, every byte comes out of the model as a BYTE token, and every token is checked against a lockstep oracle. The typed flow `boot -> shell -> help/ls -> run /bin/doomd -> first frame` is also model-verified.
+> - 🎯 **Progress:** see the progress line just below. We only count a frame once its model-emitted pixels match the emulator byte for byte.
+> - 🐌 **Catch:** slow. One displayed frame took about **18 minutes** of GPU time in v1 (patched driver). With the v2 speed-ups we project about **8 to 10 minutes** per frame (arithmetic, not a measurement). Real time is 0.067 s per frame, so we are still thousands of times too slow.
+> - 🔍 **Honest bit:** keys are scripted (or come through the key ring), the clock is virtual, the host serves the disk and collects the bytes into PNGs. Details below.
+> - 🕹️ **Play it:** `make live-doom` on the host emulator (not the model). See [boot it yourself](#-boot-it-yourself).
+
+<!-- V2:PROGRESS -->
+🎯 **Model-decoded frames: 0 of 45** (byte-exact vs the emulator). In flight: frames 12 to 19, 8 frames running or launching. Not yet counted until verified. <i>Last updated 22:12.</i>
+<!-- /V2:PROGRESS -->
 
 ---
 
@@ -34,7 +41,7 @@ QwenOS is the little OS we gave it: a kernel, a shell, a keyboard, a 32x24 frame
 Then we asked it to run a *real* DOOM engine ([DMC100-Doom](https://github.com/ArturBieniek4/DMC100-Doom) on [Freedoom](https://freedoom.github.io) data) as an ordinary program, `/bin/doomd`.
 Architecture is inspired by [bobliu-os](https://github.com/Bobliuuu/bobliu-os).
 
-> **Honest summary:** the whole thing works on an emulator. The real Qwen model has verified a cold boot to the first frame marker, and all 45 frames (3 s at 15 fps) of a scripted E1M1 clip, stitched from 35 separately verified chunks. Pixels are read from the guest by the emulator, not decoded by the model. The typed `run /bin/doomd` flow has not been model-verified.
+> **Honest summary:** the whole thing works on an emulator, and the real Qwen model has verified, in lockstep: a cold boot to the first frame marker, the typed flow to the first frame (3 Modal A100 chunks, 3,335,072 instructions, 26 segments, zero divergence, 273 console bytes identical to the emulator), and all 45 frames of the v1 3 s clip (35 chunks) as an instruction trace. In v1 the emulator read the pixels out of memory. In v2 the model emits them; the number of frames done so far is in the progress line above. We do not claim 45 of 45 model-decoded frames until it is true.
 
 ## ⚡ What you can do in 30 seconds
 
@@ -58,19 +65,41 @@ Other handy targets: `CHUNKROM=1 make demo-live` (typed-flow image) and `tools/d
 
 Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one animation per idea.
 
+## 🖼️ Where the pixels come from
+
+<p align="center"><img src="docs/assets/pixels-arch.svg" alt="Animated pipeline: DOOM engine, LCD dump routine, Qwen chip emitting BYTE tokens, lockstep oracle, host writing the PNG" width="100%"></p>
+
+1. 👾 The **real DOOM engine** (guest RISC-V code in ROM) draws a frame into the guest framebuffer.
+2. 📤 A **guest dump routine** (same ROM) writes the frame to the console: about **32,100 bytes** per frame, rows 0-199. The status-bar rows (208-239) are not in a frame's dump.
+3. 🧠 The **Qwen3.5-4B chip** executes every one of those instructions inside its weights, and each pixel byte comes out as a **BYTE token**.
+4. ✅ The **lockstep oracle** compares every token with a reference CPU. One wrong token would be a divergence. We count zero.
+5. 🖥️ The **host** only collects the bytes, applies the palette and writes the PNG.
+
+**What is a BYTE token?** The model normally generates "chip tokens" that carry out an instruction. When the guest writes a byte to the console, the model emits that byte itself as a special BYTE token. So a pixel is literally generated text.
+
+**Why were the pixels not model-decoded in v1?** Dumping a frame is extra work for the model (about 32,100 more bytes per frame), so for the first 3 s clip we had the emulator read the frame out of guest memory and spent the model's time verifying the instruction trace. The research notes list an early serial pixel dump (78 k tokens per frame) among the dead ends for the same reason. v2 pays that cost, which is why the model-decoded frames arrive over time.
+
+### 🆚 v1 to v2: what we fixed
+
+- v1 verified every instruction of the clip, but **the emulator read the pixels out of memory**. v2: the **model emits the pixels**, each byte lockstep-checked.
+- v1 never ran the typed flow on the model. v2: `boot -> shell -> help/ls -> run /bin/doomd -> first frame` is **model-verified** (3 Modal A100 chunks, 3,335,072 instructions, 26 segments, zero divergence; keys arrive at `qos_key_park` via the key ring).
+- v1 ran at about 1.7 k instr/s. v2 is about **2x faster on the model** (block verification plus fused kernels, bit-exact, see below).
+- v1 used the older build. The tuned build executes fewer instructions (-10.8 % on the clip, host emulator). The tuned build has **not** been re-verified over the whole clip.
+
 ## 🐢 How fast is it, really?
 
-Short answer: **very slow, and we are upfront about it.** 😅 Here it is in human units. All of these are *derived from the clip ledger* ([`docs/CLIP_LEDGER.md`](docs/CLIP_LEDGER.md)), not separately measured.
+Short answer: **very slow, and we are upfront about it.** v1 needed about 18 minutes per frame; the v2 stack projects to about 8 to 10. 😅 Here it is in human units. All of these are *derived from the clip ledger* ([`docs/CLIP_LEDGER.md`](docs/CLIP_LEDGER.md)), not separately measured.
 
 | Question | Plain English | Derivation |
 |---|---|---|
-| ⏱️ One displayed frame | about **18 minutes** of GPU time | 1.80 M instr per frame / 1,679 instr/s = about 1,072 s |
+| ⏱️ One displayed frame, v1 (patched driver) | about **18 minutes** of GPU time | 1.80 M instr per frame / 1,679 instr/s = about 1,072 s |
+| 🚀 One displayed frame, v2 stack (**projection**) | about **8 to 10 minutes** | 1.61 M (tuned build) to 1.80 M instr per frame at 3,121 to 3,562 instr/s = about 450 to 580 s. Arithmetic on measured chunk speeds, not a full-clip run |
 | 🎲 One game tic | about **5 minutes** of GPU time | 485,801 mean instr per tic (tics 30-300) / 1,679 instr/s = about 290 s |
 | 🎞️ The whole 3 s clip, one GPU | about **13 hours** of serial GPU time | 81,065,587 instr / 1,679 instr/s = about 48,300 s (we ran it in parallel across 35 chunks) |
 | 🏁 Needed for real time at 15 fps | **0.067 s** per frame | 1 / 15 |
 | 📉 The gap | about **16,000x** too slow | 1,072 s / 0.067 s |
 
-<p align="center"><img src="docs/assets/speed-ladder.svg" alt="Log-scale bars: about 45 minutes per frame at the original speed, about 18 minutes with the patched driver, 0.067 seconds for real time" width="100%"></p>
+<p align="center"><img src="docs/assets/speed-ladder.svg" alt="Log-scale bars: about 45 minutes per frame at the original speed, about 18 minutes with the patched driver, a projected 8 to 10 minutes for v2, 0.067 seconds for real time" width="100%"></p>
 
 **The derivation, step by step** 🧮
 
@@ -101,7 +130,7 @@ Short answer: **very slow, and we are upfront about it.** 😅 Here it is in hum
 | ⚙️ Fused/split Triton executor kernels + block verification (**real model**, A100, chunk c34, lockstep 0 errors, bit-exact kernels) | **2.02x**: K=64 + `--fast-kernels` **4,510** chip tok/s, **3,121** instr/s, **349.4 s** vs baseline **2,233** tok/s, **1,546** instr/s, **705.6 s**. See [`docs/research/PERF_LEDGER.md`](docs/research/PERF_LEDGER.md) | `perf/ktoken` | merged to main |
 | 🧠 Neural-executor speed-up analysis (research and host-only prototypes) | analysis only, nothing run on the model; see [`docs/research/`](docs/research/) | `perf/neural-exec` | merged to main |
 | 🅱️ B200 microbenchmark attempt | see [`docs/research/B200.md`](docs/research/B200.md) | `perf/b200` | merged to main |
-| 🧾 Old vs combined **model** benchmark | <!-- PENDING:model-benchmark --> pending | | pending |
+| 🧾 Old vs combined **model** benchmark (**real model**, Modal A100-40GB, lockstep on, 0 errors, first chunk from reset, final build `1a718be0`) | OLD K=0: 1,819,896 instr / 2,564,928 chip tokens in **1,088.5 s** = 1,672 instr/s, 2,356 tok/s (598.1 s per M instr, 424.4 s per M tok). OLD K=64: 745.6 s, 2,441 instr/s, 3,440 tok/s (409.7 / 290.7). **COMBINED** K=64 + `--fast-kernels`: 3,111,015 instr / 4,410,315 tokens in **873.4 s** = 3,562 instr/s, 5,050 tok/s (280.7 s per M instr, 198.0 s per M tok) = **2.14x per chip token** vs OLD K=0. The chunks cover different boot work, so compare per million; the combined row mixes build, driver and kernel gains; COMBINED at K=0 was not run. Projection (arithmetic): the full clip serial on one A100 is about **20,300 s** at the combined rate vs about 48,500 s at the old K=0 rate. See [`docs/research/PERF_LEDGER.md`](docs/research/PERF_LEDGER.md) | `perf/ktoken` | measured, ledger merged here |
 
 ### 🖥️ Measured on the real model (Modal)
 
@@ -133,7 +162,7 @@ Branch `perf/ktoken`, now merged to main.
 
 **E4: fixed costs.** A text token costs 45 ms warm, plus 0.21 s fixed per segment.
 
-**18 minutes will not become significantly faster any time soon:** each token costs about 240 us of GPU kernel time on an A100 (the floor today), and a frame needs about 1.8 M instructions, roughly 2.5 M tokens. Three levers remain: fewer instructions (compiler, hot loops, presets), less overhead per token (block verification, 1.54x measured), and faster kernels (split/fused kernels measured 2.02x together with block verification, see the table above). The final old-vs-combined benchmark is the pending row above.
+**Why not seconds?** 18 minutes was v1 and the stack now projects to 8-10 minutes, but each token costs about 240 us of GPU kernel time on an A100 (the floor today), and a frame needs about 1.8 M instructions, roughly 2.5 M tokens. Three levers remain: fewer instructions (compiler, hot loops, presets), less overhead per token (block verification, 1.54x measured), and faster kernels (split/fused kernels measured 2.02x together with block verification, see the table above). The final old-vs-combined benchmark is the pending row above.
 
 <p align="center"><img src="docs/assets/bottleneck-pie.svg" alt="Pie chart of instruction share by function: R_ColumnLoop 18.7 percent, R_ReplayWall 12.2, rec_get 7.7, rc_fill 4.5, everything else 56.9" width="100%"></p>
 
@@ -166,17 +195,20 @@ FULL preset means a 160x200 low-detail view, game logic every tic, and 15 of eve
 | 🟦 T0 | C emulator `tools/rv32_fast` | Everything: typed flow, E1M1 gameplay, chunk ROM, regression goldens, a 1060-frame scripted E1M1 video |
 | 🟨 T1 | Upstream reference CPU (`chipformer.rv.ref.Machine`) and our Python reference | Lockstep equal to the emulator for 6,000,000 instr of the merged build (level load and 2 frames); upstream also boots the kernel (120,267 instr) |
 | 🟩 T2 | The real Qwen model (merged Qwen3.5-4B, A100) with a lockstep oracle | Probe; title frame (6,563 instr); **cold boot to the first frame marker: 1,552,382 instr, 292 segments, zero divergence**, on an earlier (pre-merge) build |
-| 🟩 T2, gameplay | The real Qwen model (Qwen3.5-4B, lockstep oracle) | The 3-second E1M1 clip: 45 frames, 35 chunks, 81,065,587 instr, zero divergence, scripted input (see [the clip](#-the-3-second-clip)). Not model-verified: the typed `run /bin/doomd` flow (ELF-build level only) |
+| 🟩 T2, gameplay | The real Qwen model (Qwen3.5-4B, lockstep oracle) | The 3-second E1M1 clip: 45 frames, 35 chunks, 81,065,587 instr, zero divergence, scripted input (see [the clip](#-the-3-second-clip-v1)). Not model-verified: the typed `run /bin/doomd` flow (ELF-build level only) |
+
+| 🟩 T2, typed flow (v2) | The real Qwen model, lockstep oracle | `boot -> shell -> help/ls -> run /bin/doomd -> first frame`: 3 Modal A100 chunks, 3,335,072 instr, 26 segments, zero divergence, console 273 bytes byte-identical to the emulator. Keys delivered at `qos_key_park` via the key ring |
+| 🟩 T2, pixels (v2) | The real Qwen model, lockstep oracle | The guest's LCD dump stream (about 32,100 console bytes per frame, rows 0-199) comes out as model BYTE tokens, each lockstep-checked; the host collects the bytes into PNGs. **Frames done: see the progress line at the top** |
 
 Things you should know before you get too excited 🧯:
 
 - 💽 **Disk** is host-served block storage, patched in between model segments. With chunk ROM it is mostly read from the data ROM instead. It is not stored in the weights.
 - ⌨️ **Keyboard** input is simulated: the host pushes hardcoded keys through the input mailbox.
 - 🕰️ **Clock** is virtual (about 1 ms per idle call), not real time.
-- 🖼️ **Pixels**: the frames are genuine DOOM output, but the pixel bytes are read from the guest's memory by the emulator (same ELF and state). The model verifies the instruction trace (frame marker, console bytes, instruction count, lockstep), not the pixels.
+- 🖼️ **Pixels**: all frames are genuine DOOM output. In the v1 clip the pixel bytes were read from guest memory by the emulator and the model verified the instruction trace. In v2 the model emits the pixel bytes (rows 0-199 only) and the host just collects them. A frame counts as model-decoded only when its bytes match the emulator.
 - 🧩 **Segments**: a model run is a series of host-snapshotted segments, and "zero divergence" is per segment.
 - 🐌 **Not real-time.** See [how fast is it](#-how-fast-is-it-really).
-- The typed `run /bin/doomd` flow has not been run on the model; the clip uses a dedicated E1M1 demo build with scripted input. Scope is E1M1.
+- The v1 clip uses a dedicated E1M1 demo build with scripted input; the typed flow was verified separately in v2. Scope is E1M1.
 - Full Python-reference replay covers only segments 1-4; the C twin covers segments 5-38. One chunk (c02) has an unexplained +5 instruction difference that we have not decoded.
 
 Full list: [`docs/research/HONESTY.md`](docs/research/HONESTY.md).
@@ -190,9 +222,9 @@ make live-doom LIVE_ARGS=--auto   # same, with a typed shell tour
 
 <p align="center"><img src="docs/assets/qwenos-live-boot.gif" alt="Recorded live terminal: QwenOS boots, a shell prompt, then DOOM E1M1" width="640"><br><a href="docs/assets/qwenos-live-boot.mp4">MP4</a> · <a href="docs/LIVE_DEMO.md">docs/LIVE_DEMO.md</a></p>
 
-**Honest label: this is tier T0, the host emulator** (`rv32_fast` on your CPU), not the Qwen model. The terminal banner says `tier T0`. On the model a frame still takes about 18 minutes (see the footnote above); the recording is the emulator running the same guest code (kernel, shell, DOOM). Guide, tiers and the model path (T2): [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md).
+**Honest label: this is tier T0, the host emulator** (`rv32_fast` on your CPU), not the Qwen model. The terminal banner says `tier T0`. On the model a frame took about 18 minutes in v1 and projects to 8-10 with the v2 speed-ups (see the speed section); the recording is the emulator running the same guest code (kernel, shell, DOOM). Guide, tiers and the model path (T2): [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md).
 
-## 🎬 The 3-second clip
+## 🎬 The 3-second clip (v1)
 
 <p align="center"><img src="docs/assets/qwenos-doom-3s.gif" alt="The 3-second E1M1 clip, 45 frames at 15 fps" width="480"><br><a href="docs/assets/qwenos-doom-3s.mp4">Full-quality MP4 (960x720, 15 fps)</a> · <a href="docs/assets/qwenos-doom-3s-contact.png">contact sheet</a> · <a href="docs/CLIP_LEDGER.md">per-frame and per-chunk ledger</a></p>
 
@@ -229,19 +261,25 @@ Where do the instructions go? Mostly into drawing. Tics that draw a frame cost 1
 <details>
 <summary><b>🧠 Is it really Qwen?</b></summary>
 
-Yes for the instruction trace: the model (merged Qwen3.5-4B carrying the Qwenputer circuit) executed 81,065,591 instructions of the clip with a lockstep oracle and zero divergence. The host executed 35 boundary instructions, serves disk, injects scripted keys, and starts each chunk from a snapshot. Qwen did not decode the pixels. See [what is real](#-what-is-real-and-what-is-not).
+Yes. The model (merged Qwen3.5-4B carrying the Qwenputer circuit) executed 81,065,591 instructions of the clip with a lockstep oracle and zero divergence. The host executed 35 boundary instructions, serves disk, injects scripted keys, and starts each chunk from a snapshot. In v1 Qwen did not emit the pixels (the emulator read them out of memory); in v2 it does, one BYTE token at a time, and the progress line says how many frames are done. See [what is real](#-what-is-real-and-what-is-not).
 </details>
 
 <details>
 <summary><b>🕹️ Can I play it?</b></summary>
 
-Yes, on the host emulator (T0): `tools/qwenos_live.sh` gives an interactive terminal with arrows to move. Playing it on the model is not practical: one tic takes about 5 minutes. A one-command version, `make live-doom`, is on the branch `feat/live-demo` (not yet merged).
+Yes, on the host emulator (T0): `make live-doom` or `tools/qwenos_live.sh` gives an interactive terminal with arrows to move. Playing it on the model is not practical: one tic takes about 5 minutes. `make live-doom` is the one-command version (see [boot it yourself](#-boot-it-yourself)).
 </details>
 
 <details>
 <summary><b>🏎️ Why not just make it faster?</b></summary>
 
 We are trying; see the [speed-up experiments](#-speed-up-experiments-tonights-work). The compiler and hot-loop work cut about 16 % of instructions on the host emulator. Even a 40 % cut would still leave a gap of thousands of times. The model speed (tokens per second) is the real wall, and instruction fusion inside the weights would save only 2-5 % of tokens.
+</details>
+
+<details>
+<summary><b>🔤 What is a BYTE token, and why were pixels not model-decoded in v1?</b></summary>
+
+A BYTE token is the model emitting one console byte as text. v1 skipped the pixel dump to save model time and let the emulator read the frame; v2 pays that cost. See [where the pixels come from](#-where-the-pixels-come-from).
 </details>
 
 <details>
@@ -260,6 +298,7 @@ Yes. They are the genuine output of the real DOOM engine running as guest code, 
 | 🔒 **lockstep** | The model executes each instruction while an oracle (a trusted reference) executes the same one. Any mismatch is a divergence. We saw zero. |
 | 🔤 **chip token** | A token the model generates as part of executing one guest instruction. About 1.345 per instruction. |
 | 🟦🟨🟩 **T0 / T1 / T2** | Who ran the code. T0: the C emulator. T1: reference CPUs (upstream and Python), checked against T0. T2: the real Qwen model with a lockstep oracle. |
+| 🔤 **BYTE token** | The model emitting one console byte as text. In v2 every pixel byte of a frame comes out this way. |
 | 🧩 **segment** | A stretch of a model run between host interventions such as disk service. |
 | 📀 **chunk ROM** | Game data served from a read-only ROM window, which cut disk requests from 165,054 to 4. |
 
