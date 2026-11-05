@@ -52,7 +52,20 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 
 **What is a BYTE token?** The model normally generates "chip tokens" that carry out an instruction. When the guest writes a byte to the console, the model emits that byte itself as a special BYTE token. So a pixel is literally generated text.
 
-**Why were the first clip's pixels read by the emulator?** Dumping a frame is extra work for the model (about 32,100 more bytes per frame), so for the first 3 s clip we had the emulator read the frame out of guest memory and spent the model's time verifying the instruction trace. The research notes list an early serial pixel dump (78 k tokens per frame) among the dead ends for the same reason. The model now pays that cost, which is why the model-decoded frames arrive over time.
+**Why were the first clip's pixels read by the emulator?** Dumping a frame is extra work for the model (about 32,100 more bytes per frame), so for the first 3 s clip we had the emulator read the frame out of guest memory and spent the model's time verifying the instruction trace. The research notes list an early serial pixel dump (78 k tokens per frame) among the dead ends for the same reason. The model now pays that cost, which is why the model-decoded frames arrive over time (8 of 45 so far).
+
+**Model-decoded frames 12-19 (8 frames, real time then slowed):** [MP4](docs/assets/qwenos-doom-modelpixels.mp4)
+
+<p align="center"><img src="docs/assets/qwenos-doom-modelpixels.gif" alt="The 8 model-decoded DOOM frames 12 to 19, played in real time and then slowed down" width="480"></p>
+
+**Per-frame facts and honest caveats** ([full table](docs/research/MODEL_PIXELS.md)):
+
+- 8 frames x 32,100 bytes (frame 16: 32,887, which includes a 787-byte partial status-bar update). Each frame took 2.23 M to 2.49 M instructions and 3.14 M to 3.46 M chip tokens (dump armed, about 10% more instructions than the production clip frames).
+- Cost: 14 Modal A100 container runs, about 331 container-minutes, about $12-14 (estimate). All 45 frames would be about 21 container-hours (about $50).
+- The host sets one guest RAM variable `q_dump_req=1` before each frame (typing `p` panics in this build) and cuts each frame into 6 sub-segments run on parallel GPUs.
+- The host maps palette index to RGB with the IWAD PLAYPAL to write the PNG. That is the only host-side pixel step; the saved model-emitted bytes equal the host reference bytes.
+- Status bar rows 200-239 are not in a frame's dump (a dump contains only the windows the engine redrew), so they are blank in the model PNGs.
+- The state before each frame was verified in the original clip run, not re-proved.
 
 ### 🛠️ What we fixed since the first clip
 
@@ -73,7 +86,7 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 > - 🕹️ **Play it:** `make live-doom` on the host emulator (not the model). See [boot it yourself](#-watch-it-boot-then-play-it).
 
 <!-- V2:PROGRESS -->
-🎯 **Model-decoded frames: 4 of 45** (frames 12 to 15, byte-exact vs the emulator, rows 0-199, every byte a model-emitted token checked in lockstep with zero divergence). In flight: frames 16 to 19. <i>Last updated 22:26.</i>
+🎯 **Model-decoded frames: 8 of 45** (frames 12 to 19, contiguous, byte-exact vs the emulator on rows 0-199, every byte a model-emitted token checked in lockstep with zero divergence). The full 45-frame run is going in the background. <i>Last updated 22:47.</i>
 <!-- /V2:PROGRESS -->
 
 ---
@@ -236,7 +249,7 @@ FULL preset means a 160x200 low-detail view, game logic every tic, and 15 of eve
 | 🟩 T2 | The real Qwen model (merged Qwen3.5-4B, A100) with a lockstep oracle | Probe; title frame (6,563 instr); **cold boot to the first frame marker: 1,552,382 instr, 292 segments, zero divergence**, on an earlier (pre-merge) build |
 | 🟩 T2, gameplay | The real Qwen model (Qwen3.5-4B, lockstep oracle) | The 3-second E1M1 clip: 45 frames, 35 chunks, 81,065,587 instr, zero divergence, scripted input (see [the clip](#-the-3-second-clip)). The typed `run /bin/doomd` flow is a separate run, see the next row |
 | 🟩 T2, typed flow | The real Qwen model, lockstep oracle | Cold boot, `help`, `ls`, `run /bin/doomd`, first DOOM frame marker and markers 2 and 3: 8,239,190 instr in total, about 11.7 M chip tokens, 27 segments, 4 A100 chunks, zero divergence, every token checked against the oracle. Console through marker 1: 273 bytes byte-identical to the C emulator and the Python reference; through marker 3 the first 315 bytes are identical (the model segment stops at the first not-yet-executed pc after the marker, so it prints 20 extra bytes `DOOMD_FRAME 3 tic 5` and runs about 15k instructions past the emulator's marker). See [TYPED_FLOW_MODEL](docs/research/TYPED_FLOW_MODEL.md) |
-| 🟩 T2, pixels | The real Qwen model, lockstep oracle | The guest's LCD dump stream (about 32,100 console bytes per frame, rows 0-199) comes out as model BYTE tokens, each lockstep-checked; the host collects the bytes into PNGs. **Frames done: see the progress line at the top** |
+| 🟩 T2, pixels | The real Qwen model, lockstep oracle | The guest's LCD dump stream (about 32,100 console bytes per frame, rows 0-199) comes out as model BYTE tokens, each lockstep-checked; the host collects the bytes into PNGs. **8 of 45 frames done (12-19), byte-exact on rows 0-199; see the progress line at the top** |
 
 Things you should know before you get too excited 🧯:
 

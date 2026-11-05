@@ -46,13 +46,13 @@ modal run tools/modal_fbdump.py --tag mp2 --ranges 1:5,5:9,9:13,13:17,17:21,21:2
 # 3. decode + compare with the emulator frames:
 python3 tools/model_fbdump.py decode --model-bytes <console.bin.model ...in range order> --frames 14,13,15,12 \
    --frame-lengths 32100,32100,32100,32100 --wad freedoom1.wad --emu-frames out/clip/frames --out out/clip_modelpixels
-python3 tools/make_mp_video.py out/clip_modelpixels docs/assets/qwenos-doom-v2-modelpixels 12,13,14,15,16,17,18,19
+python3 tools/make_mp_video.py out/clip_modelpixels docs/assets/qwenos-doom-modelpixels 12,13,14,15,16,17,18,19
 ```
 `tools/model_doom_qwen.py` additionally writes `<out>.model` (the model's own BYTE tokens). The driver is the K-token one from `perf/ktoken` (branch base).
 
 ## Files
 
-`out/clip_modelpixels/`: `frame_NN_model.png` (320x240, rows 200-239 blank), `model_stream_NN.bin` (the model-emitted bytes per frame), `model_emitted_bytes_all_in_run_order.bin`, `comparison.txt`, `STATUS.md`. Video: `docs/assets/qwenos-doom-v2-modelpixels.{mp4,gif}`: title card, 8 frames in real time (15 fps, 0.53 s), then the same 8 frames slow (3 fps).
+`out/clip_modelpixels/`: `frame_NN_model.png` (320x240, rows 200-239 blank), `model_stream_NN.bin` (the model-emitted bytes per frame), `model_emitted_bytes_all_in_run_order.bin`, `comparison.txt`, `STATUS.md`. Video: `docs/assets/qwenos-doom-modelpixels.{mp4,gif}`: title card, 8 frames in real time (15 fps, 0.53 s), then the same 8 frames slow (3 fps).
 
 ## Caveats
 

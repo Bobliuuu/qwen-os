@@ -185,7 +185,7 @@ def render():
     c_model = info('3. What the model actually did', [
         ('Verified the typed boot, shell, run /bin/doomd flow to the first frame: 3 A100 chunks, 3,335,072 instructions, 26 segments, zero divergence, console output byte-identical.', WH),
         ('Verified the 3 s E1M1 clip: 45 frames, 35 chunks.', WH),
-        ('Emitted frame pixel bytes itself as console BYTE tokens (~32,100 bytes per frame, lockstep-checked). Model-emitted pixels: 4 frames byte-exact so far (frames 12-15).', AM)])
+        ('Emitted frame pixel bytes itself as console BYTE tokens (~32,100 bytes per frame, lockstep-checked). Model-emitted pixels: 8 frames byte-exact so far (frames 12-19).', AM)])
     c_slow = info('4. How slow', [
         ('About 8 to 10 minutes of A100 time per displayed frame now (projection from measured chunk speeds). About 18 minutes before the speed-ups.', WH),
         ('Real time at 15 fps needs 0.067 s per frame: we are about 8,000x off.', AM),
