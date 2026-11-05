@@ -196,6 +196,7 @@ int main(int argc,char**argv){
   reqprof=getenv("REQPROF")!=0;if(getenv("REQLOG"))reqlog=fopen(getenv("REQLOG"),"wb");
   if(getenv("CRXPLAN")){FILE*cf=fopen(getenv("CRXPLAN"),"rb");if(!cf){perror("CRXPLAN");return 2;}fseek(cf,0,SEEK_END);long cn=ftell(cf);fseek(cf,0,SEEK_SET);crxp=malloc(cn);if(fread(crxp,1,cn,cf)!=(size_t)cn)return 2;fclose(cf);crxn=cn/4;
     if(getenv("CRXBASE"))crxbase=strtoul(getenv("CRXBASE"),0,16);crx_fill(0,0);}
+  int tokon=getenv("TOKCOST")!=0;uint64_t tok_tot=0,tok_R=0,tok_J=0,tok_nt=0,tok_st=0,tok_div=0,tok_ndiv=0,tok_ld=0,tok_alu=0;int tok_n=0;
   uint32_t last_req=0;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
   uint64_t last_frame_step=0;
   while(steps<maxi){
@@ -251,6 +252,7 @@ int main(int argc,char**argv){
       else if(f7==0||f7==0x20){uint32_t sh=b&31;switch(f3){
         case 0:v=f7?a-b:a+b;break;case 1:v=a<<sh;break;case 2:v=S(a)<S(b);break;case 3:v=a<b;break;case 4:v=a^b;break;
         case 5:v=f7?(uint32_t)(S(a)>>sh):a>>sh;break;case 6:v=a|b;break;case 7:v=a&b;break;}}
+      else if(f7==0x10&&(f3==2||f3==4||f3==6))v=(a<<(f3>>1))+b; /* Zba sh1add/sh2add/sh3add: the only Zba ops the Qwenputer core implements */
       else die("alu f7",pc,steps);
       break;
     case 0x0f:break;
@@ -273,6 +275,18 @@ int main(int argc,char**argv){
     default:die("opcode",w,steps);
     }
     if(rd&&op!=0x63&&op!=0x23&&op!=0x0f&&op!=0x73)reg[rd]=v;
+    if(tokon){ /* chip-token model of chipformer/rv/spec.py + ref.py Machine.record (see docs/research/COMPILER_BENCH.md) */
+      if(tok_n==63){tok_tot++;tok_R++;tok_n=0;}
+      if(op==0x6f||op==0x67||(op==0x63&&np!=pc+4)){tok_tot++;tok_J++;tok_n=0;}
+      else{tok_n++;
+        if(op==0x63||op==0x0f||(op==0x73)){tok_tot++;tok_nt++;}
+        else if(op==0x23){int t=f3==2?1:4;tok_tot+=t;tok_st+=t;}
+        else if(!rd){tok_tot++;tok_nt++;}
+        else{int32_t sv=(int32_t)v;int vt=(sv>=-(1<<14)&&sv<(1<<14))?1:(sv>=-(1<<29)&&sv<(1<<29))?2:3;
+          if(op==0x33&&f7==1&&f3>=4){ /* DIV-class: QS, QD x (8-k0), value record */
+            int sg=f3<=5?0:0;(void)sg;int sgn=(f3==4||f3==6);uint32_t bb=(sgn&&(b>>31))?~b:b;int da=0,db=0;for(int i=0;i<8;i++){if(a>>(4*i))da++;if(bb>>(4*i))db++;}
+            int k0=b==0?0:7-da+db;if(k0<0)k0=0;if(k0>8)k0=8;tok_tot+=1+(8-k0)+vt;tok_div+=1+(8-k0)+vt;tok_ndiv++;}
+          else{tok_tot+=vt;if(op==0x03)tok_ld+=vt;else tok_alu+=vt;}}}}
     reg[0]=0;pc=np;steps++;
     uint32_t seq=rd32(dbox);
     if(disklat){if(seq&&seq!=last_req&&seq!=pend_seq){pend_seq=seq;pend_due=steps+disklat;}
@@ -285,6 +299,7 @@ int main(int argc,char**argv){
     nodisk:;
   }
 done:
+  if(tokon)fprintf(stderr,"TOKENS total=%llu steps=%llu per_instr=%.4f R=%llu J=%llu nt_or_x0=%llu store=%llu div=%llu(n=%llu) load=%llu alu=%llu\n",(unsigned long long)tok_tot,(unsigned long long)steps,(double)tok_tot/steps,(unsigned long long)tok_R,(unsigned long long)tok_J,(unsigned long long)tok_nt,(unsigned long long)tok_st,(unsigned long long)tok_div,(unsigned long long)tok_ndiv,(unsigned long long)tok_ld,(unsigned long long)tok_alu);
   if(live){live_restore();
     fprintf(stderr,"\nQwenOS live: %s after %llu guest instructions, %d frames shown (%d frame markers), guest exit code %d\n",
       exitcode==-3?"quit key":exitcode==-2?"input closed":"guest exited",(unsigned long long)steps,(int)live_frames_shown,frames,exitcode);
