@@ -53,7 +53,7 @@ def run(img, scen, prefix, elf=None, wad=None, disk_out=None, maxframes=None, qu
     r = subprocess.run(cmd, capture_output=True, text=True)
     if not quiet: print(r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "")
     raw = open(prefix + ".bin", "rb").read()
-    wadp = wad or os.environ.get('QOS_IWAD','../wads/freedoom1.wad')
+    wadp = wad or os.environ.get('QOS_IWAD','.deps/wads/freedoom1.wad')
     subprocess.run([sys.executable, os.path.join(HERE, "doomd_frames.py"), prefix + ".bin", wadp, prefix + "-raw"], capture_output=True)
     # rename dumps by tag
     for i, t in enumerate(dumps):

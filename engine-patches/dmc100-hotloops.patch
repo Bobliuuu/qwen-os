@@ -1,0 +1,53 @@
+diff -ruN a/port/render/r_inner.c b/port/render/r_inner.c
+--- a/port/render/r_inner.c	2026-11-04 21:00:11
++++ b/port/render/r_inner.c	2026-11-04 21:00:11
+@@ -13,9 +13,49 @@
+ // Duff's device over 8 pixels: the first n & 7 pixels are entered at the matching case of one
+ // unrolled body (dest is moved back so every case uses the same offsets), no prologue loop.
+ #define COL_PX(k) d[k] = cmap[src[pos >> sh]]; pos += step
++// Magnified column (a texel covers 4 or more pixels): one table lookup per texel and the run of
++// equal pixels is filled with word stores. The run length is the first k with
++// frac + k * step >= 2^sh, the same crossing the per-pixel stepping finds (a texel step is < 1).
++static void col_runs(uint8_t *d, int n, uint32_t pos, uint32_t step, int sh, const uint8_t *src,
++                     const uint8_t *cmap)
++{
++    uint32_t span = 1u << sh;
++    do {
++        uint32_t c = cmap[src[pos >> sh]];
++        uint32_t k = n;
++        if (step) {
++            uint32_t q = (span - (pos & (span - 1)) + step - 1) / step;
++            if (q < k)
++                k = q;
++        }
++        pos += k * step;
++        n -= k;
++        while (k && ((uintptr_t)d & 3)) {
++            *d++ = c;
++            k--;
++        }
++        if (k >= 4) {
++            uint32_t w = c * 0x01010101u;
++            do {
++                *(uint32_t *)(void *)d = w;
++                d += 4;
++                k -= 4;
++            } while (k >= 4);
++        }
++        while (k) {
++            *d++ = c;
++            k--;
++        }
++    } while (n);
++}
++
+ void R_ColumnLoop(uint8_t *dest, int n, uint32_t pos, uint32_t step, int sh, const uint8_t *src,
+                   const uint8_t *cmap)
+ {
++    if (step <= (1u << sh) >> 2) {
++        col_runs(dest, n, pos, step, sh, src, cmap);
++        return;
++    }
+     uint8_t *d = dest - ((8 - (n & 7)) & 7);
+     int blocks = (n + 7) >> 3;
+     switch (n & 7) {

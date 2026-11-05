@@ -4,13 +4,27 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$HERE/../..
-DMC=${DMC:-$REPO/../engine/DMC100-Doom}
+DMC=${DMC:-$REPO/.deps/engine/DMC100-Doom}
 GEN=${GEN:-$DMC/build/sw/gen}
 OUT=${1:-$HERE/../../build/doomd}
 LLVM=${LLVM:-/opt/homebrew/opt/llvm/bin}
 CC=${CC:-clang}; LD=${LD:-ld.lld}
 mkdir -p "$OUT/o"
-ARCH="--target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -msmall-data-limit=0 ${RELAXFLAG:--mrelax}"
+# Tuned compiler configuration (docs/research/COMPILER_BENCH.md): ThinLTO-free full LTO, Zba (sh1add/sh2add/sh3add, which the
+# Qwenputer core implements), hot objects -O3, cold objects -Os, inline threshold 300. TUNED=0 restores the old plain -O2 build.
+# Every knob below can still be overridden from the environment.
+if [ "${TUNED:-1}" = 1 ]; then
+  : ${ARCHX:=_zba}
+  : ${OPT:=-O2 -flto}
+  : ${INNER_CF:=-O3 -flto -fno-unroll-loops}
+  : ${HOT:=r_inner cache r_segs qplat r_data r_plane p_mapdata trig r_things fastfix things rt fetch v_video p_sight r_main r_bsp rview r_frame qimg qlcd qsolid ovl_rv}
+  : ${HOT_CF:=-O3}
+  : ${COLD_CF:=-Os}
+  : ${CF_rtlib:=-O3 -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove}
+  : ${CF_g_game:=-fno-lto}   # keep G_Ticker a real symbol: tools/rv32_fast.c counts game tics at its entry
+  LDX="--lto-O2 -mllvm=-inline-threshold=${INLINE_T:-300} $LDX"
+fi
+ARCH="--target=riscv32-unknown-elf -march=rv32im${ARCHX:-} -mabi=ilp32 -msmall-data-limit=0 ${RELAXFLAG:--mrelax}"
 INC="-I$HERE/stub -I$DMC/engine/stub/include -I$DMC/engine -I$DMC/port/data -I$DMC/port/render -I$DMC/port/obj -I$DMC/port/math -I$DMC/platform -I$DMC/port/game -I$DMC/port/ovl -I$HERE -I$GEN -I$DMC/controller/rc-n1 -I$REPO/include -I$REPO/ports/doom"
 FLATDEF=-DQOS_FLATROM; [ "${FLATS:-off}" = off ] && FLATDEF=
 DEFS="-DDOOMD_MODE=${DOOMD_MODE:-0} -DDOOMD_DUMP=${DOOMD_DUMP:-0} -DDMC_FW $FLATDEF -DDMC_HASHORDER -DDMC_SINE_L1 -DPLAT_HOST"
@@ -70,6 +84,8 @@ for s in $SRCS; do
    hash|hash_trace) extra="-DLS_SMALL -DLS_NOFILE -Drndindex=ls_zero_rnd";;
    l_wi) extra="-DG_DoCompleted=__real_G_DoCompleted";;
   esac
+  [ -n "$HOT" ] && case " $HOT " in *" $b "*) extra="$extra ${HOT_CF:-}";; *) extra="$extra ${COLD_CF:-}";; esac   # HOT: hot object names (profile), HOT_CF/COLD_CF: their flags
+  eval "extra=\"\$extra \${CF_$b:-}\""   # per-file compiler flags, e.g. CF_qlcd="-O3" (compiler bench)
   if [ ! -f $o ] || [ $s -nt $o ] || [ -n "$FORCE" ]; then
     $CC $CF $extra -c $s -o $o &
     n=$((n+1)); if [ $n -ge 8 ]; then wait; n=0; fi
@@ -77,5 +93,5 @@ for s in $SRCS; do
 done
 wait
 WRAP="--wrap=G_DoLoadLevel --wrap=G_DoNewGame --wrap=G_DoPlayDemo --wrap=G_DoCompleted --wrap=G_DoWorldDone --wrap=P_Init $([ -n "$NOSOLID" ] || echo --wrap=R_SolidColumn) $([ -n "$NOQIMG" ] || echo "--wrap=img_read --wrap=img_read_async") --wrap=D_PostEvent --wrap=P_CrossSpecialLine --wrap=P_ShootSpecialLine --wrap=P_UseSpecialLine"
-$LD --gc-sections ${LDRELAX:---relax --relax-gp} -T $REPO/linker/doomd.ld $HERE/frame.ld -z max-page-size=4 $WRAP --defsym=DOOMD_STACK_OVERRIDE=${STACK:-0x580} ${LDX} -Map $OUT/doomd.map -o $OUT/doomd.elf $objs
+$LD ${GCFLAG:---gc-sections} ${LDRELAX:---relax --relax-gp} -T $REPO/linker/doomd.ld $HERE/frame.ld -z max-page-size=4 $WRAP --defsym=DOOMD_STACK_OVERRIDE=${STACK:-0x580} ${LDX} -Map $OUT/doomd.map -o $OUT/doomd.elf $objs
 readelf -SW $OUT/doomd.elf | grep -E " \.(text|rodata|data|bss) "

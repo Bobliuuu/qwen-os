@@ -4,7 +4,7 @@ image (DOOMDMC_DISK or the default path), build/qwenos-doomdmc.elf and build/rv3
 import os, subprocess, sys, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
-DISK = Path(os.environ.get('DOOMDMC_DISK', '../engine/DMC100-Doom/build/sw/nor/E1.img'))
+DISK = Path(os.environ.get('DOOMDMC_DISK', '.deps/engine/DMC100-Doom/build/sw/nor/E1.img'))
 ELF, FAST = ROOT / 'build/qwenos-doomdmc.elf', ROOT / 'build/rv32_fast'
 
 def have_upstream():

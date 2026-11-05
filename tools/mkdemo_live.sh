@@ -10,7 +10,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT"
 P=${1:-full}
 case $P in full) F="-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35";; balanced) F="-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35 -DQ_VTOP=40 -DQ_VBOT=200 -DQ_DUMP_ROW2";;
   max) F="-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35 -DQ_DETAIL=2 -DQ_XTVASH=2 -DQ_VTOP=40 -DQ_VBOT=200 -DQ_DUMP_ROW2";; none) F="";; *) F=$P;; esac
-export DMC=${DMC:-$ROOT/../engine/DMC100-Doom}; IMG=${IMG:-$DMC/build/sw/nor/E1.img}
+export DMC=${DMC:-$ROOT/.deps/engine/DMC100-Doom}; IMG=${IMG:-$DMC/build/sw/nor/E1.img}
 OUT=build/demo; mkdir -p $OUT
 cc -O2 -o build/rv32_fast tools/rv32_fast.c
 make -s build/kernel-live.elf build/shell-live.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf >/dev/null

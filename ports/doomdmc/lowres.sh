@@ -23,8 +23,8 @@ mkdir -p $OUT
 # CHUNKROM=1: guest reads disk extents from a host-filled data-ROM window (ports/doomdmc/qplat.c crx_read,
 # tools/chunkrom.py); the window [Q_CRX_BASE, 0x3f000) is reserved by the linker, the E1M6 bake is dropped.
 CRX=${Q_CRX_BASE:-0x29000}
-if [ -n "$CHUNKROM" ]; then export NOBAKE=1 LDX="--defsym=Q_CRX_BASE_LD=$CRX"; F="$F -DQ_CHUNKROM -DQ_CRX_BASE=${CRX}u"; fi
+if [ -n "$CHUNKROM" ]; then export NOBAKE=1 LDX="$LDX --defsym=Q_CRX_BASE_LD=$CRX"; F="$F -DQ_CHUNKROM -DQ_CRX_BASE=${CRX}u"; fi
 X="-DDOOMD_TICS=${TICS:-350} $F"; [ -n "$D" ] && X="$X -DQ_DUMP_ALL"
-FORCE=1 DOOMD_MODE=2 EXTRA_CF="$X" $HERE/build.sh $OUT >/dev/null
+FORCE=1 DOOMD_MODE=2 EXTRA_CF="$X $EXTRA_CF" $HERE/build.sh $OUT >/dev/null
 cd $REPO
 python3 tools/merge_elf.py build/lr-$T.elf build/kernel-doomd.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf $OUT/doomd.elf | tail -1

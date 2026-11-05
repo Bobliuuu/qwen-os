@@ -16,3 +16,4 @@ __pycache__/
 *.a
 !docs/assets/*.gif
 .claude/
+.deps/

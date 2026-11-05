@@ -19,6 +19,9 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/ioctl.h>
+#ifdef BBTRACE
+#include "bbtrace.h"
+#endif
 static uint8_t mem[0x80000];static uint32_t syspc,sys_ra,sys_n;static uint64_t sys_st,sys_cnt[64],sys_ins[64];
 #define NSR 256
 static uint32_t sr_ra[NSR],sr_n[NSR];static uint64_t sr_c[NSR],sr_i[NSR];static int nsr;
@@ -28,6 +31,7 @@ static uint32_t tr_pc[64],tr_sp[64],tr_to[64];static unsigned trn;
 static int ps,pskip,plen,pn;/* dump-packet parser state so pixel bytes are never taken for markers */
 /* profiler: PROF=1 PHASES=f1,f2,.. (frame-marker boundaries); self-instruction count per symbol per phase */
 #define NPH 8
+static uint8_t*pmask; /* PROFMASK=file: tic indices (one per line) whose instructions are profiled (e.g. sim-only tics) */
 static uint32_t *hist[NPH];static int prof,phase,nph,phb[NPH];
 struct sym{uint32_t a,sz;char n[56];};static struct sym*syms;static int nsyms;
 static int symcmp(const void*x,const void*y){uint32_t a=((struct sym*)x)->a,b=((struct sym*)y)->a;return a<b?-1:a>b;}
@@ -184,6 +188,7 @@ int main(int argc,char**argv){
    if(se&&(w||!parkpc)){char*t=strtok(strdup(se),",");while(t){uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);load_syms(el2);}t=strtok(0,",");}
      char*wl=strdup(w?w:"");for(char*t2=strtok(wl,",");t2&&nw<16;t2=strtok(0,",")){for(int q=0;q<nsyms;q++)if(!strcmp(syms[q].n,t2)){wn[nw]=strdup(t2);wpc[nw++]=syms[q].a;break;}}
      if(!parkpc)for(int q=0;q<nsyms;q++)if(!strcmp(syms[q].n,"qos_key_park"))parkpc=syms[q].a;}}
+  if(getenv("PROFMASK")){pmask=calloc(65536,1);FILE*pf=fopen(getenv("PROFMASK"),"r");int ti;while(pf&&fscanf(pf,"%d",&ti)==1)if(ti>=0&&ti<65536)pmask[ti]=1;if(pf)fclose(pf);}
   if(getenv("PROF")||getenv("REQPROF")){prof=getenv("PROF")!=0;{char*se=getenv("SYMELF");if(se){char*t=strtok(strdup(se),",");while(t){uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);load_syms(el2);}t=strtok(0,",");}}else load_syms(elf);}for(int i=0;i<NPH;i++)hist[i]=calloc(0x10000,4);
     char*ph=getenv("PHASES");if(ph){char*t=strtok(strdup(ph),",");while(t&&nph<NPH-1){phb[nph++]=atoi(t);t=strtok(0,",");}}}
   {const char*ts=getenv("TICSYM");if(!ts)ts="G_Ticker";const char*se=getenv("SYMELF");if(se){char*t=strtok(strdup(se),",");uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);
@@ -196,6 +201,10 @@ int main(int argc,char**argv){
   reqprof=getenv("REQPROF")!=0;if(getenv("REQLOG"))reqlog=fopen(getenv("REQLOG"),"wb");
   if(getenv("CRXPLAN")){FILE*cf=fopen(getenv("CRXPLAN"),"rb");if(!cf){perror("CRXPLAN");return 2;}fseek(cf,0,SEEK_END);long cn=ftell(cf);fseek(cf,0,SEEK_SET);crxp=malloc(cn);if(fread(crxp,1,cn,cf)!=(size_t)cn)return 2;fclose(cf);crxn=cn/4;
     if(getenv("CRXBASE"))crxbase=strtoul(getenv("CRXBASE"),0,16);crx_fill(0,0);}
+  int tokon=getenv("TOKCOST")!=0;uint64_t tok_tot=0,tok_R=0,tok_J=0,tok_nt=0,tok_st=0,tok_div=0,tok_ndiv=0,tok_ld=0,tok_alu=0;int tok_n=0;
+#ifdef BBTRACE
+  bb_init();
+#endif
   uint32_t last_req=0;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
   uint64_t last_frame_step=0;
   while(steps<maxi){
@@ -210,11 +219,18 @@ int main(int argc,char**argv){
       else{fprintf(stderr,"IDLE: guest waits for a key at step %llu, nothing schedulable\n",(unsigned long long)steps);exitcode=-2;goto done;}}
     if(nw)for(int q=0;q<nw;q++)if(pc==wpc[q]&&!whit[q]){whit[q]=1;wstep[q]=steps;}
     if(pc==lvlpc&&!lvlseen){lvlseen=1;lvlstep=steps;lvlticidx=nticks;}
-    if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticstep[nticks++]=steps;while(phase<nph&&nticks>phb[phase])phase++;}
+    if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticstep[nticks++]=steps;
+#ifdef BBTRACE
+      bb_tic(nticks-1);
+#endif
+      while(phase<nph&&nticks>phb[phase])phase++;}
     if(syspc){if(pc==syspc&&!sys_ra){sys_ra=reg[1];sys_n=reg[10]&63;sys_st=steps;}
       else if(sys_ra&&pc==sys_ra){uint64_t d=steps-sys_st;sys_cnt[sys_n]++;sys_ins[sys_n]+=d;int q;for(q=0;q<nsr;q++)if(sr_ra[q]==sys_ra&&sr_n[q]==sys_n)break;
         if(q==nsr&&nsr<NSR){sr_ra[q]=sys_ra;sr_n[q]=sys_n;nsr++;}if(q<NSR){sr_c[q]++;sr_i[q]+=d;}sys_ra=0;}}
-    if(prof)hist[phase][(pc-0x40000)>>2]++;
+    if(prof&&(!pmask||(nticks>0&&nticks<=65536&&pmask[nticks-1])))hist[phase][(pc-0x40000)>>2]++;
+#ifdef BBTRACE
+    bb_pre(pc);
+#endif
     uint32_t w=rd32(pc);
     if((w&3)!=3)die("rvc",pc,steps);
     uint32_t op=w&127,rd=(w>>7)&31,f3=(w>>12)&7,rs1=(w>>15)&31,rs2=(w>>20)&31,f7=w>>25;
@@ -230,10 +246,16 @@ int main(int argc,char**argv){
       if(c)np=pc+im;break;}
     case 0x03:{uint32_t ad=a+ii;int n=(f3&3)==0?1:(f3&3)==1?2:4;
       if(f3>5||f3==3)die("ld f3",pc,steps);
+#ifdef BBTRACE
+      bb_mem(pc,0,ad,n,rs1);
+#endif
       if(!((ad+n<=0x8000)||(ad>=0x20000&&ad+n<=0x40000)))die("load outside data memory",ad,steps);
       if(n==1)v=mem[ad];else if(n==2){uint16_t h;memcpy(&h,mem+ad,2);v=h;}else v=rd32(ad);
       if(f3==0)v=(uint32_t)(int8_t)v;if(f3==1)v=(uint32_t)(int16_t)v;break;}
     case 0x23:{uint32_t ad=a+is;int n=f3==0?1:f3==1?2:4;if(f3>2)die("st f3",pc,steps);
+#ifdef BBTRACE
+      bb_mem(pc,1,ad,n,rs1);
+#endif
       if(ad+n>0x8000)die("store outside RAM",ad,steps);
       if(n==1)mem[ad]=b;else if(n==2){uint16_t h=b;memcpy(mem+ad,&h,2);}else wr32(ad,b);break;}
     case 0x13:switch(f3){case 0:v=a+ii;break;case 2:v=S(a)<ii;break;case 3:v=a<(uint32_t)ii;break;case 4:v=a^ii;break;case 6:v=a|ii;break;case 7:v=a&ii;break;
@@ -251,6 +273,7 @@ int main(int argc,char**argv){
       else if(f7==0||f7==0x20){uint32_t sh=b&31;switch(f3){
         case 0:v=f7?a-b:a+b;break;case 1:v=a<<sh;break;case 2:v=S(a)<S(b);break;case 3:v=a<b;break;case 4:v=a^b;break;
         case 5:v=f7?(uint32_t)(S(a)>>sh):a>>sh;break;case 6:v=a|b;break;case 7:v=a&b;break;}}
+      else if(f7==0x10&&(f3==2||f3==4||f3==6))v=(a<<(f3>>1))+b; /* Zba sh1add/sh2add/sh3add: the only Zba ops the Qwenputer core implements */
       else die("alu f7",pc,steps);
       break;
     case 0x0f:break;
@@ -273,7 +296,26 @@ int main(int argc,char**argv){
     default:die("opcode",w,steps);
     }
     if(rd&&op!=0x63&&op!=0x23&&op!=0x0f&&op!=0x73)reg[rd]=v;
-    reg[0]=0;pc=np;steps++;
+    if(tokon){ /* chip-token model of chipformer/rv/spec.py + ref.py Machine.record (see docs/research/COMPILER_BENCH.md) */
+      if(tok_n==63){tok_tot++;tok_R++;tok_n=0;}
+      if(op==0x6f||op==0x67||(op==0x63&&np!=pc+4)){tok_tot++;tok_J++;tok_n=0;}
+      else{tok_n++;
+        if(op==0x63||op==0x0f||(op==0x73)){tok_tot++;tok_nt++;}
+        else if(op==0x23){int t=f3==2?1:4;tok_tot+=t;tok_st+=t;}
+        else if(!rd){tok_tot++;tok_nt++;}
+        else{int32_t sv=(int32_t)v;int vt=(sv>=-(1<<14)&&sv<(1<<14))?1:(sv>=-(1<<29)&&sv<(1<<29))?2:3;
+          if(op==0x33&&f7==1&&f3>=4){ /* DIV-class: QS, QD x (8-k0), value record */
+            int sg=f3<=5?0:0;(void)sg;int sgn=(f3==4||f3==6);uint32_t bb=(sgn&&(b>>31))?~b:b;int da=0,db=0;for(int i=0;i<8;i++){if(a>>(4*i))da++;if(bb>>(4*i))db++;}
+            int k0=b==0?0:7-da+db;if(k0<0)k0=0;if(k0>8)k0=8;tok_tot+=1+(8-k0)+vt;tok_div+=1+(8-k0)+vt;tok_ndiv++;}
+          else{tok_tot+=vt;if(op==0x03)tok_ld+=vt;else tok_alu+=vt;}}}}
+    reg[0]=0;
+#ifdef BBTRACE
+    uint32_t pc_old=pc;
+#endif
+    pc=np;steps++;
+#ifdef BBTRACE
+    bb_post(op,pc_old,np);
+#endif
     uint32_t seq=rd32(dbox);
     if(disklat){if(seq&&seq!=last_req&&seq!=pend_seq){pend_seq=seq;pend_due=steps+disklat;}
       if(!(pend_seq&&steps>=pend_due)){goto nodisk;} seq=pend_seq;pend_seq=0;if(rd32(dbox)!=seq){goto nodisk;}}
@@ -285,6 +327,7 @@ int main(int argc,char**argv){
     nodisk:;
   }
 done:
+  if(tokon)fprintf(stderr,"TOKENS total=%llu steps=%llu per_instr=%.4f R=%llu J=%llu nt_or_x0=%llu store=%llu div=%llu(n=%llu) load=%llu alu=%llu\n",(unsigned long long)tok_tot,(unsigned long long)steps,(double)tok_tot/steps,(unsigned long long)tok_R,(unsigned long long)tok_J,(unsigned long long)tok_nt,(unsigned long long)tok_st,(unsigned long long)tok_div,(unsigned long long)tok_ndiv,(unsigned long long)tok_ld,(unsigned long long)tok_alu);
   if(live){live_restore();
     fprintf(stderr,"\nQwenOS live: %s after %llu guest instructions, %d frames shown (%d frame markers), guest exit code %d\n",
       exitcode==-3?"quit key":exitcode==-2?"input closed":"guest exited",(unsigned long long)steps,(int)live_frames_shown,frames,exitcode);
@@ -294,6 +337,9 @@ done:
   if(syspc){qsort(syms,nsyms,sizeof *syms,symcmp);uint64_t T=0;for(int n=0;n<64;n++)if(sys_cnt[n]){T+=sys_ins[n];fprintf(stderr,"SYS n=%2d calls=%9llu instr=%11llu avg=%.1f\n",n,(unsigned long long)sys_cnt[n],(unsigned long long)sys_ins[n],(double)sys_ins[n]/sys_cnt[n]);}
     fprintf(stderr,"SYS total instr in syscalls=%llu of %llu\n",(unsigned long long)T,(unsigned long long)steps);
     for(int q=0;q<nsr;q++){uint32_t a=sr_ra[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"SYSSITE n=%2u calls=%9llu instr=%11llu %s+%x\n",sr_n[q],(unsigned long long)sr_c[q],(unsigned long long)sr_i[q],k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
+#ifdef BBTRACE
+  bb_finish(steps,ticstep,nticks);
+#endif
   if(prof)prof_report();tic_report();
   for(int q=0;q<nw;q++)fprintf(stderr,"WATCH %s %s %llu\n",wn[q],whit[q]?"at":"never",(unsigned long long)wstep[q]);
   fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);
