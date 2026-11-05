@@ -42,6 +42,18 @@ Reproduce: `DMC=<tree with both patches> tools/compiler_bench.sh NAME` (prints s
 | run fill threshold step <= 0.5 texel (instead of 0.25) | 153,361,982 | 212,597,592 | worse: short runs cost more than Duff |
 | run fill threshold step <= 0.125 texel | 151,918,354 | 212,284,110 | -0.09 M instr but +1.0 M tokens: rejected (tokens count) |
 | head/tail with halfword stores + `k<7` byte path | 152,307,506 | 211,474,849 | worse than the byte head/tail loops |
+| run fill with a fall-through `switch` of 1-4 word stores instead of a loop | 153,367,917 | 212,612,353 | worse (jump-table overhead) |
+| per-(plane, row) memo of the span setup (position, step, cmap; 200 rows x 20 B), reset per frame in R_PlanesFrame | - | - | build runs, guest PANIC "plan B: caches end 3504 B into the arena": the converter's baked arena plan leaves no RAM headroom (bss +4000 B). Would need a region that is already free; not attempted |
+
+## Second round (traced, nothing kept)
+
+* R_ReplayWall is inlined into `R_DrawStrip` (24.7 % of instructions, ~100 flat blocks). Its cost is `R_RenderSegLoop` per column
+  (divide for iscale, tangent + FixedMul for the texture column, clip bookkeeping) and `R_MapPlane` per span (5 mul/mulh
+  FixedMuls, 77.8 k spans). The fragment setup is already cached; R_FindPlane is trivial. No exact algebraic shortcut found.
+* memset (1.2 %) is already a word loop; only unaligned destinations take the byte path (small).
+* Spans are stored with a 200-byte row stride, so word stores do not apply to R_SpanLoop; the texel index needs
+  srl/andi/srl/or/add (5 instr) for the interleaved x/y position and no sh*add form shortens it.
+* A misaligned `sw` would remove the head/tail code of the run fill, but the ISA's alignment rule is not documented here, so it was not used.
 
 ## Analysed, not implemented (no time inside the window)
 
