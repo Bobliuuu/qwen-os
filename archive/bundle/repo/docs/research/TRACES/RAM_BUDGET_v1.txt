@@ -1,0 +1,58 @@
+QwenOS /bin/doomd budget  (FINAL v1: implemented, `make check` green, 35 tests)
+=================================================================================
+Source of truth: linker/doomd.ld, linker/kernel.ld, include/qos.h in
+/Users/jhome/qwenos-work/bundle/repo
+
+RAM (32 KiB, 0x0000-0x7fff)
+  0x0000-0x00ff  reserved, unused (kernel never hands it out; NULL guard)
+  0x0100-0x05bf  kernel CORE, resident while doomd runs (1216 B):
+                   input mailbox 8, disk mailbox 276, 32x24 framebuffer 768,
+                   small kernel vars, 128 B kernel stack
+  0x05c0-0x7fff  /bin/doomd APP RAM = 0x7a40 = 31296 B (30.56 KiB)
+                   .data + .bss grow up from 0x05c0
+                   stack grows DOWN from 0x8000 (kernel passes sp=0x8000)
+                   linker reserves DOOMD_STACK (default 0x600) at the top;
+                   syscalls run on YOUR stack: kernel syscall frames are <=32 B each; keep >=128 B free.
+  => data+bss budget = 0x7a40 - stack. With 1536 B stack: 29760 B (29.06 KiB).
+     With 1024 B stack: 30272 B. Edit DOOMD_STACK in linker/doomd.ld.
+
+  Everything else in RAM is clobbered: RAMFS, fds, shell are gone while doomd
+  runs. When doomd returns the kernel zeroes its overlay and warm-reboots
+  (prints QWENOS_DOOMD_EXIT, reruns /bin/sh script). RAM is NOT zeroed for you
+  and .data is NOT preloaded: use apps/doomd_crt0.S (copies .data from DROM
+  image, zeroes .bss). Do not assume any RAM content at entry.
+
+Syscalls allowed under takeover: PUTC, FB_SET/GET/CLEAR/ROW/PRESENT, KEY_POLL,
+  DISK_REQUEST/POLL/CANCEL, GETPID, YIELD. All others (OPEN/READ/EXEC/...)
+  return -1. DISK_REQUEST dest must be in RAM 0x100-0x7fff, len<=256.
+  FB_ROW(y, ptr, 32): ptr may be RAM or data ROM; only 32 B row buffer needed
+  (kernel owns the 768 B framebuffer in the core).
+
+EXEC ROM (256 KiB 0x40000-0x7ffff; fetch only from here; DATA LOADS CANNOT READ IT)
+  0x40000-0x40fff  kernel (4 KiB)
+  0x41000-0x77fff  /bin/doomd ENGINE CODE: 0x37000 = 225280 B = 220 KiB
+                   entry (ENTRY(app_main)) = 0x41000 (crt0 first in .text)
+  0x78000-0x7bfff  shell/paint/raycast/asset (4 KiB each)
+  0x7c000-0x7ffff  WAD viewer (16 KiB)
+DATA ROM (128 KiB 0x20000-0x3ffff, read-only, loadable)
+  0x20000-0x20fff  kernel rodata
+  0x21000-0x3efff  ENGINE rodata + .data init image: 0x1e000 = 122880 B = 120 KiB
+  0x3f000-0x3ffff  small-app rodata
+Constants/tables MUST be in data ROM (they cannot be read from exec ROM).
+No compressed (RVC) instructions, RV32IM only, -msmall-data-limit=0, no relax.
+
+Build recipe for the engine (do not touch apps/doom.c, kernel/):
+  clang --target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -Os -ffreestanding
+        -fno-builtin -fno-stack-protector -fno-pic -msmall-data-limit=0 -Iinclude
+        -fuse-ld=lld -nostdlib -Wl,--no-relax -Wl,-z,max-page-size=4
+        -Wl,-T,linker/doomd.ld apps/doomd_crt0.S <engine objs> -o build/doomd.elf
+  Engine entry symbol: int doomd_main(const qos_api *api)  (crt0 calls it; return = exit,
+  kernel then warm-reboots). Replace apps/doomd.c (stub) in the Makefile rule, keep crt0.
+  `make check` runs the stub through tests/test_doomd.py (whole-RAM write test, core
+  survives, warm reboot). Current stub: free data+bss+... = 29752 B between bss end and the
+  stack reserve (stack reserve 1536 B).
+Kernel warm-reboot after exit re-runs the boot script (RAMFS lost). If the engine never
+  returns, nothing else matters. Optional extra 256 B (0x0000-0x00ff) is left unused for
+  safety; the kernel's readable()/writable checks start at 0x100.
+Min possible further gain: kernel stack 128 B and 768 B fb are the largest core items.
+  Core could shrink another ~100 B by dropping disk-mailbox padding; not worth risk.

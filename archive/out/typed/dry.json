@@ -1,0 +1,224 @@
+{
+  "k_graph": 64,
+  "gpu_mem_peak_mb": null,
+  "kgraph_stats": null,
+  "gen_chip_seconds": null,
+  "gen_text_seconds": null,
+  "host": "Jerrys-Mac-mini.local",
+  "model_seconds": 0.0,
+  "gpu": "cpu",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 0.0,
+  "instr_per_s": 123830.4,
+  "mode": "dry-run (reference stand-in, NOT the model)",
+  "target": "boot-frame",
+  "segment_range": null,
+  "wall_seconds": 26.9,
+  "snapshot_marker": 0,
+  "frames": 1,
+  "segments": 26,
+  "total_segments": 26,
+  "first_segment": 1,
+  "instructions": 3335072,
+  "planned_chip_tokens": 4693316,
+  "tok_per_instr": 1.4073,
+  "model_chip_tokens": 0,
+  "model_text_tokens": 0,
+  "console_bytes": 273,
+  "extra_full_text_tokens_for_echo": 273,
+  "est_chip_seconds": 1466.7,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 1,
+  "out": "dry_console.bin",
+  "segments_by_reason": {
+    "park": 23,
+    "isplit": 2,
+    "marker": 1
+  },
+  "rom_plan": "build/live-crx-plan.json",
+  "segment_detail": [
+    [
+      1,
+      true,
+      0,
+      186,
+      226
+    ],
+    [
+      2,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      3,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      4,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      5,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      6,
+      true,
+      0,
+      254,
+      291
+    ],
+    [
+      7,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      8,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      9,
+      true,
+      0,
+      2005,
+      2305
+    ],
+    [
+      10,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      11,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      12,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      13,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      14,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      15,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      16,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      17,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      18,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      19,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      20,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      21,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      22,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      23,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      24,
+      true,
+      0,
+      1242125,
+      1761396
+    ],
+    [
+      25,
+      true,
+      0,
+      1031152,
+      1460252
+    ],
+    [
+      26,
+      true,
+      1,
+      1057870,
+      1467186
+    ]
+  ]
+}

@@ -1,0 +1,615 @@
+diff -ruN -x build -x .git wt-perf/engine/DMC100-Doom/engine/p_mapdata.c wt-render/engine/DMC100-Doom/engine/p_mapdata.c
+--- wt-perf/engine/DMC100-Doom/engine/p_mapdata.c	2026-11-03 18:33:18
++++ wt-render/engine/DMC100-Doom/engine/p_mapdata.c	2026-11-03 19:39:15
+@@ -269,6 +269,18 @@
+ #endif
+ }
+ 
++// The renderer's part of P_GetLine: flags (without ML_MAPPED, which only the automap reads) and
++// the two sectors. Nothing else of the line is read by r_segs.c.
++void P_GetLineR (lineidx_t i, line_t* l)
++{
++    dmc_line_t	r;
++
++    P_LineRec(i, &r);
++    l->flags = r.flags;
++    l->frontsector = r.front;
++    l->backsector = r.back;
++}
++
+ int P_LineTag (lineidx_t i)
+ {
+     dmc_line_t	r;
+diff -ruN -x build -x .git wt-perf/engine/DMC100-Doom/engine/p_mapdata.h wt-render/engine/DMC100-Doom/engine/p_mapdata.h
+--- wt-perf/engine/DMC100-Doom/engine/p_mapdata.h	2026-11-03 18:33:18
++++ wt-render/engine/DMC100-Doom/engine/p_mapdata.h	2026-11-03 19:39:15
+@@ -126,6 +126,7 @@
+ #define P_TagOnlyLine(t)	(LINE_TAGONLY | (t))
+ 
+ void P_GetLine (lineidx_t i, line_t* l);
++void P_GetLineR (lineidx_t i, line_t* l);
+ int P_LineTag (lineidx_t i);
+ int P_LineSpecial (lineidx_t i);
+ void P_SetLineSpecial (lineidx_t i, int special);
+diff -ruN -x build -x .git wt-perf/engine/DMC100-Doom/engine/r_data.c wt-render/engine/DMC100-Doom/engine/r_data.c
+--- wt-perf/engine/DMC100-Doom/engine/r_data.c	2026-11-03 18:33:18
++++ wt-render/engine/DMC100-Doom/engine/r_data.c	2026-11-03 19:21:47
+@@ -242,6 +242,8 @@
+ #else
+ #define STAT_PX()	((void)0)
+ #endif
++// the host frame test (DMC_ATTR) classifies through colfunc, which wall columns no longer use
++#define ATTR_DIRECT(p, src, bits, fs)	((void)0)
+ 
+ 
+ //
+@@ -401,11 +403,19 @@
+     else
+ 	fetch_wait(b->ticket);
+     b->ticket = 0;
+-    R_LoadColumn(p);
+     if (p->post)
++    {
++	R_LoadColumn(p);
+ 	R_DrawMaskedColumn(POSTBUF(p->buf));
+-    else
++	if (next)
++	    R_LoadColumn(rq);
++	return;
++    }
++    // a wall or sky column goes straight to the inner loop: no round trip through
++    // the dc_* globals (they stay those of the column being queued)
+     {
++	int	fs;
++
+ 	src = WALLBUF(p->buf);
+ 	bits = p->bits;
+ 	// one stored row: the drawer reads two
+@@ -414,17 +424,14 @@
+ 	    src[1] = src[0];
+ 	    bits = 1;
+ 	}
+-	dc_source = src;
+-	dc_fracshift = 16 - p->level - bits;
+-	dc_rowshift = 32 - bits;
+-#ifdef DMC_ATTR
+-	dc_texheight = p->texheight;
+-	dc_ispost = 0;
+-#endif
+-	colfunc ();
++	fs = 16 - p->level - bits;
++	R_ColumnLoop (r_stripbuf + (p->x - r_bufx0) * R_VIEWH + p->yl, p->yh - p->yl + 1,
++		      (unsigned) (p->texturemid + (p->yl - centery) * p->iscale) << fs,
++		      (unsigned) p->iscale << fs, 32 - bits, src,
++		      colormaps + p->cmap);
++	RSTAT(colpx, p->yh - p->yl + 1);
++	ATTR_DIRECT(p, src, bits, fs);
+     }
+-    if (next)
+-	R_LoadColumn(rq);
+ }
+ 
+ 
+diff -ruN -x build -x .git wt-perf/engine/DMC100-Doom/engine/r_plane.c wt-render/engine/DMC100-Doom/engine/r_plane.c
+--- wt-perf/engine/DMC100-Doom/engine/r_plane.c	2026-11-03 18:33:18
++++ wt-render/engine/DMC100-Doom/engine/r_plane.c	2026-11-03 19:37:04
+@@ -122,7 +122,7 @@
+ //
+ // BASIC PRIMITIVE
+ //
+-void
++static inline void
+ R_MapPlane
+ ( int		y,
+   int		x1,
+@@ -136,6 +136,8 @@
+     fixed_t	ystep;
+     unsigned	index;
+     unsigned	position;
++    unsigned	ds_step_l;
++    lighttable_t* cmap;
+ 	
+     distance = FixedMulI (planeheight, dmc_yslope_tab[y]);
+     xstep = FixedMulI (distance,basexscale);
+@@ -146,16 +148,14 @@
+ 
+     position = ((xfrac << 10) & 0xffff0000)
+              | ((yfrac >> 6)  & 0x0000ffff);
+-    ds_step = ((xstep << 10) & 0xffff0000)
++    ds_step_l = ((xstep << 10) & 0xffff0000)
+             | ((ystep >> 6)  & 0x0000ffff);
++#ifdef DMC_ATTR
++    ds_step = ds_step_l;
++#endif
+ 
+-    ds_x1 = r_s0 + x1;
+-    ds_x2 = r_s0 + x2;
+-    ds_y = y;
+-    ds_position = position + (unsigned)ds_x1 * ds_step;
+-
+     if (fixedcolormap)
+-	ds_colormap = fixedcolormap;
++	cmap = fixedcolormap;
+     else
+     {
+ 	index = distance >> LIGHTZSHIFT;
+@@ -163,14 +163,35 @@
+ 	if (index >= MAXLIGHTZ )
+ 	    index = MAXLIGHTZ-1;
+ 
+-	ds_colormap = R_ZLight (planelight, index);
++	cmap = R_ZLight (planelight, index);
+     }
+ 	
+     RSTAT(spans, 1);
++#ifdef DMC_ATTR
++    ds_colormap = cmap;
++    ds_x1 = r_s0 + x1;
++    ds_x2 = r_s0 + x2;
++    ds_y = y;
++    ds_position = position + (unsigned)ds_x1 * ds_step;
+     if (ds_source)
+ 	R_DrawSpan ();
+     else
+ 	R_DrawSpanSolid ();
++#else
++    {
++	// the span goes straight to the inner loop (R_DrawSpan and R_DrawSpanSolid without
++	// the round trip through the ds_* globals)
++	int	xa = r_s0 + x1;
++	byte*	dest = r_stripbuf + (xa - r_bufx0) * R_VIEWH + y;
++
++	RSTAT(spanpx, x2 - x1 + 1);
++	if (ds_source)
++	    R_SpanLoop (dest, x2 - x1 + 1, position + (unsigned)xa * ds_step_l, ds_step_l,
++			ds_source, cmap);
++	else
++	    R_FillRow (dest, x2 - x1 + 1, cmap[ds_solid]);
++    }
++#endif
+ }
+ 
+ 
+@@ -354,7 +375,7 @@
+ //
+ // R_MakeSpans
+ //
+-void
++static inline void
+ R_MakeSpans
+ ( int		x,
+   int		t1,
+diff -ruN -x build -x .git wt-perf/engine/DMC100-Doom/engine/r_plane.h wt-render/engine/DMC100-Doom/engine/r_plane.h
+--- wt-perf/engine/DMC100-Doom/engine/r_plane.h	2026-11-03 18:33:18
++++ wt-render/engine/DMC100-Doom/engine/r_plane.h	2026-11-03 19:37:04
+@@ -84,19 +84,7 @@
+   int		top,
+   int		bottom );
+ 
+-void
+-R_MapPlane
+-( int		y,
+-  int		x1,
+-  int		x2 );
+-
+-void
+-R_MakeSpans
+-( int		x,
+-  int		t1,
+-  int		b1,
+-  int		t2,
+-  int		b2 );
++// R_MapPlane and R_MakeSpans are local to r_plane.c (inlined into R_DrawPlane).
+ 
+ void R_DrawPlanes (void);
+ 
+diff -ruN -x build -x .git wt-perf/engine/DMC100-Doom/engine/r_segs.c wt-render/engine/DMC100-Doom/engine/r_segs.c
+--- wt-perf/engine/DMC100-Doom/engine/r_segs.c	2026-11-03 18:33:18
++++ wt-render/engine/DMC100-Doom/engine/r_segs.c	2026-11-03 19:39:15
+@@ -171,7 +171,7 @@
+     // OPTIMIZE: get rid of LIGHTSEGSHIFT globally
+     P_GetSeg(ds->curline, &curline);
+     curlineidx = ds->curline;
+-    P_GetLine(curline.linedef, &linedef);
++    P_GetLineR(curline.linedef, &linedef);
+     frontsector = curline.side ? linedef.backsector : linedef.frontsector;
+     backsector = curline.backsector;
+     R_ReadSector (frontsector, &front);
+@@ -940,7 +940,7 @@
+ 
+     curlineidx = frag >> 18;
+     P_GetSeg(curlineidx, &curline);
+-    P_GetLine(curline.linedef, &linedef);
++    P_GetLineR(curline.linedef, &linedef);
+     frontsector = curline.side ? linedef.backsector : linedef.frontsector;
+     backsector = curline.backsector;
+     R_ReadSector (frontsector, &frontsec);
+diff -ruN -x build -x .git wt-perf/engine/DMC100-Doom/port/data/cache.c wt-render/engine/DMC100-Doom/port/data/cache.c
+--- wt-perf/engine/DMC100-Doom/port/data/cache.c	2026-11-03 19:02:16
++++ wt-render/engine/DMC100-Doom/port/data/cache.c	2026-11-03 19:41:49
+@@ -283,16 +283,20 @@
+     return rc_data[set * RC_WAYS + w] + (loff & (RC_LINE - 1));
+ }
+ 
+-void rec_get(uint32_t loff, void *out, uint32_t n)
++__attribute__((noinline)) static void rec_get_full(uint32_t loff, void *out, uint32_t n)
+ {
+     const uint8_t *p = 0;
+     if (loff - bake_lo < bake_span)
+         p = bake_ptr(loff, n);
+-    if (!p && n - 1u < RC_LINE - (loff & (RC_LINE - 1)))
+-        p = rc_hit(loff);
+     if (!p) {
+-        rec_get_slow(loff, out, n);
+-        return;
++        if (n - 1u >= RC_LINE - (loff & (RC_LINE - 1))) {
++            rec_get_slow(loff, out, n);
++            return;
++        }
++        // one line: a hit, else the line is filled right here (rec_get_slow would look it up again)
++        p = rc_hit(loff);
++        if (!p)
++            p = rc_fill(loff / RC_LINE) + (loff & (RC_LINE - 1));
+     }
+     if (!(((uintptr_t)p | (uintptr_t)out) & 3u)) {
+         const uint32_t *s = (const uint32_t *)(const void *)p;
+@@ -321,30 +325,113 @@
+     memcpy(out, p, n);
+ }
+ 
+-uint16_t rec_u16(uint32_t loff)
++__attribute__((noinline)) static uint16_t rec_u16_full(uint32_t loff)
+ {
+-    if (!(loff & 1u) && ((loff & (RC_LINE - 1)) <= RC_LINE - 2 || loff - bake_lo < bake_span)) {
++    if (!(loff & 1u)) {
+         const uint8_t *p = loff - bake_lo < bake_span ? bake_ptr(loff, 2) : 0;
+-        if (!p && (loff & (RC_LINE - 1)) <= RC_LINE - 2)
++        if (!p) {
+             p = rc_hit(loff);
+-        if (p)
+-            return *(const uint16_t *)(const void *)p;
++            if (!p)
++                p = rc_fill(loff / RC_LINE) + (loff & (RC_LINE - 1));
++        }
++        return *(const uint16_t *)(const void *)p;
+     }
+     uint16_t v;
+     rec_get_slow(loff, &v, 2);
+     return v;
+ }
+ 
+-uint32_t rec_u32(uint32_t loff)
++__attribute__((noinline)) static uint32_t rec_u32_full(uint32_t loff)
+ {
+     if (!(loff & 3u)) {
+         const uint8_t *p = loff - bake_lo < bake_span ? bake_ptr(loff, 4) : 0;
+-        if (!p)
++        if (!p) {
+             p = rc_hit(loff);
+-        if (p)
+-            return *(const uint32_t *)(const void *)p;
++            if (!p)
++                p = rc_fill(loff / RC_LINE) + (loff & (RC_LINE - 1));
++        }
++        return *(const uint32_t *)(const void *)p;
+     }
+     uint32_t v;
+     rec_get_slow(loff, &v, 4);
+     return v;
++}
++
++// A record in one line that is not in the cache (outside the baked ranges): fill, then copy.
++__attribute__((noinline)) static void rec_get_miss(uint32_t loff, void *out, uint32_t n)
++{
++    const uint8_t *p = rc_fill(loff / RC_LINE) + (loff & (RC_LINE - 1));
++    if (!(((uintptr_t)p | (uintptr_t)out) & 3u)) {
++        const uint32_t *s = (const uint32_t *)(const void *)p;
++        uint32_t *d = (uint32_t *)out;
++        if (n == 16) {
++            uint32_t a = s[0], b = s[1], c = s[2], e = s[3];
++            d[0] = a; d[1] = b; d[2] = c; d[3] = e;
++            return;
++        }
++        if (n == 8) {
++            uint32_t a = s[0], b = s[1];
++            d[0] = a; d[1] = b;
++            return;
++        }
++        if (n == 4) {
++            d[0] = s[0];
++            return;
++        }
++    }
++    memcpy(out, p, n);
++}
++
++// Hit paths: leaf functions (no saved registers) for a record in one line of the cache and
++// outside the baked ranges; everything else takes the full versions above.
++void rec_get(uint32_t loff, void *out, uint32_t n)
++{
++    if (loff - bake_lo >= bake_span && n - 1u < RC_LINE - (loff & (RC_LINE - 1))) {
++        const uint8_t *p = rc_hit(loff);
++        if (p) {
++            if (!(((uintptr_t)p | (uintptr_t)out) & 3u)) {
++                const uint32_t *s = (const uint32_t *)(const void *)p;
++                uint32_t *d = (uint32_t *)out;
++                if (n == 16) {
++                    uint32_t a = s[0], b = s[1], c = s[2], e = s[3];
++                    d[0] = a; d[1] = b; d[2] = c; d[3] = e;
++                    return;
++                }
++                if (n == 8) {
++                    uint32_t a = s[0], b = s[1];
++                    d[0] = a; d[1] = b;
++                    return;
++                }
++                if (n == 4) {
++                    d[0] = s[0];
++                    return;
++                }
++            }
++            memcpy(out, p, n);
++            return;
++        }
++        rec_get_miss(loff, out, n);
++        return;
++    }
++    rec_get_full(loff, out, n);
++}
++
++uint16_t rec_u16(uint32_t loff)
++{
++    if (!(loff & 1u) && loff - bake_lo >= bake_span) {
++        const uint8_t *p = rc_hit(loff);
++        if (p)
++            return *(const uint16_t *)(const void *)p;
++    }
++    return rec_u16_full(loff);
++}
++
++uint32_t rec_u32(uint32_t loff)
++{
++    if (!(loff & 3u) && loff - bake_lo >= bake_span) {
++        const uint8_t *p = rc_hit(loff);
++        if (p)
++            return *(const uint32_t *)(const void *)p;
++    }
++    return rec_u32_full(loff);
+ }
+diff -ruN -x build -x .git wt-perf/engine/DMC100-Doom/port/render/r_inner.c wt-render/engine/DMC100-Doom/port/render/r_inner.c
+--- wt-perf/engine/DMC100-Doom/port/render/r_inner.c	2026-11-03 18:33:17
++++ wt-render/engine/DMC100-Doom/port/render/r_inner.c	2026-11-03 19:33:27
+@@ -10,23 +10,28 @@
+ #include "r_strip.h"
+ #include "trig_tables.h"
+ 
++// Duff's device over 8 pixels: the first n & 7 pixels are entered at the matching case of one
++// unrolled body (dest is moved back so every case uses the same offsets), no prologue loop.
++#define COL_PX(k) d[k] = cmap[src[pos >> sh]]; pos += step
+ void R_ColumnLoop(uint8_t *dest, int n, uint32_t pos, uint32_t step, int sh, const uint8_t *src,
+                   const uint8_t *cmap)
+ {
+-    for (; n & 3; n--) {
+-        *dest++ = cmap[src[pos >> sh]];
+-        pos += step;
++    uint8_t *d = dest - ((8 - (n & 7)) & 7);
++    int blocks = (n + 7) >> 3;
++    switch (n & 7) {
++    case 0:
++        do {
++            COL_PX(0);
++    case 7: COL_PX(1);
++    case 6: COL_PX(2);
++    case 5: COL_PX(3);
++    case 4: COL_PX(4);
++    case 3: COL_PX(5);
++    case 2: COL_PX(6);
++    case 1: COL_PX(7);
++            d += 8;
++        } while (--blocks);
+     }
+-    for (; n; n -= 4, dest += 4) {
+-        dest[0] = cmap[src[pos >> sh]];
+-        pos += step;
+-        dest[1] = cmap[src[pos >> sh]];
+-        pos += step;
+-        dest[2] = cmap[src[pos >> sh]];
+-        pos += step;
+-        dest[3] = cmap[src[pos >> sh]];
+-        pos += step;
+-    }
+ }
+ 
+ // Vanilla R_InitTranslationTables: the green ramp 0x70..0x7f becomes grey,
+@@ -63,23 +68,26 @@
+ 
+ #define SPAN_TEXEL(p) cmap[src[(((p) >> 6) & 0x3E0u) | ((p) >> 27)]]
+ 
++// Same device for the spans (a row step is R_VIEWH).
++#define SPAN_PX(k) d[(k) * R_VIEWH] = SPAN_TEXEL(pos); pos += step
+ void R_SpanLoop(uint8_t *dest, int n, uint32_t pos, uint32_t step, const uint8_t *src,
+                 const uint8_t *cmap)
+ {
+-    for (; n & 3; n--) {
+-        *dest = SPAN_TEXEL(pos);
+-        dest += R_VIEWH;
+-        pos += step;
+-    }
+-    for (; n; n -= 4, dest += 4 * R_VIEWH) {
+-        dest[0] = SPAN_TEXEL(pos);
+-        pos += step;
+-        dest[R_VIEWH] = SPAN_TEXEL(pos);
+-        pos += step;
+-        dest[2 * R_VIEWH] = SPAN_TEXEL(pos);
+-        pos += step;
+-        dest[3 * R_VIEWH] = SPAN_TEXEL(pos);
+-        pos += step;
++    uint8_t *d = dest - (int)((8 - (n & 7)) & 7) * R_VIEWH;
++    int blocks = (n + 7) >> 3;
++    switch (n & 7) {
++    case 0:
++        do {
++            SPAN_PX(0);
++    case 7: SPAN_PX(1);
++    case 6: SPAN_PX(2);
++    case 5: SPAN_PX(3);
++    case 4: SPAN_PX(4);
++    case 3: SPAN_PX(5);
++    case 2: SPAN_PX(6);
++    case 1: SPAN_PX(7);
++            d += 8 * R_VIEWH;
++        } while (--blocks);
+     }
+ }
+ 
+diff -ruN -x build -x .git wt-perf/repo2/apps/doomd_crt0.S wt-render/repo2/apps/doomd_crt0.S
+--- wt-perf/repo2/apps/doomd_crt0.S	2026-11-03 18:55:16
++++ wt-render/repo2/apps/doomd_crt0.S	2026-11-03 19:28:15
+@@ -8,6 +8,11 @@
+  addi sp,sp,-16
+  sw ra,12(sp)
+  sw a0,8(sp)
++ sw gp,4(sp)
++.option push
++.option norelax
++ la gp,__global_pointer$
++.option pop
+  la t0,__data_load
+  la t1,__data_start
+  la t2,__data_end
+@@ -25,6 +30,7 @@
+  j 3b
+ 4: lw a0,8(sp)
+  call doomd_main
++ lw gp,4(sp)
+  lw ra,12(sp)
+  addi sp,sp,16
+  ret
+diff -ruN -x build -x .git wt-perf/repo2/include/qos.h wt-render/repo2/include/qos.h
+--- wt-perf/repo2/include/qos.h	2026-11-03 19:01:23
++++ wt-render/repo2/include/qos.h	2026-11-03 19:34:55
+@@ -46,6 +46,7 @@
+ #define QOS_SYS_DISK_POLL 19u /* 0=pending, len=completed, negative=failure */
+ #define QOS_SYS_DISK_CANCEL 20u /* abort pending request */
+ #define QOS_SYS_DISK_READ 21u /* offset, dest RAM ptr, len<=256: request+wait+copy in one call; returns len, 0 = still pending (continue with DISK_POLL), <0 error */
++#define QOS_SYS_FB_COL 22u /* x, src pointer, cy0|n<<8|stride<<16: fb[cy0+i][x] = src[i*stride], i<n (one call per sampled column) */
+ #define QOS_DISK_WINDOW 256u
+ #define QOS_O_READ 0u
+ #define QOS_O_WRITE 1u
+diff -ruN -x build -x .git wt-perf/repo2/kernel/main.c wt-render/repo2/kernel/main.c
+--- wt-perf/repo2/kernel/main.c	2026-11-03 19:01:23
++++ wt-render/repo2/kernel/main.c	2026-11-03 19:34:55
+@@ -83,7 +83,7 @@
+  if(takeover)switch(n){
+   case QOS_SYS_PUTC:case QOS_SYS_FB_SET:case QOS_SYS_FB_CLEAR:case QOS_SYS_FB_GET:
+   case QOS_SYS_FB_ROW:case QOS_SYS_FB_PRESENT:case QOS_SYS_KEY_POLL:case QOS_SYS_DISK_REQUEST:
+-  case QOS_SYS_DISK_POLL:case QOS_SYS_DISK_CANCEL:case QOS_SYS_GETPID:case QOS_SYS_YIELD:break;
++  case QOS_SYS_DISK_POLL:case QOS_SYS_DISK_CANCEL:case QOS_SYS_GETPID:case QOS_SYS_YIELD:case QOS_SYS_FB_COL:break;
+   default:return (unsigned)-1;
+  }
+  switch(n){
+@@ -109,6 +109,11 @@
+   if(f->pos>lengths[k])lengths[k]=f->pos;return len;}
+  case QOS_SYS_EXEC:if(!name_ok((const char*)a))return (unsigned)-1;return (unsigned)spawn((const char*)a);
+  case QOS_SYS_FB_SET:if(a>=QOS_FB_W||b>=QOS_FB_H)return (unsigned)-1;framebuffer[b*QOS_FB_W+a]=(uint8_t)c;return 0;
++ case QOS_SYS_FB_COL:{unsigned cy=(unsigned)c&255u,n=((unsigned)c>>8)&255u,st=((unsigned)c>>16)&255u;
++  if(a>=QOS_FB_W||cy+n>QOS_FB_H||!n||!st||!readable(b,(n-1)*st+1))return (unsigned)-1;
++  {const uint8_t*sp=(const uint8_t*)b;uint8_t*dp=framebuffer+cy*QOS_FB_W+a;
++   for(;n;n--,dp+=QOS_FB_W,sp+=st)*dp=*sp;}
++  return 0;}
+  case QOS_SYS_FB_CLEAR:for(unsigned i=0;i<sizeof(framebuffer);i++)framebuffer[i]=(uint8_t)a;return 0;
+  case QOS_SYS_STAT:{int f=file_number((const char*)a);if(f<0)return (unsigned)-1;if(f==0)return sizeof(readme)-1;if(f>=F_TMP0)return lengths[f-F_TMP0];return 0;}
+  case QOS_SYS_GETPID:return current_pid;
+@@ -169,9 +174,16 @@
+  ready:
+  if(qos_disk_mailbox.status!=1){disk_active=0;return (unsigned)-2;}
+  {const uint32_t*sp=(const uint32_t*)(const void*)qos_disk_mailbox.bytes;uint32_t*dp=(uint32_t*)b;unsigned w=(unsigned)c>>2;
+-  if((b|c)&3){const uint8_t*s1=(const uint8_t*)sp;uint8_t*d1=(uint8_t*)b;for(unsigned i=0;i<c;i++)d1[i]=s1[i];}
+-  else{for(;w>=4;w-=4){uint32_t x0=sp[0],x1=sp[1],x2=sp[2],x3=sp[3];dp[0]=x0;dp[1]=x1;dp[2]=x2;dp[3]=x3;sp+=4;dp+=4;}
+-   while(w--)*dp++=*sp++;}}
++  if(!((b|c)&3)){for(;w>=4;w-=4){uint32_t x0=sp[0],x1=sp[1],x2=sp[2],x3=sp[3];dp[0]=x0;dp[1]=x1;dp[2]=x2;dp[3]=x3;sp+=4;dp+=4;}
++   while(w--)*dp++=*sp++;}
++  else{ /* unaligned destination or odd length: word loads from the mailbox, byte stores (little endian) */
++   uint8_t*d1=(uint8_t*)b;unsigned n=(unsigned)c;
++   for(;n>=8;n-=8){uint32_t x=sp[0],y=sp[1];
++    d1[0]=(uint8_t)x;d1[1]=(uint8_t)(x>>8);d1[2]=(uint8_t)(x>>16);d1[3]=(uint8_t)(x>>24);
++    d1[4]=(uint8_t)y;d1[5]=(uint8_t)(y>>8);d1[6]=(uint8_t)(y>>16);d1[7]=(uint8_t)(y>>24);sp+=2;d1+=8;}
++   if(n){uint32_t x=sp[0];sp++;
++    if(n>=4){d1[0]=(uint8_t)x;d1[1]=(uint8_t)(x>>8);d1[2]=(uint8_t)(x>>16);d1[3]=(uint8_t)(x>>24);d1+=4;n-=4;if(n)x=sp[0];}
++    switch(n){case 3:d1[2]=(uint8_t)(x>>16);/* fallthrough */case 2:d1[1]=(uint8_t)(x>>8);/* fallthrough */case 1:d1[0]=(uint8_t)x;}}}}
+  disk_active=0;
+  return (unsigned)c;
+ }
+diff -ruN -x build -x .git wt-perf/repo2/ports/doomdmc/build.sh wt-render/repo2/ports/doomdmc/build.sh
+--- wt-perf/repo2/ports/doomdmc/build.sh	2026-11-03 19:02:30
++++ wt-render/repo2/ports/doomdmc/build.sh	2026-11-03 19:28:39
+@@ -10,7 +10,7 @@
+ LLVM=${LLVM:-/opt/homebrew/opt/llvm/bin}
+ CC=${CC:-clang}; LD=${LD:-ld.lld}
+ mkdir -p "$OUT/o"
+-ARCH="--target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -msmall-data-limit=0 -mno-relax"
++ARCH="--target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -msmall-data-limit=0 ${RELAXFLAG:--mrelax}"
+ INC="-I$HERE/stub -I$DMC/engine/stub/include -I$DMC/engine -I$DMC/port/data -I$DMC/port/render -I$DMC/port/obj -I$DMC/port/math -I$DMC/platform -I$DMC/port/game -I$DMC/port/ovl -I$HERE -I$GEN -I$DMC/controller/rc-n1 -I$REPO/include -I$REPO/ports/doom"
+ DEFS="-DDOOMD_MODE=${DOOMD_MODE:-0} -DDOOMD_DUMP=${DOOMD_DUMP:-0} -DDMC_FW -DDMC_HASHORDER -DDMC_SINE_L1 -DPLAT_HOST"
+ CF="$ARCH ${OPT:--O2} -ffunction-sections -fdata-sections -ffreestanding -fno-builtin -fno-common -fwrapv -fsigned-char -std=gnu11 -w $DEFS $INC ${EXTRA_CF}"
+@@ -51,5 +51,5 @@
+ done
+ wait
+ WRAP="--wrap=G_DoLoadLevel --wrap=G_DoNewGame --wrap=G_DoPlayDemo --wrap=G_DoCompleted --wrap=G_DoWorldDone --wrap=P_Init --wrap=R_SolidColumn --wrap=img_read --wrap=img_read_async --wrap=D_PostEvent --wrap=P_CrossSpecialLine --wrap=P_ShootSpecialLine --wrap=P_UseSpecialLine"
+-$LD --gc-sections --no-relax -T $REPO/linker/doomd.ld $HERE/frame.ld -z max-page-size=4 $WRAP --defsym=DOOMD_STACK_OVERRIDE=${STACK:-0x580} ${LDX} -Map $OUT/doomd.map -o $OUT/doomd.elf $objs
++$LD --gc-sections ${LDRELAX:---relax --relax-gp} -T $REPO/linker/doomd.ld $HERE/frame.ld -z max-page-size=4 $WRAP --defsym=DOOMD_STACK_OVERRIDE=${STACK:-0x580} ${LDX} -Map $OUT/doomd.map -o $OUT/doomd.elf $objs
+ readelf -SW $OUT/doomd.elf | grep -E " \.(text|rodata|data|bss) "
+diff -ruN -x build -x .git wt-perf/repo2/ports/doomdmc/frame.ld wt-render/repo2/ports/doomdmc/frame.ld
+--- wt-perf/repo2/ports/doomdmc/frame.ld	2026-11-03 18:55:16
++++ wt-render/repo2/ports/doomdmc/frame.ld	2026-11-03 19:29:05
+@@ -6,3 +6,4 @@
+ __core_size = 0;
+ __dmc_variant = 0;
+ dmc_tic = __frame_start + 6912;
++__global_pointer$ = 0xec0;
+diff -ruN -x build -x .git wt-perf/repo2/ports/doomdmc/qlcd.c wt-render/repo2/ports/doomdmc/qlcd.c
+--- wt-perf/repo2/ports/doomdmc/qlcd.c	2026-11-03 18:55:17
++++ wt-render/repo2/ports/doomdmc/qlcd.c	2026-11-03 19:34:55
+@@ -45,24 +45,33 @@
+ {
+     int h = wy1 - wy0 + 1;
+     int rep = (wflags & PUMP_DOUBLE) ? 2 : 1;
++    // FB rows whose sample row (cy*10+5) lies in this window: cy0 .. cy0 + nsamp - 1
++    int cy0 = (wy0 + 4) / 10;
++    int cy1 = wy1 >= 5 ? (wy1 - 5) / 10 : -1;
++    if (cy1 > (int)QOS_FB_H - 1) cy1 = (int)QOS_FB_H - 1;
++    unsigned nsamp = cy1 >= cy0 ? (unsigned)(cy1 - cy0 + 1) : 0;
++    unsigned arg = (unsigned)cy0 | nsamp << 8 | 10u << 16;
++    int off = cy0 * 10 + 5 - wy0;
+     if (dumping) { q_putc(1); q_putc('D'); put16((unsigned)(ncols * rep * h)); }
++    // x % 10 and x / 10 of the column about to be sent, kept incrementally
++    int x = wcur;
++    unsigned m = (unsigned)x % 10u, q = (unsigned)x / 10u;
+     for (int c = 0; c < ncols; c++) {
+         const uint8_t *col = cols + c * h;
+         for (int r = 0; r < rep; r++) {
+-            int x = wcur;
+-            if (++wcur > wx1) wcur = wx0;
+             if (dumping)
+                 for (int y = 0; y < h; y++) q_putc(col[y]);
+-            if (x % 10 == 5) {
+-                unsigned cx = (unsigned)(x / 10);
+-                // FB rows whose sample row (cy*10+5) lies in this window
+-                int cy0 = (wy0 + 4) / 10;
+-                for (int cy = cy0; cy < (int)QOS_FB_H && cy * 10 + 5 <= wy1; cy++)
+-                    if (cy * 10 + 5 >= wy0)
+-                        qapi->syscall(QOS_SYS_FB_SET, cx, (unsigned)cy, col[cy * 10 + 5 - wy0]);
++            if (m == 5 && nsamp)
++                qapi->syscall(QOS_SYS_FB_COL, q, (uintptr_t)(col + off), arg);
++            if (++x > wx1) {
++                x = wx0;
++                m = (unsigned)x % 10u; q = (unsigned)x / 10u;
++            } else if (++m == 10) {
++                m = 0; q++;
+             }
+         }
+     }
++    wcur = x;
+     pump_stats.fills += (uint32_t)ncols;
+ }
+ void pump_sync(int max) { (void)max; }

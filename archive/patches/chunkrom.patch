@@ -1,0 +1,326 @@
+diff -ruN -x __pycache__ -x model_doom_qwen.py a/linker/doomd.ld b/linker/doomd.ld
+--- a/linker/doomd.ld	2026-11-03 19:36:30
++++ b/linker/doomd.ld	2026-11-03 19:38:48
+@@ -16,7 +16,7 @@
+ RAM_END  = 0x8000;
+ MEMORY {
+  ROM  (rx) : ORIGIN = 0x41000, LENGTH = 0x37000
+- DROM (r)  : ORIGIN = 0x21000, LENGTH = 0x1e000
++ DROM (r)  : ORIGIN = 0x21000, LENGTH = DEFINED(Q_CRX_BASE_LD) ? (Q_CRX_BASE_LD - 0x21000) : 0x1e000
+  RAM  (rw) : ORIGIN = 0x5c0,   LENGTH = 0x8000 - 0x5c0
+ }
+ SECTIONS {
+diff -ruN -x __pycache__ -x model_doom_qwen.py a/ports/doomdmc/lowres.sh b/ports/doomdmc/lowres.sh
+--- a/ports/doomdmc/lowres.sh	2026-11-03 19:36:30
++++ b/ports/doomdmc/lowres.sh	2026-11-03 19:38:48
+@@ -20,6 +20,10 @@
+ T=$N; [ -n "$D" ] && T=$N-dump
+ OUT=$REPO/build/lr-$T
+ mkdir -p $OUT
++# CHUNKROM=1: guest reads disk extents from a host-filled data-ROM window (ports/doomdmc/qplat.c crx_read,
++# tools/chunkrom.py); the window [Q_CRX_BASE, 0x3f000) is reserved by the linker, the E1M6 bake is dropped.
++CRX=${Q_CRX_BASE:-0x28c00}
++if [ -n "$CHUNKROM" ]; then export NOBAKE=1 LDX="--defsym=Q_CRX_BASE_LD=$CRX"; F="$F -DQ_CHUNKROM -DQ_CRX_BASE=${CRX}u"; fi
+ X="-DDOOMD_TICS=${TICS:-350} $F"; [ -n "$D" ] && X="$X -DQ_DUMP_ALL"
+ FORCE=1 DOOMD_MODE=2 EXTRA_CF="$X" $HERE/build.sh $OUT >/dev/null
+ cd $REPO
+diff -ruN -x __pycache__ -x model_doom_qwen.py a/ports/doomdmc/qplat.c b/ports/doomdmc/qplat.c
+--- a/ports/doomdmc/qplat.c	2026-11-03 19:36:30
++++ b/ports/doomdmc/qplat.c	2026-11-03 19:48:42
+@@ -65,8 +65,64 @@
+         plat_panic("disk read");
+     }
+ }
++/* ---- chunk ROM: host-prefilled disk extents in the data ROM (build with -DQ_CHUNKROM) ----------
++   Layout at Q_CRX_BASE (u32 little endian, written by the host into the snapshot's data ROM):
++     [0] magic 'CRX1'   [1] n extents (0 or unprogrammed ROM = feature off, every read uses the mailbox)
++     [2 .. 2+128]  guide: 257 u16, guide[b] = largest extent index i with off[i] <= b*16 KB (disk < 4 MB)
++     [131+2i] disk offset of extent i   [132+2i] ROM address of its first byte   (i = 0..n, sorted)
++     entry n is a sentinel: its ROM address is the end of the blob, so len(i) = rom[i+1]-rom[i].
++   A read fully inside one extent is a plain ROM copy: no mailbox request, no pause. Anything else
++   falls through to the mailbox. A one-entry cache (crx_last) + the next extent catch sequential reads;
++   otherwise the guide narrows the binary search to the extents of one 16 KB bucket. */
++#ifndef Q_CRX_BASE
++#define Q_CRX_BASE 0x28c00u
++#endif
++static uint32_t crx_last;
++static inline __attribute__((always_inline)) int crx_read(uint32_t phys, uint8_t *d, uint32_t c)
++{
++    const volatile uint32_t *h = (const volatile uint32_t *)Q_CRX_BASE;
++    uint32_t n = h[1];
++    if (__builtin_expect(!n, 1)) return 0;
++    const volatile uint32_t *e = h + 131;
++    uint32_t i = crx_last, off, rom, len;
++    if (__builtin_expect(i >= n, 0)) i = 0;      /* cache from a previous, larger chunk table */
++    off = e[2 * i]; rom = e[2 * i + 1]; len = e[2 * i + 3] - rom;
++    if (!(phys - off < len)) {
++        if (i + 1 < n && (off = e[2 * i + 2], phys - off < e[2 * i + 5] - e[2 * i + 3])) { i++; }
++        else {
++            uint32_t bk = phys >> 14;
++            if (bk >= 256) return 0;
++            const volatile uint16_t *g = (const volatile uint16_t *)(h + 2);
++            uint32_t lo = g[bk], hi = g[bk + 1] + 1;  /* largest i with e[i].off <= phys, within the bucket */
++            while (hi - lo > 1) { uint32_t m = (lo + hi) >> 1; if (e[2 * m] <= phys) lo = m; else hi = m; }
++            i = lo;
++        }
++        off = e[2 * i]; rom = e[2 * i + 1]; len = e[2 * i + 3] - rom;
++        if (!(phys - off < len)) return 0;
++    }
++    if (phys - off + c > len) return 0;
++    const volatile uint8_t *s = (const volatile uint8_t *)(uintptr_t)(rom + (phys - off));
++    crx_last = i;
++    if (!(((uintptr_t)d ^ (uintptr_t)s) & 3)) {
++        while (c && ((uintptr_t)d & 3)) { *d++ = *s++; c--; }
++        const volatile uint32_t *s4 = (const volatile uint32_t *)s; uint32_t *d4 = (uint32_t *)(void *)d;
++        for (; c >= 4; c -= 4) *d4++ = *s4++;
++        d = (uint8_t *)d4; s = (const volatile uint8_t *)s4;
++    } else if (!((uintptr_t)d & 3)) {          /* aligned destination, misaligned ROM source: funnel shift */
++        uint32_t sh = ((uintptr_t)s & 3) * 8;
++        const volatile uint32_t *s4 = (const volatile uint32_t *)((uintptr_t)s & ~3u); uint32_t *d4 = (uint32_t *)(void *)d;
++        uint32_t lo = *s4++;
++        for (; c >= 4; c -= 4) { uint32_t hi = *s4++; *d4++ = (lo >> sh) | (hi << (32 - sh)); lo = hi; }
++        d = (uint8_t *)d4; s = (const volatile uint8_t *)((uintptr_t)s4 - 4 + (sh >> 3));
++    }
++    while (c--) *d++ = *s++;
++    return 1;
++}
+ static inline __attribute__((always_inline)) void nor_chunk(uint32_t phys, void *out, uint32_t c)
+ {
++#ifdef Q_CHUNKROM
++    if (crx_read(phys, (uint8_t *)out, c)) return;
++#endif
+     uint32_t r = qapi->syscall(QOS_SYS_DISK_READ, phys, (uintptr_t)out, c);
+     if (r != c) nor_wait_slow(r, c);
+ }
+diff -ruN -x __pycache__ -x model_doom_qwen.py a/tools/chunkrom.py b/tools/chunkrom.py
+--- a/tools/chunkrom.py	1969-12-31 19:00:00
++++ b/tools/chunkrom.py	2026-11-03 19:52:43
+@@ -0,0 +1,175 @@
++#!/usr/bin/env python3
++"""Chunk ROM: eliminate guest disk requests inside a run chunk by pre-filling the data ROM.
++
++The guest (ports/doomdmc/qplat.c crx_read, built with -DQ_CHUNKROM) looks every disk read up in an
++extent table at Q_CRX_BASE in the data ROM; a hit is a ROM copy (no mailbox request, no model pause).
++The host builds that window per chunk from the exact disk ranges the chunk will read (a host dry run
++with the C twin: rv32_fast REQLOG=file records (offset,len,ra,tic) per request) and writes it into the
++snapshot's data ROM (fill_drom).
++
++Window layout (u32 LE): [0] 'CRX1' [1] n  [2..130] guide (257 u16), then (disk offset, ROM address) i=0..n (entry n is the
++end sentinel); then the blob. Every extent starts at a ROM address congruent to its disk offset mod 4
++(padding bytes are real disk bytes appended to the previous extent) so word copies stay aligned.
++
++Chunks are ranges of FRAME-MARKER counts (lo <= markers seen < hi): a window switch is only possible at a
++model segment boundary, and a frame marker is the one place a segment can always end.
++usage:
++  chunkrom.py REQLOG DISK --tics C   (C = markers per chunk) [--budget B] [--out plan.bin]    fixed chunks of C tics
++  chunkrom.py REQLOG DISK --greedy [--budget B] [--out plan.bin]    longest chunks that fit B bytes
++plan.bin (for rv32_fast CRXPLAN=): records u32 start_tic,end_tic,nwords,words[]
++"""
++import argparse, struct, sys
++import numpy as np
++
++CRX_BASE = 0x28C00      # must match Q_CRX_BASE (qplat.c) / Q_CRX_BASE_LD (lowres.sh CHUNKROM=1)
++DROM_BASE = 0x20000
++DROM_END = 0x3F000      # 0x3f000.. holds the small-app rodata of the merged image
++MAGIC = 0x31585243      # 'CRX1'
++GUIDE_BYTES = 516       # 257 u16 guide entries (16 KB buckets over a 4 MB disk), padded to a word
++GAP = 16                # merge extents closer than this (the hole is filled with real disk bytes)
++
++
++def load_reqlog(path):
++    a = np.fromfile(path, dtype='<u4').reshape(-1, 5)   # rv32_fast REQLOG: off, len, ra, tic, frame-marker count
++    return a[:, 0].astype(np.int64), a[:, 1].astype(np.int64), a[:, 4].astype(np.int64)  # off, len, markers seen
++
++
++def extents_of(off, ln, disk_len, gap=GAP):
++    """Merged [start,end) disk extents covering all requests (holes <= gap bytes are bridged)."""
++    if len(off) == 0:
++        return []
++    m = np.zeros(disk_len + 1, dtype=bool)
++    # difference array over request intervals
++    d = np.zeros(disk_len + 2, dtype=np.int32)
++    np.add.at(d, off, 1)
++    np.add.at(d, off + ln, -1)
++    m = np.cumsum(d[:disk_len + 1]) > 0
++    idx = np.flatnonzero(m)
++    cut = np.flatnonzero(np.diff(idx) > gap + 1)
++    st = np.concatenate(([0], cut + 1))
++    en = np.concatenate((cut, [len(idx) - 1]))
++    return [(int(idx[a]), int(idx[b]) + 1) for a, b in zip(st, en)]
++
++
++def window_size_bound(ext):
++    """Conservative window bytes for extents: header + table + blob + <=3 alignment bytes per extent."""
++    return 8 + GUIDE_BYTES + 8 * (len(ext) + 1) + 3 + sum(e - s + 3 for s, e in ext)
++
++
++def build_window(ext, disk, base=CRX_BASE, limit=DROM_END):
++    """Bytes of the ROM window for extents [(start,end)...] (sorted, disjoint) cut from `disk`."""
++    n = len(ext)
++    pos = base + 8 + GUIDE_BYTES + 8 * (n + 1)
++    ents, blob = [], bytearray()
++    blob_base = pos
++    for i, (s, e) in enumerate(ext):
++        while (pos - s) & 3:                       # align the extent start; filler = bytes before s or zero
++            blob.append(0); pos += 1               # (only possible for i == 0: later pads go into prev extent)
++        ents.append((s, pos))
++        chunk = bytes(disk[s:e])
++        pos += len(chunk); blob += chunk
++        if i + 1 < n:                              # pad this extent with real bytes so the next one is aligned
++            nxt = ext[i + 1][0]
++            pad = (nxt - pos) & 3
++            assert e + pad <= nxt, 'extents too close for padding'
++            blob += bytes(disk[e:e + pad]); pos += pad
++    ents.append((0xFFFFFFFF, pos))
++    if pos > limit:
++        raise ValueError(f'chunk ROM window needs {pos - base} B, only {limit - base} available')
++    starts = [o for o, _ in ents[:-1]] + [0xFFFFFFFF]
++    import bisect
++    guide = struct.pack('<258H', *[max(0, min(n, bisect.bisect_right(starts[:n], b << 14) - 1)) for b in range(257)], 0)
++    assert len(guide) == GUIDE_BYTES
++    hdr = struct.pack('<II', MAGIC, n) + guide + b''.join(struct.pack('<II', o, r) for o, r in ents)
++    out = bytes(hdr) + bytes(blob)
++    assert len(out) == pos - base
++    return out
++
++
++def fill_drom(machine, extents, disk, base=CRX_BASE):
++    """Install the chunk's extents into a ref.Machine's data ROM (what the host does to a snapshot before
++    the next Qwen turn). machine.drom is `bytes` (chipformer.rv.ref.Machine); core.snapshot() loads it
++    (and rebuilds its DROM tables because hash(m.drom) changes). Reads are then ROM hits in the guest.
++    extents: [(start,end)...] disk ranges; disk: the block-device image. Returns the window length."""
++    win = build_window(extents, disk, base)
++    off = base - DROM_BASE
++    d = bytearray(machine.drom.ljust(DROM_END - DROM_BASE, b'\0'))
++    d[off:DROM_END - DROM_BASE] = bytes(DROM_END - base)       # zero the whole window first
++    d[off:off + len(win)] = win
++    machine.drom = bytes(d)
++    return len(win)
++
++
++def clear_drom(machine, base=CRX_BASE):
++    d = bytearray(machine.drom)
++    for i in range(base - DROM_BASE, min(len(d), base - DROM_BASE + 8)):
++        d[i] = 0
++    machine.drom = bytes(d)
++
++
++def plan_fixed(off, ln, tic, disk_len, C):
++    out = []
++    for lo in range(0, int(tic.max()) + 1, C):
++        sel = (tic >= lo) & (tic < lo + C)
++        out.append((lo, lo + C, extents_of(off[sel], ln[sel], disk_len)))
++    return out
++
++
++def plan_greedy(off, ln, tic, disk_len, budget):
++    """Longest chunks whose window fits `budget` bytes (a tic that alone exceeds it is an error)."""
++    nt = int(tic.max()) + 1
++    order = np.argsort(tic, kind='stable')
++    off, ln, tic = off[order], ln[order], tic[order]
++    bounds = np.searchsorted(tic, np.arange(nt + 1))
++    out, lo = [], 0
++    while lo < nt:
++        hi = lo + 1
++        best = extents_of(off[bounds[lo]:bounds[hi]], ln[bounds[lo]:bounds[hi]], disk_len)
++        if window_size_bound(best) > budget:
++            raise ValueError(f'tic {lo} alone needs {window_size_bound(best)} B > budget {budget}')
++        while hi < nt:
++            cand = extents_of(off[bounds[lo]:bounds[hi + 1]], ln[bounds[lo]:bounds[hi + 1]], disk_len)
++            if window_size_bound(cand) > budget:
++                break
++            best, hi = cand, hi + 1
++        out.append((lo, hi, best)); lo = hi
++    return out
++
++
++def write_plan(path, plan, disk):
++    with open(path, 'wb') as f:
++        for lo, hi, ext in plan:
++            w = build_window(ext, disk)
++            w += bytes(-len(w) % 4)
++            f.write(struct.pack('<III', lo, hi, len(w) // 4) + w)
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument('reqlog'); ap.add_argument('disk')
++    g = ap.add_mutually_exclusive_group(required=True)
++    g.add_argument('--tics', type=int); g.add_argument('--greedy', action='store_true')
++    ap.add_argument('--budget', type=int, default=DROM_END - CRX_BASE)
++    ap.add_argument('--out', help='binary plan for rv32_fast CRXPLAN')
++    ap.add_argument('--json', help='JSON plan for model_doom_qwen.py --rom-plan')
++    a = ap.parse_args()
++    disk = open(a.disk, 'rb').read()
++    off, ln, tic = load_reqlog(a.reqlog)
++    plan = plan_greedy(off, ln, tic, len(disk), a.budget) if a.greedy else plan_fixed(off, ln, tic, len(disk), a.tics)
++    for lo, hi, ext in plan:
++        sel = (tic >= lo) & (tic < hi)
++        w = len(build_window(ext, disk, limit=1 << 30))
++        print(f'chunk markers {lo:3d}-{hi:3d}: reqs {int(sel.sum()):6d} reqB {int(ln[sel].sum()):8d} '
++              f'extents {len(ext):4d} blob {sum(e - s for s, e in ext):7d} window {w:7d} '
++              f'{"OK" if w <= a.budget else "OVER"}')
++    print('chunks', len(plan))
++    if a.out:
++        write_plan(a.out, plan, disk)
++    if a.json:
++        import json
++        json.dump(dict(base=CRX_BASE, chunks=[dict(lo=lo, hi=hi, extents=ext) for lo, hi, ext in plan]),
++                  open(a.json, 'w'))
++
++
++if __name__ == '__main__':
++    main()
+diff -ruN -x __pycache__ -x model_doom_qwen.py a/tools/rv32_fast.c b/tools/rv32_fast.c
+--- a/tools/rv32_fast.c	2026-11-03 19:36:30
++++ b/tools/rv32_fast.c	2026-11-03 19:52:43
+@@ -57,6 +57,16 @@
+ static uint32_t rd32(uint32_t a){uint32_t v;memcpy(&v,mem+a,4);return v;}
+ static void wr32(uint32_t a,uint32_t v){memcpy(mem+a,&v,4);}
+ static void die(const char*m,uint32_t a,uint64_t steps){fprintf(stderr,"FAULT %s at %#x pc=%#x steps=%llu\n",m,a,pc,(unsigned long long)steps);for(int i=0;i<64;i++){unsigned k=(trn+i)&63;fprintf(stderr,"call %08x -> %08x sp=%08x\n",tr_pc[k],tr_to[k],tr_sp[k]);}for(int i=0;i<32;i++)fprintf(stderr,"x%d=%08x%s",i,reg[i],(i%8==7)?"\n":" ");exit(3);}
++/* CRXPLAN=file: chunk-ROM filler (models the host rewriting the snapshot's data ROM per chunk). Records of
++ * u32 start,end,nwords,words[nwords] (start/end = frame-marker counts); the words are written at CRXBASE (hex,
++ * default 28c00) when the marker count reaches start (record with start 0 before the first instruction). The window is zeroed
++ * first. CRX chunk lines on stderr give the disk requests that happened inside each chunk (must be 0). */
++static uint32_t*crxp;static size_t crxn,crxi;static uint32_t crxbase=0x28c00,crxcur_lo,crxcur_hi;static uint64_t crxreq0;static int crxon;
++static void crx_close(uint64_t nr){if(crxon)fprintf(stderr,"CRX chunk %u-%u reqs=%llu\n",crxcur_lo,crxcur_hi,(unsigned long long)(nr-crxreq0));crxon=0;}
++static void crx_fill(unsigned nt,uint64_t nr){crx_close(nr);
++  while(crxi+3<=crxn){uint32_t lo=crxp[crxi],hi=crxp[crxi+1],nw=crxp[crxi+2];if(lo>nt){break;}
++    if(lo==nt){memset(mem+crxbase,0,0x3f000-crxbase);memcpy(mem+crxbase,crxp+crxi+3,nw*4);crxcur_lo=lo;crxcur_hi=hi;crxreq0=nr;crxon=1;crxi+=3+nw;break;}
++    crxi+=3+nw;}}
+ int main(int argc,char**argv){
+   if(argc<7){fprintf(stderr,"usage\n");return 2;}
+   FILE*f=fopen(argv[1],"rb");if(!f){perror("elf");return 2;}
+@@ -76,6 +86,8 @@
+     for(int i=0;i<shn;i++){const uint32_t*sh=(const uint32_t*)(el2+shoff+i*shes);if(sh[1]!=2)continue;const uint32_t*strh=(const uint32_t*)(el2+shoff+sh[6]*shes);const char*str=(const char*)el2+strh[4];
+       for(uint32_t j=0;j<sh[5]/16;j++){const uint8_t*e=el2+sh[4]+j*16;if(!strcmp(str+*(uint32_t*)e,ts))ticpc=*(uint32_t*)(e+4);if(!strcmp(str+*(uint32_t*)e,"P_SetupLevel"))lvlpc=*(uint32_t*)(e+4);}}}}}
+   reqprof=getenv("REQPROF")!=0;if(getenv("REQLOG"))reqlog=fopen(getenv("REQLOG"),"wb");
++  if(getenv("CRXPLAN")){FILE*cf=fopen(getenv("CRXPLAN"),"rb");if(!cf){perror("CRXPLAN");return 2;}fseek(cf,0,SEEK_END);long cn=ftell(cf);fseek(cf,0,SEEK_SET);crxp=malloc(cn);if(fread(crxp,1,cn,cf)!=(size_t)cn)return 2;fclose(cf);crxn=cn/4;
++    if(getenv("CRXBASE"))crxbase=strtoul(getenv("CRXBASE"),0,16);crx_fill(0,0);}
+   uint32_t last_req=0,kseq=100;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
+   uint64_t last_frame_step=0;
+   while(steps<maxi){
+@@ -128,7 +140,7 @@
+   else if(ps==0){if(c==1)ps=1;else if(c==2)mark=1;}
+   else if(ps==1){ps=0;if(c=='D'){ps=2;pn=0;plen=0;}else if(c=='W')pskip=10;else if(c=='P')pskip=1;else if(c=='E')pskip=2;}
+   else if(ps==2){plen|=c<<(8*pn);if(++pn==2){ps=0;pskip=plen;}}
+-  if(mark){fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;if(lvlseen&&!lvlframe)lvlframe=steps;
++  if(mark){fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;if(crxp)crx_fill(frames,nreq);if(lvlseen&&!lvlframe)lvlframe=steps;
+             for(int i=0;i<nkeys;i++)if(!keys[i].done&&frames>=keys[i].fr){keys[i].done=1;wr32(kbox+4,keys[i].c);wr32(kbox,kseq++);break;}}}}
+       else if(reg[17]==93){exitcode=reg[10];goto done;}
+       else die("ecall",reg[17],steps);
+@@ -140,12 +152,12 @@
+     uint32_t seq=rd32(dbox);
+     if(seq&&seq!=last_req){uint32_t off=rd32(dbox+4),len=rd32(dbox+8);
+       if(!len||len>256)die("bad disk request",len,steps);
+-      nreq++;nbytes+=len;if(reqlog){uint32_t rec[4]={off,len,reg[1],(uint32_t)nticks};fwrite(rec,4,4,reqlog);}if(reqprof){uint32_t r=reg[1];int f=0;for(int q=0;q<nrq;q++)if(rqpc[q]==r){rqn[q]++;rqb[q]+=len;f=1;break;}if(!f&&nrq<512){rqpc[nrq]=r;rqn[nrq]=1;rqb[nrq]=len;nrq++;}}last_req=seq;int good=off<=(uint32_t)dn&&len<=(uint32_t)dn-off;
++      nreq++;nbytes+=len;if(reqlog){uint32_t rec[5]={off,len,reg[1],(uint32_t)nticks,(uint32_t)frames};fwrite(rec,4,5,reqlog);}if(reqprof){uint32_t r=reg[1];int f=0;for(int q=0;q<nrq;q++)if(rqpc[q]==r){rqn[q]++;rqb[q]+=len;f=1;break;}if(!f&&nrq<512){rqpc[nrq]=r;rqn[nrq]=1;rqb[nrq]=len;nrq++;}}last_req=seq;int good=off<=(uint32_t)dn&&len<=(uint32_t)dn-off;
+       if(good)memcpy(mem+dbox+20,disk+off,len);
+       wr32(dbox+16,good?1:2);wr32(dbox+12,seq);}
+   }
+ done:
+-  fclose(out);if(reqlog)fclose(reqlog);if(reqprof){qsort(syms,nsyms,sizeof *syms,symcmp);for(int q=0;q<nrq;q++){uint32_t a=rqpc[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"REQ %8llu req %9llu B  ra=%x %s+%x\n",(unsigned long long)rqn[q],(unsigned long long)rqb[q],a,k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
++  crx_close(nreq);fclose(out);if(reqlog)fclose(reqlog);if(reqprof){qsort(syms,nsyms,sizeof *syms,symcmp);for(int q=0;q<nrq;q++){uint32_t a=rqpc[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"REQ %8llu req %9llu B  ra=%x %s+%x\n",(unsigned long long)rqn[q],(unsigned long long)rqb[q],a,k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
+   if(prof)prof_report();tic_report();
+   fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);
+   for(int i=0;i<frames&&i<100000;i++)fprintf(stderr,"frame %d at %llu delta %llu\n",i,(unsigned long long)fstep[i],(unsigned long long)(fstep[i]-(i?fstep[i-1]:0)));

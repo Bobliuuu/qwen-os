@@ -1,0 +1,8 @@
+frame 14: model bytes 32100, rows painted by the dump 200/240, mismatching painted rows 0, unpainted rows (status bar not redrawn this frame) 40, full-frame mismatching rows 32
+frame 13: model bytes 32100, rows painted by the dump 200/240, mismatching painted rows 0, unpainted rows (status bar not redrawn this frame) 40, full-frame mismatching rows 32
+frame 15: model bytes 32100, rows painted by the dump 200/240, mismatching painted rows 0, unpainted rows (status bar not redrawn this frame) 40, full-frame mismatching rows 32
+frame 12: model bytes 32100, rows painted by the dump 200/240, mismatching painted rows 0, unpainted rows (status bar not redrawn this frame) 40, full-frame mismatching rows 32
+frame 16: model bytes 32887, rows painted by the dump 232/240, mismatching painted rows 32, unpainted rows (status bar not redrawn this frame) 8, full-frame mismatching rows 32
+frame 17: model bytes 32100, rows painted by the dump 200/240, mismatching painted rows 0, unpainted rows (status bar not redrawn this frame) 40, full-frame mismatching rows 32
+frame 18: model bytes 32100, rows painted by the dump 200/240, mismatching painted rows 0, unpainted rows (status bar not redrawn this frame) 40, full-frame mismatching rows 32
+frame 19: model bytes 32100, rows painted by the dump 200/240, mismatching painted rows 0, unpainted rows (status bar not redrawn this frame) 40, full-frame mismatching rows 32

@@ -1,0 +1,1085 @@
+diff -ruN -x build -x __pycache__ -x *.pyc a/Makefile wt-ram/Makefile
+--- a/Makefile	2026-11-03 19:24:12
++++ wt-ram/Makefile	2026-11-03 18:58:46
+@@ -32,7 +32,7 @@
+ 	$(CC) $(CFLAGS) -DQOS_MODEL_BRIDGE $(LINK) -Wl,-T,linker/kernel.ld kernel/start.S kernel/app_call.S kernel/main.c -o $@
+ # Genuine DOOM engine (DMC100-Doom, GPL) built by ports/doomdmc/build.sh as the /bin/doomd image.
+ # Needs the DMC100-Doom checkout (DMC=...) with its generated gen/ dir and a NOR image of the pack.
+-DMC_SRCS = $(wildcard ports/doomdmc/*.c ports/doomdmc/*.ld ports/doomdmc/*.h ports/doomdmc/build.sh)
++DMC_SRCS = $(wildcard ports/doomdmc/*.c ports/doomdmc/*.ld ports/doomdmc/*.h ports/doomdmc/build.sh ports/doomdmc/*.patch ports/doomdmc/mkflatrom.py)
+ build/doomdmc.elf: $(DMC_SRCS) apps/doomd_crt0.S linker/doomd.ld include/qos.h ports/doom/hal.c
+ 	mkdir -p build
+ 	ports/doomdmc/build.sh build/doomdmc
+@@ -40,6 +40,11 @@
+ DOOMDMC_APPS = build/shell.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf build/doomdmc.elf
+ build/qwenos-doomdmc.elf: build/kernel-doomd.elf $(DOOMDMC_APPS) tools/merge_elf.py
+ 	python3 tools/merge_elf.py $@ build/kernel-doomd.elf $(DOOMDMC_APPS)
++# NOR image whose map plans match this build's RAM layout (needs a WRITABLE DMC100-Doom work copy, DMCWORK=...)
++build/doomdmc-layout.json: build/doomdmc.elf ports/doomdmc/mklayout.py
++	python3 ports/doomdmc/mklayout.py build/doomdmc/doomd.elf $@
++doomdmc-image: build/doomdmc-layout.json
++	ports/doomdmc/mkimage.sh $(DMCWORK) $(abspath build/doomdmc-layout.json) $(abspath build/doomdmc-pack)
+ doomdmc: build/qwenos-doomdmc.elf
+ model-probe: build/qwenos-model-probe.elf
+ 	python3 tools/model_probe_ref.py build/qwenos-model-probe.elf
+@@ -55,4 +60,4 @@
+ 	python3 -m unittest discover -s tests -v
+ clean:
+ 	rm -rf build
+-.PHONY: doomdmc all check clean frame asset doom-frame model-probe
++.PHONY: doomdmc doomdmc-image all check clean frame asset doom-frame model-probe
+diff -ruN -x build -x __pycache__ -x *.pyc a/README.md wt-ram/README.md
+--- a/README.md	2026-11-03 19:24:12
++++ wt-ram/README.md	2026-11-03 19:12:39
+@@ -289,10 +289,16 @@
+ `/bin/doomd` (exec ROM `0x41000`, entry `app_main` from `apps/doomd_crt0.S`) is a
+ *takeover* app: `exec("/bin/doomd")` (or `-DQOS_BOOT_DOOMD` kernel, `make
+ build/qwenos-doomd.elf`) abandons the shell stack and RAMFS and gives the app all
+-RAM from `0x05c0` to `0x8000` (31296 B), with its stack growing down from `0x8000`.
+-Resident kernel **core** (`0x100..0x5bf`): input mailbox, disk mailbox, 32x24
+-framebuffer, a few state words, a 128-byte kernel stack. While doomd runs only
+-console, framebuffer, key, disk and getpid/yield syscalls work (file syscalls
++RAM from `0x0098` to `0x8000` (32616 B), with its stack growing down from `0x8000`.
++Resident kernel **core** (`0x0..0x97`, 152 B): a 48-byte takeover stack at the very
++bottom of RAM (an overflow faults), 12 B of state, the input mailbox and the disk
++mailbox header plus its first 64 window bytes (while doomd runs `DISK_REQUEST` length
++is limited to `QOS_DISK_TAKEOVER_WINDOW` = 64; the rest of the 256-byte window is
++doomd RAM). The 32x24 framebuffer, the normal kernel stack and RAMFS live in the
++destroyable overlay: while doomd runs the framebuffer syscalls stream to the console
++instead (`0x01 'V' x y n bytes` column run, `0x01 'H' x y n bytes` row run, `0x01 'K' c`
++clear; new `FB_COL` syscall; `FB_GET` fails, `FB_PRESENT` returns 1). While doomd runs
++only console, framebuffer, key, disk and getpid/yield syscalls work (file syscalls
+ return -1). When doomd returns the kernel zeroes its overlay and warm-reboots
+ (RAMFS content is lost). RAM is dirty at entry and `.data` is not preloaded:
+ crt0 copies `.data` from its data-ROM image and zeroes `.bss`.
+diff -ruN -x build -x __pycache__ -x *.pyc a/include/qos.h wt-ram/include/qos.h
+--- a/include/qos.h	2026-11-03 19:24:12
++++ wt-ram/include/qos.h	2026-11-03 18:41:05
+@@ -2,7 +2,7 @@
+ #define QWENOS_QOS_H
+ #include <stdint.h>
+ #include <stddef.h>
+-#define QOS_RAM_BEGIN   0x100u
++#define QOS_RAM_BEGIN   0x0u
+ #define QOS_RAM_END     0x8000u
+ #define QOS_DROM_BEGIN  0x20000u
+ #define QOS_DROM_END    0x40000u
+@@ -20,7 +20,7 @@
+ #define QOS_DOOM_ENTRY  0x7c000u
+ /* /bin/doomd takeover: kernel core ends below QOS_DOOMD_RAM_BASE; doomd owns
+    QOS_DOOMD_RAM_BASE..QOS_RAM_END (stack top = QOS_RAM_END). */
+-#define QOS_DOOMD_RAM_BASE 0x5c0u
++#define QOS_DOOMD_RAM_BASE 0x98u
+ #define QOS_FB_W 32u
+ #define QOS_FB_H 24u
+ #define QOS_MAX_FD 12u
+@@ -45,7 +45,11 @@
+ #define QOS_SYS_DISK_REQUEST 18u /* byte offset, destination RAM pointer, length<=256; 0 accepted */
+ #define QOS_SYS_DISK_POLL 19u /* 0=pending, len=completed, negative=failure */
+ #define QOS_SYS_DISK_CANCEL 20u /* abort pending request */
++#define QOS_SYS_FB_COL 21u /* x|y0<<8, pointer, n: n samples down column x from row y0 */
+ #define QOS_DISK_WINDOW 256u
++/* While /bin/doomd runs only this many window bytes are resident (the rest of the mailbox
++   window is doomd RAM): DISK_REQUEST length is limited to it. */
++#define QOS_DISK_TAKEOVER_WINDOW 64u
+ #define QOS_O_READ 0u
+ #define QOS_O_WRITE 1u
+ typedef uint32_t (*qos_syscall_t)(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c);
+diff -ruN -x build -x __pycache__ -x *.pyc a/kernel/main.c wt-ram/kernel/main.c
+--- a/kernel/main.c	2026-11-03 19:24:12
++++ wt-ram/kernel/main.c	2026-11-03 18:40:22
+@@ -10,26 +10,36 @@
+ #define APP_STACK_BYTES 1536u
+ static uint8_t app_stacks[QOS_MAX_PROC][APP_STACK_BYTES] __attribute__((aligned(16)));
+ extern int qos_app_call(uintptr_t entry,const qos_api *api,uintptr_t stack_top);
+-static uint8_t framebuffer[QOS_FB_W*QOS_FB_H] CORE(c_fb);
++/* The framebuffer lives in the (destroyable) overlay: while /bin/doomd owns RAM the
++   FB syscalls stream to the console as 0x01 'V'/'H'/'K' packets instead (see sys()). */
++static uint8_t framebuffer[QOS_FB_W*QOS_FB_H];
++/* Normal-mode kernel stack (overlay). The takeover runs on a tiny stack in the core. */
++uint8_t qos_kstack[128] __attribute__((aligned(16),section(".bss.kstack")));
+ /* Firmware-visible mailbox. The model may inject external device events by
+  * updating the RAM snapshot between execution bursts. Not a hardware keyboard.
+  * seq is written LAST by the device driver; key code 0 means no event. */
+-volatile struct {uint32_t seq,key;} qos_input_mailbox CORE(a_in);
++volatile struct {uint32_t seq,key;} qos_input_mailbox CORE(b_in);
+ /* Disk mailbox: an external data device may fill bytes while the model is
+  * paused between execution steps. It cannot execute guest instructions.
+  * ready_seq is written LAST by the driver after bytes and status are set. */
+ volatile struct {
+  uint32_t request_seq,offset,length,ready_seq,status;
+- uint8_t bytes[QOS_DISK_WINDOW];
+-} qos_disk_mailbox CORE(b_disk);
++ uint8_t bytes[QOS_DISK_WINDOW]; /* only QOS_DISK_TAKEOVER_WINDOW bytes are resident while doomd runs */
++} qos_disk_mailbox CORE(e_disk);
+ /* Resident "core" state (survives a doomd takeover); see linker/kernel.ld. */
+-static uint32_t disk_active CORE(d_vars),disk_dest CORE(d_vars),disk_length CORE(d_vars),disk_seq CORE(d_vars);
+-static uint32_t key_seq_seen CORE(d_vars);
+-static uint32_t last_present_checksum CORE(d_vars);
+-static uint32_t takeover CORE(d_vars),reboots CORE(d_vars),current_pid CORE(d_vars);
++static struct {uint32_t key_seq_seen;uint16_t disk_dest,disk_length;uint8_t disk_active,takeover,reboots,current_pid;} cv CORE(a_vars);
++#define key_seq_seen cv.key_seq_seen
++#define disk_dest cv.disk_dest
++#define disk_length cv.disk_length
++#define disk_active cv.disk_active
++#define takeover cv.takeover
++#define reboots cv.reboots
++#define current_pid cv.current_pid
++static uint32_t last_present_checksum; /* overlay: never touched while doomd runs */
+ extern uint32_t __ov_start[],__ov_end[];
+ extern int qos_main(void);
+ extern void qos_takeover_enter(void) __attribute__((noreturn));
++extern void qos_resume_enter(void) __attribute__((noreturn));
+ static const char readme[]="QwenOS: RV32IM kernel, ROM apps, RAMFS, framebuffer, ABI v1.\n";
+ static const char * const file_names[FILES]={"/README","/bin/sh","/bin/paint","/bin/raycast","/bin/asset","/bin/doom","/bin/doomd","/tmp/note","/tmp/log"};
+ static char writable[2][FILE_SIZE];
+@@ -40,6 +50,12 @@
+ static proc_t procs[QOS_MAX_PROC];
+ static unsigned next_pid,proc_top,executions;
+ static void hw_putc(uint32_t c){register unsigned a0 asm("a0")=c;register unsigned a7 asm("a7")=1;asm volatile("ecall" : "+r"(a0):"r"(a7):"memory");}
++/* FB stream while doomd owns RAM: 0x01 kind x y n then n bytes. 'V' = n samples down column x
++   from row y, 'H' = n samples along row y from column x, 'K' c = clear. Host rebuilds 32x24. */
++static void fb_pkt(unsigned kind,unsigned x,unsigned y,const uint8_t *p,unsigned n){
++ hw_putc(1);hw_putc(kind);hw_putc(x);hw_putc(y);hw_putc(n);
++ for(unsigned i=0;i<n;i++)hw_putc(p[i]);
++}
+ static int streq(const char *a,const char *b){while(*a&&*a==*b){a++;b++;}return *a==*b;}
+ static int inside(uintptr_t a,uintptr_t n,uintptr_t lo,uintptr_t hi){return a>=lo&&a<hi&&n<=hi-a;}
+ static int readable(uintptr_t a,uintptr_t n){return inside(a,n,QOS_RAM_BEGIN,QOS_RAM_END)||inside(a,n,QOS_DROM_BEGIN,QOS_DROM_END);}
+@@ -75,7 +91,7 @@
+  /* While /bin/doomd owns RAM, the RAMFS/fd/proc tables are gone: only the
+     core syscalls (console, fb, keys, disk, pid, yield) are available. */
+  if(takeover)switch(n){
+-  case QOS_SYS_PUTC:case QOS_SYS_FB_SET:case QOS_SYS_FB_CLEAR:case QOS_SYS_FB_GET:
++  case QOS_SYS_PUTC:case QOS_SYS_FB_SET:case QOS_SYS_FB_CLEAR:case QOS_SYS_FB_GET:case QOS_SYS_FB_COL:
+   case QOS_SYS_FB_ROW:case QOS_SYS_FB_PRESENT:case QOS_SYS_KEY_POLL:case QOS_SYS_DISK_REQUEST:
+   case QOS_SYS_DISK_POLL:case QOS_SYS_DISK_CANCEL:case QOS_SYS_GETPID:case QOS_SYS_YIELD:break;
+   default:return (unsigned)-1;
+@@ -102,19 +118,30 @@
+   for(unsigned i=0;i<len;i++)writable[k][f->pos+i]=((const char*)b)[i];f->pos+=len;
+   if(f->pos>lengths[k])lengths[k]=f->pos;return len;}
+  case QOS_SYS_EXEC:if(!name_ok((const char*)a))return (unsigned)-1;return (unsigned)spawn((const char*)a);
+- case QOS_SYS_FB_SET:if(a>=QOS_FB_W||b>=QOS_FB_H)return (unsigned)-1;framebuffer[b*QOS_FB_W+a]=(uint8_t)c;return 0;
+- case QOS_SYS_FB_CLEAR:for(unsigned i=0;i<sizeof(framebuffer);i++)framebuffer[i]=(uint8_t)a;return 0;
++ case QOS_SYS_FB_SET:if(a>=QOS_FB_W||b>=QOS_FB_H)return (unsigned)-1;
++  if(takeover){uint8_t v=(uint8_t)c;fb_pkt('V',a,b,&v,1);return 0;}
++  framebuffer[b*QOS_FB_W+a]=(uint8_t)c;return 0;
++ case QOS_SYS_FB_COL:{ /* a = x | y0<<8, b = pointer, c = n samples down column x from y0 */
++  unsigned x=a&255,y0=a>>8;
++  if(x>=QOS_FB_W||y0>=QOS_FB_H||c==0||c>QOS_FB_H-y0||!readable(b,c))return (unsigned)-1;
++  if(takeover){fb_pkt('V',x,y0,(const uint8_t*)b,c);return 0;}
++  for(unsigned i=0;i<c;i++)framebuffer[(y0+i)*QOS_FB_W+x]=((const uint8_t*)b)[i];
++  return 0;}
++ case QOS_SYS_FB_CLEAR:if(takeover){hw_putc(1);hw_putc('K');hw_putc((uint8_t)a);return 0;}
++  for(unsigned i=0;i<sizeof(framebuffer);i++)framebuffer[i]=(uint8_t)a;return 0;
+  case QOS_SYS_STAT:{int f=file_number((const char*)a);if(f<0)return (unsigned)-1;if(f==0)return sizeof(readme)-1;if(f>=F_TMP0)return lengths[f-F_TMP0];return 0;}
+  case QOS_SYS_GETPID:return current_pid;
+  case QOS_SYS_YIELD:return 0; /* No hardware timer: cooperative execution only. */
+- case QOS_SYS_FB_GET:if(a>=QOS_FB_W||b>=QOS_FB_H)return (unsigned)-1;return framebuffer[b*QOS_FB_W+a];
++ case QOS_SYS_FB_GET:if(takeover||a>=QOS_FB_W||b>=QOS_FB_H)return (unsigned)-1;return framebuffer[b*QOS_FB_W+a];
+  case QOS_SYS_PS:return executions;
+  case QOS_SYS_FB_ROW:{
+   if(a>=QOS_FB_H || c!=QOS_FB_W || !readable(b,c))return (unsigned)-1;
++  if(takeover){fb_pkt('H',0,a,(const uint8_t*)b,c);return 0;}
+   for(unsigned i=0;i<QOS_FB_W;i++)framebuffer[a*QOS_FB_W+i]=((const uint8_t *)b)[i];
+   return 0;
+  }
+  case QOS_SYS_FB_PRESENT:{
++  if(takeover)return 1; /* no resident framebuffer to hash; frame data went out as packets */
+   uint32_t hash=2166136261u;
+   for(unsigned i=0;i<sizeof(framebuffer);i++)hash=(hash^framebuffer[i])*16777619u;
+   last_present_checksum=hash;
+@@ -123,18 +150,17 @@
+  case QOS_SYS_DISK_CANCEL:
+   disk_active=0;return 0;
+  case QOS_SYS_DISK_REQUEST:
+-  if(disk_active || c==0 || c>QOS_DISK_WINDOW || !writable_addr(b,c) || a>0xffffffffu-c)
++  if(disk_active || c==0 || c>(takeover?QOS_DISK_TAKEOVER_WINDOW:QOS_DISK_WINDOW) || !writable_addr(b,c) || a>0xffffffffu-c)
+    return (unsigned)-1;
+-  disk_dest=(uint32_t)b;disk_length=(uint32_t)c;disk_active=1;
+-  disk_seq++;
++  disk_dest=(uint16_t)b;disk_length=(uint16_t)c;disk_active=1;
+   qos_disk_mailbox.offset=(uint32_t)a;
+   qos_disk_mailbox.length=(uint32_t)c;
+   qos_disk_mailbox.status=0;
+-  qos_disk_mailbox.request_seq=disk_seq; /* publish LAST */
++  qos_disk_mailbox.request_seq=qos_disk_mailbox.request_seq+1; /* publish LAST */
+   return 0;
+  case QOS_SYS_DISK_POLL:
+   if(!disk_active)return (unsigned)-1;
+-  if(qos_disk_mailbox.ready_seq!=disk_seq)return 0;
++  if(qos_disk_mailbox.ready_seq!=qos_disk_mailbox.request_seq)return 0;
+   if(qos_disk_mailbox.status!=1){disk_active=0;return (unsigned)-2;}
+   for(unsigned i=0;i<disk_length;i++)((uint8_t*)(uintptr_t)disk_dest)[i]=qos_disk_mailbox.bytes[i];
+   disk_active=0;
+@@ -154,12 +180,16 @@
+ #ifdef QOS_MODEL_BRIDGE
+ /* The park/resume probe must stay tiny (see model_probe_ref): no takeover. */
+ void qos_takeover_run(void){for(;;);}
++void qos_resume(void){for(;;);}
+ #else
+ void qos_takeover_run(void){
+  takeover=1;current_pid=2;disk_active=0;
+  qos_app_call(QOS_DOOMD_ENTRY,&api,QOS_RAM_END);
+- takeover=0;disk_active=0;reboots++;current_pid=0;
++ takeover=0;disk_active=0;reboots=1;current_pid=0;
+  for(uint32_t *p=__ov_start;p<__ov_end;p++)*p=0;
++ qos_resume_enter(); /* switches to the (zeroed) overlay kernel stack, calls qos_resume */
++}
++void qos_resume(void){
+  const char *s="QWENOS_DOOMD_EXIT\n";while(*s)hw_putc((uint8_t)*s++);
+  register unsigned a0 asm("a0")=(unsigned)qos_main(),a7 asm("a7")=93;
+  asm volatile("ecall" : "+r"(a0):"r"(a7):"memory");
+diff -ruN -x build -x __pycache__ -x *.pyc a/kernel/start.S wt-ram/kernel/start.S
+--- a/kernel/start.S	2026-11-03 19:24:12
++++ wt-ram/kernel/start.S	2026-11-03 18:40:42
+@@ -1,7 +1,7 @@
+ .section .text.start,"ax"
+ .globl _start
+ _start:
+- la sp,__kstack_top
++ la sp,qos_kstack+128
+  /* Upstream Qwenputer ELF snapshot preloads .data into guest RAM.
+     Do not recopy from a nonexistent runtime load address. */
+  la t1,__bss_start
+@@ -15,10 +15,18 @@
+  ecall
+ 3: j 3b
+ 
+-/* Abandon the current (shell) stack and continue on the small resident kernel
++/* Abandon the current (shell) stack and continue on the tiny resident takeover
+    stack in the core region. Used by /bin/doomd takeover; never returns. */
+ .globl qos_takeover_enter
+ qos_takeover_enter:
+- la sp,__kstack_top
++ la sp,__tstack_top
+  call qos_takeover_run
+ 4: j 4b
++
++/* After the takeover returned and the overlay was zeroed: back onto the normal kernel stack
++   (in the overlay) and warm-reboot via qos_resume. */
++.globl qos_resume_enter
++qos_resume_enter:
++ la sp,qos_kstack+128
++ call qos_resume
++5: j 5b
+diff -ruN -x build -x __pycache__ -x *.pyc a/linker/doomd.ld wt-ram/linker/doomd.ld
+--- a/linker/doomd.ld	2026-11-03 19:24:12
++++ wt-ram/linker/doomd.ld	2026-11-03 18:41:05
+@@ -1,8 +1,8 @@
+ ENTRY(app_main)
+ /* /bin/doomd: full-RAM takeover application (see RAM_BUDGET.txt, README).
+  *
+- * RAM  0x05c0..0x8000 is yours (31296 B). Kernel core (mailboxes, 32x24 fb,
+- *      128 B kernel stack) lives below 0x5c0 and must not be touched.
++ * RAM  0x0098..0x8000 is yours (32616 B). Kernel core (vars, mailboxes, 48 B takeover
++ *      stack; the 32x24 fb is NOT resident, it streams to the console) lives below 0x98.
+  *      Stack: kernel enters with sp = 0x8000, growing down; DOOMD_STACK bytes
+  *      at the top are reserved for it (incl. room for kernel syscall frames).
+  * ROM  0x41000..0x77fff (220 KiB) code only; instruction fetch only, cannot be
+@@ -12,12 +12,12 @@
+  * apps/doomd_crt0.S copies __data_load..+size to __data_start and zeroes bss.
+  */
+ DOOMD_STACK = DEFINED(DOOMD_STACK_OVERRIDE) ? DOOMD_STACK_OVERRIDE : 0x600;
+-RAM_BASE = 0x5c0;
++RAM_BASE = 0x98;
+ RAM_END  = 0x8000;
+ MEMORY {
+  ROM  (rx) : ORIGIN = 0x41000, LENGTH = 0x37000
+  DROM (r)  : ORIGIN = 0x21000, LENGTH = 0x1e000
+- RAM  (rw) : ORIGIN = 0x5c0,   LENGTH = 0x8000 - 0x5c0
++ RAM  (rw) : ORIGIN = 0x98,   LENGTH = 0x8000 - 0x98
+ }
+ SECTIONS {
+  .text : { KEEP(*(.text.start)) *(.text*) } > ROM
+diff -ruN -x build -x __pycache__ -x *.pyc a/linker/kernel.ld wt-ram/linker/kernel.ld
+--- a/linker/kernel.ld	2026-11-03 19:24:12
++++ wt-ram/linker/kernel.ld	2026-11-03 18:41:05
+@@ -1,17 +1,20 @@
+ ENTRY(_start)
+ /* RAM map (see RAM_BUDGET.txt):
+-     0x0000-0x00ff  reserved (unused, null guard)
+-     core            mailboxes, framebuffer, small kernel state, kernel stack:
+-                     RESIDENT FOREVER, also while /bin/doomd runs
+-     overlay         RAMFS, fds, procs, shell/app stacks: kernel-only state that
+-                     /bin/doomd destroys (warm reboot on exit)
+-   Everything from __ov_start up to 0x8000 is handed to doomd. */
++     0x0000-0x0097   core, RESIDENT FOREVER (also while /bin/doomd runs): kernel vars,
++                     input mailbox, 48 B takeover stack, disk mailbox header + the first
++                     QOS_DISK_TAKEOVER_WINDOW bytes of its window
++     overlay         everything else the kernel owns in normal operation: the rest of the
++                     disk window, framebuffer, RAMFS, fds, procs, kernel/app stacks.
++                     /bin/doomd destroys it (warm reboot on exit)
++   Everything from __core_end up to 0x8000 is handed to doomd. */
+ MEMORY {
+- RAM (rw) : ORIGIN = 0x100, LENGTH = 0x7f00
++ RAM (rw) : ORIGIN = 0x0, LENGTH = 0x8000
+  DROM (r) : ORIGIN = 0x20000, LENGTH = 0x1000
+  ROM (rx) : ORIGIN = 0x40000, LENGTH = 0x1000
+ }
+-KSTACK = 128;
++TSTACK = 48;
++DISK_HDR = 20;
++DISK_TAKEOVER_WINDOW = 64;
+ SECTIONS {
+  .text : { KEEP(*(.text.start)) *(.text*) } > ROM
+  .rodata : { *(.rodata*) *(.srodata*) } > DROM
+@@ -19,12 +22,15 @@
+  __data_start = ADDR(.data); __data_end = ADDR(.data) + SIZEOF(.data);
+  .core (NOLOAD) : ALIGN(16) {
+   __bss_start = .; __core_start = .;
+-  *(.bss.core.a_in) *(.bss.core.b_disk) *(.bss.core.c_fb) *(.bss.core.d_vars)
+-  . = ALIGN(16); __kstack_limit = .; . += KSTACK; __kstack_top = .;
+-  __core_end = .;
++  __tstack_limit = .; . += TSTACK; __tstack_top = .;
++  *(.bss.core.a_vars) *(.bss.core.b_in)
++  . = ALIGN(4); __disk_start = .;
++  *(.bss.core.e_disk)
+  } > RAM
++ __core_end = (__disk_start + DISK_HDR + DISK_TAKEOVER_WINDOW + 3) & ~3;
+  .bss (NOLOAD) : ALIGN(16) { __ov_start = .; *(.bss*) *(.sbss*) *(COMMON) . = ALIGN(4); __ov_end = .; __bss_end = .; } > RAM
+- ASSERT(__core_end <= 0x5c0, "kernel core exceeds doomd app RAM base 0x5c0")
++ ASSERT(__core_end <= 0x98, "kernel core exceeds doomd app RAM base 0x98 (QOS_DOOMD_RAM_BASE)")
++ ASSERT(__ov_start >= __disk_start + 20 + 256, "overlay overlaps the full disk window")
+  ASSERT(__bss_end <= 0x1800, "kernel encroaches on application RAM")
+  ASSERT(SIZEOF(.data) == 0, "kernel .data not supported (warm reboot would not restore it)")
+ }
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/RAM_BUDGET.txt wt-ram/ports/doomdmc/RAM_BUDGET.txt
+--- a/ports/doomdmc/RAM_BUDGET.txt	1969-12-31 19:00:00
++++ wt-ram/ports/doomdmc/RAM_BUDGET.txt	2026-11-03 19:24:55
+@@ -0,0 +1,30 @@
++QwenOS /bin/doomd RAM budget, v2 (RAM squeeze).  32 KiB RAM = 0x0000-0x7fff (hardwired in the circuit).
++
++                              before (v1)            after (v2)
++ kernel core                  0x100..0x5bf  1216 B   0x000..0x097   152 B  (+256 reserved gap, +1064 core)
++   input mailbox                       8                   8
++   disk mailbox                      276                  84  (20 hdr + 64 window while doomd runs)
++   framebuffer                       768                   0  (overlay; FB syscalls stream to console)
++   kernel stack                      128                  48  (takeover stack; normal stack is in the overlay)
++   state words                        36                  12
++ doomd stack reserve                1408                1152  (measured peak 1016 B = 136 B margin, 12e9 instr)
++ engine .data/.bss                  4276                4276  (frame region starts 16 B aligned)
++ => __frame_start                   5760 (0x1680)       4448 (0x1160)   -1312 B
++ => fixed + stack                   7168                5600            -1568 B
++ flat cache (4 x 1028, plans A-C)   4112                1028 (1 slot for the flats that did not fit ROM)   -3084 B
++ data ROM (120 KiB at 0x21000)      29.4 KB used        119.8 KB used  (88 flats = 90112 B baked, free 3 KB)
++ record cache                       2336 (16Bx32setx4)  1168 (16Bx16setx4)
++
++Frame regions (RV32 sizes, always textured): plan A (w16) 15200 B, plans B/C/D (w8) 9596 B (a smaller plan
++would overlap the front-end compose buffers at frame offset 7168..8368, so there is no w < 8 plan).
++The converter picks A, else B per map and skill. Arena (level state + object pages) = what is left:
++ plan A arena 9764 B (v1: 3848 B, E1M8 only), plan B arena 15324 B (v1: 9408 B).
++E1, 27 map/skill combos: v1 3xA 19xB 1xC 4xD (and its frames show flat-colour floors)
++                          v2 22xA 5xB, textured floors and ceilings everywhere, flats = ROM or the 1 slot.
++ (QFLAT_SLOTS=0 for mklayout.py: 24xA 3xB, the ~3 % of sector flat references that are not in ROM go flat-colour.)
++Measured with tools/rv32_fast (E1M1, DEMO1, frames 400-440): v1 5.10 M instr/frame (flat-colour floors),
++v2 5.56 M (textured, w16; the same textured frames from disk flats cost 6.32 M, so ROM flats save 12 %).
++Same image, same frame: ROM flats vs disk flats are pixel-identical. w8 instead of w16 costs +10 %.
++Record cache: 16 sets x 4 ways x 16 B measured best (4: 5.38 M, 8: 5.19 M, 16: 5.01 M, 32: 5.25 M instr/frame
++in the A/k0 experiments); 32 sets plus anything bigger than 4384 B no longer fits E1M7 skill 3 in plan B.
++Rebuild with RC_DEFS="-DRC_LINE=<16|32> -DRC_SETS=<n>" (power of 2) and repack the image.
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/README.txt wt-ram/ports/doomdmc/README.txt
+--- a/ports/doomdmc/README.txt	2026-11-03 19:24:12
++++ wt-ram/ports/doomdmc/README.txt	2026-11-03 19:12:39
+@@ -1,19 +1,20 @@
+ /bin/doomd = genuine DMC100-Doom engine (GPL-2.0, doomgeneric lineage) on QwenOS RV32IM.
+ Build:   make build/qwenos-doomdmc.elf   (needs DMC100-Doom checkout + `make gen/nor-images`, see build.sh)
+ Disk:    NOR image from DMC100 tests/host/mknor.py (E1 pack, FAT12 volumes) served as raw bytes:
+-         tools/rv32_fast build/qwenos-doomdmc.elf E1.img 100 108 out.bin MAXINSTR [p@FRAME ...]
++         tools/rv32_fast build/qwenos-doomdmc.elf E1.img 3c 44 out.bin MAXINSTR [p@FRAME ...]
++         (mailbox addresses = readelf of kernel-doomd.elf: qos_input_mailbox, qos_disk_mailbox;
++          LT_ADDR=<hex leveltime> logs the game tic per frame)
+          (or tools/doomd_ref_run.py for the Python reference CPU). Host = dumb storage only.
+ Frames:  'p' key arms a serial dump over PUTC; tools/doomd_frames.py out.bin freedoom1.wad prefix -> PNGs.
+-         The 32x24 kernel framebuffer is also filled (nearest sample) every frame.
++         The 32x24 'framebuffer' is no longer resident: samples stream as console packets (FB_COL),
++         doomd_frames.py also writes <prefix>-NN-fb32x24.png for each dumped frame.
+ Input:   none needed: title loop plays DEMO1 from the image (vanilla demo, real game logic).
+ Overlays are linked straight into ROM (ovl_rv.c); clock is virtual (qplat.c); no sound/save/USB.
+-Run modes (compile time; ports/doomdmc/mkmode.sh MODE [FRAMES [DUMP]] -> build/qwenos-doomdmc-m<MODE>[f<FRAMES>][d].elf;
+-  the default `make build/qwenos-doomdmc.elf` stays mode 0 = attract loop from the title):
+-  mode 1  DEMO1 straight away (no title/credit pages); the vanilla demo drives the player; exits at its end
+-  mode 2  E1M1 player start (plan B, textured floors), scripted buttons (q_script in doomd_main.c)
+-  FRAMES  leave doomd_main after that many game frames (1 = one frame then exit); DUMP=1 sends the last
+-          frame over PUTC (tools/doomd_frames.py), costs ~3.7M instructions
+-  Console markers: DOOMD_LEVEL_START <demo1|e1m1>, DOOMD_FRAME n tic t, DOOMD_FRAMES_DONE, DOOMD_DEMO_DONE.
+-Cost work: -O2 (was -Oz), fastfix.c (FixedDiv via divu, bit-exact), qimg.c (extent run cache, no stats on the
+-  line-fill path), qsolid.c (repeat plan-D floor/ceiling columns copied), and the main loop skips the redraw of
+-  a frame that follows no tic (virtual time makes every other TryRunTics call tic-less).
++
++RAM squeeze (see RAM_BUDGET.txt here): kernel core 0..0x97, stack 0x480, flats in data ROM, plans A/B
++(w16/w8, always textured), record cache 16 B x 16 sets x 4 ways. Build is RAM-layout aware:
++  make build/qwenos-doomdmc.elf            engine (patched copies of 4 DMC100 files, ports/doomdmc/dmc-ram.patch;
++                                           flats baked by ports/doomdmc/mkflatrom.py from $DMC/build/sw/packs/E1)
++  make doomdmc-image DMCWORK=<writable DMC100-Doom copy>   layout JSON (mklayout.py) + repacked E1 pack and
++                                           NOR image (mkimage.sh) -> build/doomdmc-pack/E1.img. The image MUST be
++                                           repacked: map plans/arenas are baked into it for this exact layout.
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/build.sh wt-ram/ports/doomdmc/build.sh
+--- a/ports/doomdmc/build.sh	2026-11-03 19:24:12
++++ wt-ram/ports/doomdmc/build.sh	2026-11-03 19:01:15
+@@ -10,27 +10,36 @@
+ LLVM=${LLVM:-/opt/homebrew/opt/llvm/bin}
+ CC=${CC:-clang}; LD=${LD:-ld.lld}
+ mkdir -p "$OUT/o"
++# RAM squeeze (docs: ports/doomdmc/README.txt): patched copies of 4 DMC100 files (dmc-ram.patch) and the
++# E1 flats baked into data ROM. PACK = the pack directory the NOR image is made from.
++PACK=${PACK:-$DMC/build/sw/packs/E1}
++PD=$OUT/dmcsrc
++rm -rf "$PD"; mkdir -p "$PD"
++cp "$DMC"/port/data/*.[ch] "$PD/"   # whole dir: sibling "cache.h" includes must see the patched one
++for f in port/render/r_frame.c port/obj/level.c; do cp "$DMC/$f" "$PD/"; done
++patch -s -d "$PD" -p1 < "$HERE/dmc-ram.patch" 2>/dev/null || patch -s -d "$PD" -p0 < "$HERE/dmc-ram.patch"
++python3 -I "$HERE/mkflatrom.py" "$DMC" "$PACK" "$OUT/flatrom.c" >/dev/null
+ ARCH="--target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -msmall-data-limit=0 -mno-relax"
+-INC="-I$HERE/stub -I$DMC/engine/stub/include -I$DMC/engine -I$DMC/port/data -I$DMC/port/render -I$DMC/port/obj -I$DMC/port/math -I$DMC/platform -I$DMC/port/game -I$DMC/port/ovl -I$HERE -I$GEN -I$DMC/controller/rc-n1 -I$REPO/include -I$REPO/ports/doom"
+-DEFS="-DDOOMD_MODE=${DOOMD_MODE:-0} -DDOOMD_DUMP=${DOOMD_DUMP:-0} -DDMC_FW -DDMC_HASHORDER -DDMC_SINE_L1 -DPLAT_HOST"
+-CF="$ARCH ${OPT:--O2} -ffunction-sections -fdata-sections -ffreestanding -fno-builtin -fno-common -fwrapv -fsigned-char -std=gnu11 -w $DEFS $INC ${EXTRA_CF}"
++INC="-I$PD -I$HERE/stub -I$DMC/engine/stub/include -I$DMC/engine -I$DMC/port/data -I$DMC/port/render -I$DMC/port/obj -I$DMC/port/math -I$DMC/platform -I$DMC/port/game -I$DMC/port/ovl -I$HERE -I$GEN -I$DMC/controller/rc-n1 -I$REPO/include -I$REPO/ports/doom"
++DEFS="-DDMC_FW -DDMC_HASHORDER -DDMC_SINE_L1 -DPLAT_HOST ${RC_DEFS--DRC_LINE=16 -DRC_SETS=16}"
++CF="$ARCH -Oz -ffunction-sections -fdata-sections -ffreestanding -fno-builtin -fno-common -fwrapv -fsigned-char -std=gnu11 -w $DEFS $INC ${EXTRA_CF}"
+ SRCS=""
+ for f in $DMC/engine/*.c; do
+-  b=$(basename $f .c); case $b in am_map|z_zone|m_argv|w_wad|w_file|i_endoom|m_fixed) continue;; esac; SRCS="$SRCS $f"
++  b=$(basename $f .c); case $b in am_map|z_zone|m_argv|w_wad|w_file|i_endoom) continue;; esac; SRCS="$SRCS $f"
+ done
+ for f in $DMC/port/data/*.c $DMC/port/render/*.c $DMC/port/math/trig.c $DMC/port/obj/*.c; do
+   b=$(basename $f .c); SRCS="$SRCS $f"
+ done
+ for b in i_dmc libc_dmc fe_glue i_input s_pcspk l_level l_lines l_menu l_wi l_finale g_save l_save; do SRCS="$SRCS $DMC/port/game/$b.c"; done
+-SRCS="$SRCS $GEN/info.c $GEN/colormap.c $GEN/trig_tables.c $GEN/view.c"
+-SRCS="$SRCS $DMC/platform/rt.c $DMC/platform/text.c $HERE/qplat.c $REPO/ports/doom/hal.c $HERE/doomd_main.c $HERE/ovl_rv.c $HERE/fastfix.c $HERE/rtlib.c $HERE/qimg.c $HERE/qsolid.c $HERE/qnor.c $HERE/qlcd.c"
++SRCS="$SRCS $OUT/flatrom.c $GEN/info.c $GEN/colormap.c $GEN/trig_tables.c $GEN/view.c"
++SRCS="$SRCS $DMC/platform/rt.c $DMC/platform/text.c $HERE/qplat.c $REPO/ports/doom/hal.c $HERE/doomd_main.c $HERE/ovl_rv.c $HERE/rtlib.c $HERE/qnor.c $HERE/qlcd.c"
+ objs=""
+ $CC $ARCH -c $REPO/apps/doomd_crt0.S -o $OUT/o/crt0.o
+ objs="$OUT/o/crt0.o"
+ n=0
+ for s in $SRCS; do
+-  b=$(basename $s .c); o=$OUT/o/$b.o; case $s in $GEN/*) o=$OUT/o/gen_$b.o;; esac; objs="$objs $o"
+-  extra=""; [ $b = r_inner ] && extra="${INNER_CF:--O2 -fno-unroll-loops}"
++  b=$(basename $s .c); [ -f "$PD/$b.c" ] && s=$PD/$b.c; o=$OUT/o/$b.o; case $s in $GEN/*) o=$OUT/o/gen_$b.o;; esac; case $s in $OUT/flatrom.c) o=$OUT/o/flatrom.o;; esac; objs="$objs $o"
++  extra=""; [ $b = r_inner ] && extra="-O2 -fno-unroll-loops"
+   # the overlay entry tables must call the real (unwrapped) engine functions
+   case $b in
+    l_level) extra="-DG_DoLoadLevel=__real_G_DoLoadLevel -DG_DoNewGame=__real_G_DoNewGame -DG_DoPlayDemo=__real_G_DoPlayDemo -DG_DoWorldDone=__real_G_DoWorldDone -DP_Init=__real_P_Init";;
+@@ -44,6 +53,6 @@
+   fi
+ done
+ wait
+-WRAP="--wrap=G_DoLoadLevel --wrap=G_DoNewGame --wrap=G_DoPlayDemo --wrap=G_DoCompleted --wrap=G_DoWorldDone --wrap=P_Init --wrap=R_SolidColumn --wrap=img_read --wrap=img_read_async --wrap=D_PostEvent --wrap=P_CrossSpecialLine --wrap=P_ShootSpecialLine --wrap=P_UseSpecialLine"
+-$LD --gc-sections --no-relax -T $REPO/linker/doomd.ld $HERE/frame.ld -z max-page-size=4 $WRAP --defsym=DOOMD_STACK_OVERRIDE=${STACK:-0x580} ${LDX} -Map $OUT/doomd.map -o $OUT/doomd.elf $objs
++WRAP="--wrap=G_DoLoadLevel --wrap=G_DoNewGame --wrap=G_DoPlayDemo --wrap=G_DoCompleted --wrap=G_DoWorldDone --wrap=P_Init --wrap=D_PostEvent --wrap=P_CrossSpecialLine --wrap=P_ShootSpecialLine --wrap=P_UseSpecialLine"
++$LD --gc-sections --no-relax -T $REPO/linker/doomd.ld $HERE/frame.ld -z max-page-size=4 $WRAP --defsym=DOOMD_STACK_OVERRIDE=${STACK:-0x480} ${LDX} -Map $OUT/doomd.map -o $OUT/doomd.elf $objs
+ readelf -SW $OUT/doomd.elf | grep -E " \.(text|rodata|data|bss) "
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/dmc-ram.patch wt-ram/ports/doomdmc/dmc-ram.patch
+--- a/ports/doomdmc/dmc-ram.patch	1969-12-31 19:00:00
++++ wt-ram/ports/doomdmc/dmc-ram.patch	2026-11-03 18:49:56
+@@ -0,0 +1,80 @@
++diff -u a/cache.h b/cache.h
++--- a/cache.h	2026-11-03 18:49:28
+++++ b/cache.h	2026-11-03 18:49:29
++@@ -10,9 +10,13 @@
++ 
++ #include <stdint.h>
++ 
++-#define RC_LINE 16
+++#ifndef RC_LINE
+++#define RC_LINE 16      // QwenOS: -DRC_LINE / -DRC_SETS pick the cache geometry (powers of 2)
+++#endif
++ #define RC_WAYS 4
+++#ifndef RC_SETS
++ #define RC_SETS 32
+++#endif
++ #define RC_LINES (RC_WAYS * RC_SETS)
++ // RAM of the cache: line data, u16 tags and the LRU bytes
++ #define RC_BYTES (RC_LINES * RC_LINE + RC_LINES * 2 + RC_SETS)
++diff -u a/fetch.c b/fetch.c
++--- a/fetch.c	2026-11-03 18:49:28
+++++ b/fetch.c	2026-11-03 18:49:29
++@@ -347,11 +347,17 @@
++     flat_touch(s);
++ }
++ 
+++// QwenOS: the flats the E1 maps use live in the data ROM (ports/doomdmc/mkflatrom.py), so no
+++// flat cache RAM and no flat reads; any other flat falls back to the slots (k = 0: solid colour).
+++extern const uint16_t q_flat_idx[];
+++extern const uint8_t q_flat_rom[][DMC_FLAT_SIZE];
++ const uint8_t *flat_get(int flat)
++ {
+++    flat_check(flat);
+++    if (q_flat_idx[flat] != 0xFFFFu)
+++        return q_flat_rom[q_flat_idx[flat]];
++     if (!flat_slots)
++         return NULL;
++-    flat_check(flat);
++     int s = flat_find(flat);
++     if (s < 0) {
++         // the previous flat is done with, slots of prefetches are kept
++@@ -371,6 +377,8 @@
++ void flat_prefetch(int flat)
++ {
++     flat_check(flat);
+++    if (q_flat_idx[flat] != 0xFFFFu)
+++        return;
++     if (flat_slots < 2 || flat_find(flat) >= 0)
++         return;
++     // never the slot in use or one still loading
++diff -u a/level.c b/level.c
++--- a/level.c	2026-11-03 18:49:28
+++++ b/level.c	2026-11-03 18:49:29
++@@ -31,7 +31,7 @@
++ int			o_page_cap;
++ int			o_mover_cap;
++ #else
++-#define ARENA_MAX	14800	// plan D
+++#define ARENA_MAX	24000	// QwenOS: arenas are larger than the AT32's plan D (no flat cache RAM)
++ #endif
++ #define ARENA_END	O_ARENA_END
++ 
++diff -u a/r_frame.c b/r_frame.c
++--- a/r_frame.c	2026-11-03 18:49:28
+++++ b/r_frame.c	2026-11-03 18:49:29
++@@ -213,13 +213,13 @@
++         config_plan = plan;
++         flat_set_slots(slots_request >= 0 ? slots_request : M.plan.k);
++         r_layout_t l;
++-        if (R_Layout(&l, pw, M.plan.k != 0))
+++        if (R_Layout(&l, pw, 1))  // QwenOS: always textured (ROM flats)
++             I_Error("R_FrameSetup: plan needs %u B of frame region", (unsigned)l.total);
++         frame_len = ALIGN16(l.total);
++         lay.w = 0;
++     }
++     int w = w_request ? w_request : pw;
++-    int textured = solid_request >= 0 ? !solid_request : M.plan.k != 0;
+++    int textured = solid_request >= 0 ? !solid_request : 1;  // QwenOS: ROM flats
++     if (w != lay.w || textured != lay.textured) {
++         R_PumpIdle();
++         R_ApplyLayout(w, textured);
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/doomd_main.c wt-ram/ports/doomdmc/doomd_main.c
+--- a/ports/doomdmc/doomd_main.c	2026-11-03 19:24:12
++++ wt-ram/ports/doomdmc/doomd_main.c	2026-11-03 18:57:58
+@@ -27,12 +27,9 @@
+ #include "ovl.h"
+ #include "r_strip.h"
+ #include "s_pcspk.h"
+-#include "platform.h"
+ #include "qplat.h"
+-#include "rec.h"
+ 
+ void D_Display(void);
+-extern int demosequence;
+ extern boolean sendpause;
+ void q_frame_end(void);
+ extern uint8_t __bss_end[], __stack_limit[], __frame_start[], __ram_end[], __data_start[];
+@@ -44,36 +41,14 @@
+     q_puts(" ram_end ");                  q_puthex((uint32_t)(uintptr_t)__ram_end);
+     q_puts(" stack used ");               q_putu(plat_stack_used());
+     q_putc('\n');
++    r_layout_t l;   // real frame-region sizes of this build (plan A = w16, plans B..D = w8, textured)
++    R_Layout(&l, 16, 1); q_puts("doomd: frame A "); q_putu(l.total);
++    R_Layout(&l, 8, 1);  q_puts(" B "); q_putu(l.total);
++    R_Layout(&l, 24, 1); q_puts(" w24 "); q_putu(l.total);
++    R_Layout(&l, 32, 1); q_puts(" w32 "); q_putu(l.total);
++    q_puts(" rc "); q_putu(RC_BYTES); q_putc('\n');
+ }
+ 
+-/* Run modes (compile time, ports/doomdmc/mkmode.sh):
+- *   0 attract loop from the title screen (default, what `make` builds)
+- *   1 DEMO1 straight away: no title / credit pages, vanilla demo drives the player, exits at its end
+- *   2 E1M1 player start, scripted input (q_script below) instead of a demo
+- * DOOMD_FRAMES=n  (compile time, default 0 = run forever): leave after n GAME frames, printing
+- *   "DOOMD_FRAMES_DONE" (modes 1 and 2). DOOMD_DUMP=1 additionally dumps the last frame over PUTC.
+- * Markers on the console: "DOOMD_LEVEL_START", "DOOMD_FRAME n", "DOOMD_FRAMES_DONE". */
+-#ifndef DOOMD_MODE
+-#define DOOMD_MODE 0
+-#endif
+-#ifndef DOOMD_FRAMES
+-#define DOOMD_FRAMES 0
+-#endif
+-#ifndef DOOMD_DUMP
+-#define DOOMD_DUMP 0
+-#endif
+-
+-/* mode 2 script: {first tic, last tic, buttons} hold the meter's buttons (V-A fwd, HOLD back,
+- * MODE turn left, SAVE turn right, LIGHT fire) for those game tics */
+-void q_btn_hold(unsigned mask);
+-struct q_step { uint16_t t0, t1; uint8_t btn; };
+-static const struct q_step q_script[] = {
+-    {  4,  40, BTN_BIT(BTN_VA) },     /* forward */
+-    { 41,  50, BTN_BIT(BTN_SAVE) },   /* turn right */
+-    { 51,  70, BTN_BIT(BTN_VA) },     /* forward */
+-    { 71,  80, BTN_BIT(BTN_LIGHT) },  /* fire */
+-};
+-
+ int doomd_main(const qos_api *api)
+ {
+     qapi = api;
+@@ -85,6 +60,7 @@
+         for (; p < e; p++) *p = 0xA5A5A5A5u;
+     }
+     q_puts("doomd: DMC100-Doom on QwenOS\n");
++    report_ram();
+     int e = img_init();
+     q_puts("doomd: img_init -> "); q_putu((uint32_t)-e); q_putc('\n');
+     if (e) plat_panic("DOOM.DAT not usable");
+@@ -115,70 +91,14 @@
+     showMessages = 1;
+     D_ResetTics();
+     R_PaletteChanged();
+-#if DOOMD_MODE == 0
+     D_StartTitle();
+     q_puts("doomd: title loop\n");
+-#elif DOOMD_MODE == 1
+-    // attract sequence without the pages: demosequence 0 -> DEMO1 on the first tic
+-    gameaction = ga_nothing;
+-    demosequence = 0;
+-    D_AdvanceDemo();
+-    q_puts("DOOMD_LEVEL_START demo1\n");
+-#else
+-    // E1M1 player start, skill 3 (hurt me plenty): the first tic loads the level
+-    G_DeferedInitNew(sk_medium, 1, 1);
+-    q_puts("DOOMD_LEVEL_START e1m1\n");
+-#endif
+-    int gframes = 0, was_menu = 0;
+     for (;;) {
+-#if DOOMD_MODE == 2
+-        {
+-            uint8_t b = 0;
+-            for (unsigned i = 0; i < sizeof q_script / sizeof q_script[0]; i++)
+-                if (gametic >= q_script[i].t0 && gametic <= q_script[i].t1) b |= q_script[i].btn;
+-            q_btn_hold(b);
+-        }
+-#endif
+         I_StartFrame();
+-        int t0 = gametic;
+         TryRunTics();
+-        // Virtual time makes every other TryRunTics call return without a tic (it waits out the
+-        // tic's 28 ms in 1 ms sleeps). Redrawing the unchanged level costs ~4M instructions, so
+-        // only frames that follow a tic (or any menu / non-level screen) are drawn.
+-        if (gamestate == GS_LEVEL && !menuactive && !was_menu &&
+-            (gametic == t0 || !players[consoleplayer].mo))
+-            continue;
+-        was_menu = menuactive;
+         S_UpdateSounds(players[consoleplayer].mo);
+-#if DOOMD_FRAMES && DOOMD_MODE
+-        if (gamestate == GS_LEVEL && DOOMD_DUMP && gframes == DOOMD_FRAMES - 1) { q_dump_req = 1; R_PaletteChanged(); }
+-#endif
+         D_Display();
+         q_frame_end();
+-#if DOOMD_MODE
+-        if (gamestate == GS_LEVEL && players[consoleplayer].mo && gametic > 0) {
+-            gframes++;
+-#ifdef DOOMD_PLAN_PRINT
+-            if (gframes == 1) {
+-                q_puts("plan "); q_putu(M.plan.plan); q_puts(" w "); q_putu(M.plan.w); q_puts(" k "); q_putu(M.plan.k);
+-                q_puts(" pages "); q_putu(M.plan.pages); q_puts(" need "); q_putu(M.plan.need_play);
+-                q_puts(" reserve "); q_putu(M.plan.reserve); q_puts(" arena "); q_putu(M.plan.arena_bytes);
+-                q_puts(" monsters "); q_putu(M.plan.monsters); q_putc('\n');
+-                report_ram();
+-            }
+-#endif
+-            q_puts("DOOMD_FRAME "); q_putu((uint32_t)gframes); q_puts(" tic "); q_putu((uint32_t)gametic); q_putc('\n');
+-#if DOOMD_FRAMES
+-            if (gframes >= DOOMD_FRAMES) {
+-                q_puts("DOOMD_FRAMES_DONE\n");
+-                return 0;
+-            }
+-#endif
+-        } else if (DOOMD_MODE == 1 && gframes) {
+-            q_puts("DOOMD_DEMO_DONE\n");
+-            return 0;
+-        }
+-#endif
+         if (fe.action) {
+             fe.action = 0;
+             paused = sendpause = false;
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/mkflatrom.py wt-ram/ports/doomdmc/mkflatrom.py
+--- a/ports/doomdmc/mkflatrom.py	1969-12-31 19:00:00
++++ wt-ram/ports/doomdmc/mkflatrom.py	2026-11-03 19:19:21
+@@ -0,0 +1,53 @@
++#!/usr/bin/env python3
++"""Bake the most used floor/ceiling flats of the pack's maps into data ROM (QwenOS /bin/doomd).
++usage: mkflatrom.py DMC_CHECKOUT PACK_DIR OUT.c        (env QFLATS_MAX = number of flats, default 88)
++Flats are 32x32 texels (1024 B) in the pack's FLATS section. Sector pic numbers are map-local; they are
++translated through the map's FLATXLAT stream (what P_MapFlat does) to global flat ids. Animation cycles
++that a map uses are baked whole, then the flats with the most sector references (every map weighs the same).
++The engine (dmc-ram.patch, fetch.c) returns a pointer into q_flat_rom for those: no cache RAM, no flat disk
++read, pixel-identical to the disk path. The remaining flats (about 3 % of the sector references in E1) go
++through the single RAM flat slot."""
++import sys
++dmc, pack, out = sys.argv[1:4]
++sys.path.insert(0, dmc + '/tools')
++from conv import format as F, reader as R
++img = R.Image(pack)
++import collections, os
++# usage per flat: sector floor/ceiling references, each map weighted equally (pic numbers are
++# map-local; the map's FLATXLAT stream maps them to global flat ids, P_MapFlat)
++score = collections.Counter(); every = set()
++for e in img.maps:
++    mb = img.map(e['name'])
++    xlat = mb.u16s('FLATXLAT'); c = collections.Counter()
++    for s in mb.records('SECTORS', F.SECTOR):
++        for pic in (s['floorpic'], s['ceilingpic']):
++            if xlat[pic] != F.NONE16: c[xlat[pic]] += 1
++    for f, n in c.items(): score[f] += n / sum(c.values())
++    every |= set(c)
++anim = set()
++an, _ = img.section('ANIMS')
++for i in range(len(an) // F.ANIM.size):
++    a = F.ANIM.unpack(an, i * F.ANIM.size)
++    if a['kind'] == F.ANIM_FLAT and any(f in every for f in range(a['first'], a['last'] + 1)):
++        anim.update(range(a['first'], a['last'] + 1))   # cycles are baked whole (or not at all)
++fl, fe = img.section('FLATS')
++count = fe['flags']
++assert F.finale_flat_off(count) <= len(fl), (count, len(fl))
++# the data ROM holds what the engine's rodata leaves free: bake animation cycles first, then the most used
++# flats up to QFLATS_MAX (default 88 = 90112 B; 0 bakes nothing, a debug setting)
++limit = int(os.environ.get('QFLATS_MAX', 88))
++order = sorted(anim) + [f for f, _ in score.most_common() if f not in anim]
++used = sorted(set(order[:limit]))
++covered = sum(1 for f in every if f in used)
++idx = {f: k for k, f in enumerate(used)}
++L = ['// Generated by ports/doomdmc/mkflatrom.py: %d of %d flats in data ROM (%d B)' % (len(used), count, len(used) * 1024),
++     '#include <stdint.h>',
++     'const uint16_t q_flat_idx[%d] = {' % count]
++L += ['    %s,' % (idx[f] if f in idx else '0xFFFF') for f in range(count)]
++L += ['};', 'const uint8_t q_flat_rom[%d][1024] __attribute__((aligned(4))) = {' % len(used)]
++for f in used:
++    d = fl[f * 1024:(f + 1) * 1024]
++    L.append('{' + ','.join(str(b) for b in d) + '},')
++L.append('};')
++open(out, 'w').write('\n'.join(L) + '\n')
++print('flatrom: %d of %d flats baked (%d B); %d of %d flats the maps use' % (len(used), count, len(used) * 1024, covered, len(every)))
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/mkimage.sh wt-ram/ports/doomdmc/mkimage.sh
+--- a/ports/doomdmc/mkimage.sh	1969-12-31 19:00:00
++++ wt-ram/ports/doomdmc/mkimage.sh	2026-11-03 18:50:37
+@@ -0,0 +1,13 @@
++#!/bin/bash
++# usage: mkimage.sh DMC_WORKCOPY LAYOUT.json OUTDIR   -> OUTDIR/E1/{DOOM.DAT,..}, OUTDIR/E1.img
++# DMC_WORKCOPY must be a writable DMC100-Doom checkout (the converter builds its host dumper in
++# its build/ dir). IWAD defaults to /Users/jhome/qwenos-work/wads/freedoom1.wad.
++set -e
++DMC=$1; LAY=$2; OUT=$3; IWAD=${IWAD:-/Users/jhome/qwenos-work/wads/freedoom1.wad}
++LLVM=${LLVM:-/opt/homebrew/opt/llvm/bin}; export PATH=$LLVM:$PATH
++W=$(mktemp -d); printf '#!/bin/bash\nllvm-nm "$@" | sed -E "s/^_//"\n' > $W/nm; chmod +x $W/nm   # macOS: strip the _ prefix
++mkdir -p "$OUT"
++cd "$DMC"
++NM=$W/nm python3 -I tools/conv/__main__.py --wad "$IWAD" --gen "${GEN:-build/sw/gen}" --packs E1 --out "$OUT" --ram-layout "$LAY" packs | grep '^pack'
++python3 -I tests/host/mknor.py "$OUT/E1" "$OUT/E1.img"
++rm -rf $W
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/mklayout.py wt-ram/ports/doomdmc/mklayout.py
+--- a/ports/doomdmc/mklayout.py	1969-12-31 19:00:00
++++ wt-ram/ports/doomdmc/mklayout.py	2026-11-03 19:07:39
+@@ -0,0 +1,38 @@
++#!/usr/bin/env python3
++"""RAM layout JSON for DMC100's converter (tools/conv/plan.py) from the built /bin/doomd ELF.
++usage: mklayout.py doomd.elf OUT.json [rc_line rc_sets]      (rc geometry must match build.sh RC_DEFS)
++The converter sizes each map's arena as ram_total - stack - fixed_core - frame region - caches, and
++the engine places the arena at __ram_end - arena_bytes, so stack = the doomd stack reserve and
++fixed_core = __frame_start (kernel core + engine .data/.bss, everything below the frame region).
++Every plan has K = 1 flat slot (the flats that did not fit the data ROM are loaded into it) and is textured; B, C and D are the
++same w = 8 plan (frame regions below 8368 B would overlap the front-end compose buffers)."""
++import json, subprocess, sys
++elf, out = sys.argv[1:3]
++line, sets = (int(sys.argv[3]), int(sys.argv[4])) if len(sys.argv) > 4 else (16, 16)
++w8only = len(sys.argv) > 5 and sys.argv[5] == 'w8'   # experiment: no w = 16 plan
++import os
++K = int(os.environ.get("QFLAT_SLOTS", 1))   # RAM flat slots for the flats that are not in data ROM
++sy = {}
++for l in subprocess.check_output(['readelf', '-sW', elf], text=True).splitlines():
++    f = l.split()
++    if len(f) >= 8 and f[0].rstrip(':').isdigit(): sy[f[-1]] = int(f[1], 16)
++stack = 0x8000 - sy['__stack_limit']
++lay = json.load(open('/dev/stdin')) if False else None
++base = {
++ "comment": "QwenOS /bin/doomd RAM layout, generated by ports/doomdmc/mklayout.py",
++ "ram_total": 32768, "stack": stack, "fixed_core": sy['__frame_start'],
++ "plans": {"A": {"w": 8, "k": K, "textured": True, "frame_region": 9648} if w8only else {"w": 16, "k": K, "textured": True, "frame_region": 15208},
++           "B": {"w": 8, "k": K, "textured": True, "frame_region": 9648},
++           "C": {"w": 8, "k": K, "textured": True, "frame_region": 9648},
++           "D": {"w": 8, "k": K, "textured": True, "frame_region": 9648}},
++ "map_cache_lines": 4 * sets, "map_cache_bytes": 4 * sets * (line + 2) + sets, "flat_slot_bytes": 1028,
++ "page_bytes": 60, "reserve_pages": 8, "transients": 24, "awake_min": 24, "awake_percent": 30,
++ "level_fixed": {"sector_bytes": 1, "mutable_bytes": 10, "line_bits": 2, "special_bits": 1,
++  "switch_bytes": 16, "button_bytes": 128, "tier_bits": 2, "sleep_bytes": 1, "monster_bits": 1,
++  "zclip_bytes": 4, "blockmap_hash_bytes": 256, "sector_hash_bytes": 128, "light_bytes": 8,
++  "mover_bytes": 20, "mover_max": 32, "platlist_bytes": 60, "drop_bytes": 16}}
++json.dump(base, open(out, 'w'), indent=1)
++print('layout: stack %d fixed_core %d caches %d -> arena(A) %d arena(B) %d' % (
++    stack, sy['__frame_start'], base['map_cache_bytes'],
++    32768 - stack - sy['__frame_start'] - 15208 - base['map_cache_bytes'] - K * 1028,
++    32768 - stack - sy['__frame_start'] - 9648 - base['map_cache_bytes'] - K * 1028))
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/qlcd.c wt-ram/ports/doomdmc/qlcd.c
+--- a/ports/doomdmc/qlcd.c	2026-11-03 19:24:12
++++ wt-ram/ports/doomdmc/qlcd.c	2026-11-03 18:43:26
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ // QwenOS "LCD pump": DMC100 streams 8-bit palette-indexed columns of the 320x240 picture
+ // into pump_submit(). Here each pixel stream goes to (a) the 32x24 kernel framebuffer
+-// (nearest-sample of every 10x10 block, FB_SET syscalls) and (b) when armed with the 'p'
++// (nearest-sample of every 10x10 block, FB_COL syscalls = console packets, no resident fb) and (b) when armed with the 'p'
+ // key, a framed serial dump over PUTC so the full 320x240 frame can be reconstructed:
+ //   0x01 'P' palette-number        PLAYPAL palette index in use (host maps it to colours)
+ //   0x01 'W' x0 x1 y0 y1 flags (u16le each)   opens a window
+@@ -42,24 +42,33 @@
+ {
+     int h = wy1 - wy0 + 1;
+     int rep = (wflags & PUMP_DOUBLE) ? 2 : 1;
+-    if (dumping) { q_putc(1); q_putc('D'); put16((unsigned)(ncols * rep * h)); }
++    int wc0 = wcur;
++    if (dumping) {
++        q_putc(1); q_putc('D'); put16((unsigned)(ncols * rep * h));
++        for (int c = 0; c < ncols; c++)
++            for (int r = 0; r < rep; r++)
++                for (int y = 0; y < h; y++) q_putc(cols[c * h + y]);
++    }
++    // FB samples go out after the D payload (their console packets must not interleave with it)
+     for (int c = 0; c < ncols; c++) {
+         const uint8_t *col = cols + c * h;
+         for (int r = 0; r < rep; r++) {
+             int x = wcur;
+             if (++wcur > wx1) wcur = wx0;
+-            if (dumping)
+-                for (int y = 0; y < h; y++) q_putc(col[y]);
+             if (x % 10 == 5) {
+-                unsigned cx = (unsigned)(x / 10);
+-                // FB rows whose sample row (cy*10+5) lies in this window
+-                int cy0 = (wy0 + 4) / 10;
++                // FB column samples whose row (cy*10+5) lies in this window, one FB_COL call
++                // (the kernel streams them out as a console packet; no resident fb)
++                uint8_t fbc[QOS_FB_H];
++                int cy0 = (wy0 + 4) / 10, n = 0;
+                 for (int cy = cy0; cy < (int)QOS_FB_H && cy * 10 + 5 <= wy1; cy++)
+                     if (cy * 10 + 5 >= wy0)
+-                        qapi->syscall(QOS_SYS_FB_SET, cx, (unsigned)cy, col[cy * 10 + 5 - wy0]);
++                        fbc[n++] = col[cy * 10 + 5 - wy0];
++                if (n)
++                    qapi->syscall(QOS_SYS_FB_COL, (unsigned)(x / 10) | ((unsigned)cy0 << 8), (uintptr_t)fbc, (unsigned)n);
+             }
+         }
+     }
++    (void)wc0;
+     pump_stats.fills += (uint32_t)ncols;
+ }
+ void pump_sync(int max) { (void)max; }
+diff -ruN -x build -x __pycache__ -x *.pyc a/ports/doomdmc/qplat.c wt-ram/ports/doomdmc/qplat.c
+--- a/ports/doomdmc/qplat.c	2026-11-03 19:24:12
++++ wt-ram/ports/doomdmc/qplat.c	2026-11-03 18:41:17
+@@ -54,11 +54,11 @@
+ volatile struct nor_stats nor_stats;
+ static uint32_t nor_ticket;
+ 
+-void nor_hw(uint32_t phys, void *dst, uint32_t n)
++static void nor_hw(uint32_t phys, void *dst, uint32_t n)
+ {
+     uint8_t *out = dst;
+     while (n) {
+-        uint32_t c = n > QOS_DISK_WINDOW ? QOS_DISK_WINDOW : n;
++        uint32_t c = n > QOS_DISK_TAKEOVER_WINDOW ? QOS_DISK_TAKEOVER_WINDOW : n;
+         if (qapi->syscall(QOS_SYS_DISK_REQUEST, phys, (uintptr_t)out, c))
+             plat_panic("disk req");
+         uint32_t r = 0;
+@@ -71,6 +71,7 @@
+             plat_panic("disk read");
+         }
+         phys += c; out += c; n -= c;
++        nor_stats.async_chunks++;
+     }
+ }
+ int nor_init(void) { return 0; }
+@@ -133,8 +134,6 @@
+ static uint32_t pad_until;
+ static unsigned pad_bits;
+ uint32_t q_keys, q_dump_req;
+-static uint32_t q_hold; /* scripted buttons (mode 2): held every tic until changed */
+-void q_btn_hold(unsigned mask) { q_hold = mask; }
+ 
+ void dji_start(void) {}
+ void dji_stop(void) {}
+@@ -157,8 +156,7 @@
+         }
+     }
+     for (int b = 0; b < BTN_COUNT; b++)
+-        if (q_hold & BTN_BIT(b)) btn_set(b, 1);
+-        else if ((btn_state & BTN_BIT(b)) && (int32_t)(vclock - btn_until[b]) >= 0)
++        if ((btn_state & BTN_BIT(b)) && (int32_t)(vclock - btn_until[b]) >= 0)
+             btn_set(b, 0);
+     if (pad_bits && (int32_t)(vclock - pad_until) >= 0) pad_bits = 0;
+     if (pad_bits) {
+diff -ruN -x build -x __pycache__ -x *.pyc a/tests/test_doomd.py wt-ram/tests/test_doomd.py
+--- a/tests/test_doomd.py	2026-11-03 19:24:12
++++ wt-ram/tests/test_doomd.py	2026-11-03 18:41:39
+@@ -12,15 +12,16 @@
+ class DoomdTakeover(unittest.TestCase):
+     def test_kernel_core_fits_below_app_ram(self):
+         k=syms('kernel.elf')
+-        self.assertLessEqual(k['__core_end'],0x5c0)
+-        self.assertEqual(k['__kstack_top'],k['__core_end'])
+-        for s in ('qos_input_mailbox','qos_disk_mailbox','framebuffer'):
+-            self.assertLess(k[s],k['__core_end'],s)   # mailboxes + fb stay resident
+-        self.assertLessEqual(k['__ov_start'],0x5c0)
++        self.assertEqual(k['__core_end'],0x98)
++        self.assertEqual(k['__tstack_limit'],0); self.assertEqual(k['__tstack_top']-k['__tstack_limit'],48)
++        for s in ('qos_input_mailbox','qos_disk_mailbox'):
++            self.assertLess(k[s],k['__core_end'],s)   # mailboxes stay resident
++        self.assertGreaterEqual(k['framebuffer'],k['__ov_start'])   # fb is NOT resident (overlay)
++        self.assertGreaterEqual(k['__ov_start'],k['qos_disk_mailbox']+276)   # normal mode keeps the full window
+     def test_doomd_regions(self):
+         d=syms('doomd.elf'); ent,segs=parse((ROOT/'build/doomd.elf').read_bytes())
+         self.assertEqual(ent,0x41000)
+-        self.assertEqual(d['__app_ram_start'],0x5c0); self.assertEqual(d['__stack_top'],0x8000)
++        self.assertEqual(d['__app_ram_start'],0x98); self.assertEqual(d['__stack_top'],0x8000)
+         self.assertLessEqual(d['__bss_end'],d['__stack_limit'])
+         for va,blob,fl in segs:
+             if fl&1: self.assertTrue(0x41000<=va and va+len(blob)<=0x78000)
+@@ -37,10 +38,8 @@
+         self.assertEqual(log.count('QWENOS_BOOT_OK'),2)   # boot, takeover, warm reboot
+         words=int(re.search(r'free RAM words (\d+)',log).group(1))
+         d=syms('doomd.elf'); self.assertEqual(words*4,d['__stack_limit']-d['__bss_end'])
+-        self.assertGreaterEqual(words*4,29000)
+-        k=syms('kernel-doomd.elf')
+-        fb=bytes(cpu.mem[k['framebuffer']:k['framebuffer']+768])
+-        self.assertTrue(any(fb))   # framebuffer content survived/was repainted
+-        # kernel stack never overflowed into the mailbox/vars it sits above
+-        self.assertEqual(k['__kstack_top']-k['__kstack_limit'],128)
++        self.assertGreaterEqual(words*4,30500)
++        # fb rows streamed to the console as 0x01 'H' y.. packets (no resident framebuffer)
++        raw=bytes(cpu.byte_events[i]&255 for i in range(len(cpu.byte_events)))
++        self.assertEqual(raw.count(b'\x01H\x00'),24)
+ if __name__=='__main__':unittest.main()
+diff -ruN -x build -x __pycache__ -x *.pyc a/tools/check_layout.py wt-ram/tools/check_layout.py
+--- a/tools/check_layout.py	2026-11-03 19:24:12
++++ wt-ram/tools/check_layout.py	2026-11-03 18:41:39
+@@ -14,7 +14,7 @@
+  if typ!=1:continue
+  assert off+fs<=len(b)
+  assert fs<=ms
+- assert any(start<=va and va+ms<=end for start,end in [(0x100,0x8000),(0x20000,0x40000),(0x40000,0x80000)]),(hex(va),hex(ms))
++ assert any(start<=va and va+ms<=end for start,end in [(0x0,0x8000),(0x20000,0x40000),(0x40000,0x80000)]),(hex(va),hex(ms))
+  if flags&1:code.append((va,va+ms))
+  print('LOAD',hex(va),hex(ms),'flags',flags)
+ # Core/app RAM contract (RAM_BUDGET.txt): kernel core below doomd RAM base.
+@@ -23,10 +23,10 @@
+  return {l.split()[-1]:int(l.split()[1],16) for l in out.splitlines() if len(l.split())>=8 and l.split()[0].rstrip(':').isdigit()}
+ root=Path(sys.argv[1]).parent
+ k=syms(root/'kernel.elf')
+-assert k['__core_end']<=0x5c0,hex(k['__core_end'])
++assert k['__core_end']<=0x98,hex(k['__core_end'])
+ assert k['__bss_end']<=0x1800,hex(k['__bss_end'])
+ d=syms(root/'doomd.elf')
+-assert d['__app_ram_start']==0x5c0 and d['__stack_top']==0x8000
++assert d['__app_ram_start']==k['__core_end']==0x98 and d['__stack_top']==0x8000
+ assert d['__bss_end']<=d['__stack_limit'],'doomd data+bss overlaps stack reserve'
+ k_hi=max(e for s,e in code if s<0x41000); assert k_hi<=0x41000,hex(k_hi)
+ print('core end',hex(k['__core_end']),'doomd app RAM',hex(d['__app_ram_start']),'..0x8000, data+bss end',hex(d['__bss_end']))
+diff -ruN -x build -x __pycache__ -x *.pyc a/tools/doomd_frames.py wt-ram/tools/doomd_frames.py
+--- a/tools/doomd_frames.py	2026-11-03 19:24:12
++++ wt-ram/tools/doomd_frames.py	2026-11-03 18:41:27
+@@ -27,6 +27,7 @@
+     d = Path(stream).read_bytes()
+     i = 0; cur = 0; win = None; col = 0
+     canvas = bytearray(320 * 240)
++    fb = bytearray(32 * 24)   # kernel framebuffer stream: 0x01 'V'/'H' x y n bytes, 0x01 'K' c
+     nframes = 0
+     while i < len(d):
+         if d[i] != 1:
+@@ -45,8 +46,23 @@
+                 col += 1
+                 if col > x1: col = x0
+             i += n
++        elif t in 'VH':
++            x, y, n = d[i], d[i + 1], d[i + 2]; i += 3
++            for k in range(n):
++                if t == 'V': fb[(y + k) * 32 + x] = d[i + k]
++                else: fb[y * 32 + x + k] = d[i + k]
++            i += n
++        elif t == 'K':
++            fb[:] = bytes([d[i]]) * len(fb); i += 1
+         elif t == 'E':
+             i += 2
++            frgb = bytearray()
++            for p_ in fb:
++                frgb += bytes(pal[cur][p_]) * 8
++            big8 = bytearray()
++            for y in range(24):
++                row = bytes(frgb[y * 32 * 24:(y + 1) * 32 * 24]); big8 += (row) * 8
++            png(f'{prefix}-{nframes:02}-fb32x24.png', 256, 192, big8)
+             rgb = bytearray()
+             for p in canvas: rgb += bytes(pal[cur][p])
+             if scale > 1:
+diff -ruN -x build -x __pycache__ -x *.pyc a/tools/merge_elf.py wt-ram/tools/merge_elf.py
+--- a/tools/merge_elf.py	2026-11-03 19:24:12
++++ wt-ram/tools/merge_elf.py	2026-11-03 18:41:39
+@@ -25,7 +25,7 @@
+         typ, off, va, pa, fs, ms, flags, align=struct.unpack_from('<8I',data,phoff+i*entsize)
+         if typ!=1 or not ms: continue
+         if fs>ms or off+fs>len(data):raise ValueError('malformed load segment')
+-        in_ram = 0x100 <= va < 0x8000
++        in_ram = 0x0 <= va < 0x8000
+         if in_ram and pa != va and 0x20000 <= pa < 0x40000:
+             # Load-image of a RAM .data section (AT> DROM): the runtime start
+             # code copies it, so ship it at its load address, read-only.
+@@ -46,7 +46,7 @@
+     collected=[]
+     for ent,segs in entries:
+         for va,data,flags in segs:
+-            if not any(lo<=va and va+len(data)<=hi for lo,hi in ((0x100,0x8000),(0x20000,0x40000),(0x40000,0x80000))):
++            if not any(lo<=va and va+len(data)<=hi for lo,hi in ((0x0,0x8000),(0x20000,0x40000),(0x40000,0x80000))):
+                 raise ValueError(f'bad segment {va:#x}+{len(data)}')
+             for prev,blob,_ in collected:
+                 if va<prev+len(blob) and prev<va+len(data):
+diff -ruN -x build -x __pycache__ -x *.pyc a/tools/rv32_fast.c wt-ram/tools/rv32_fast.c
+--- a/tools/rv32_fast.c	2026-11-03 19:24:12
++++ wt-ram/tools/rv32_fast.c	2026-11-03 19:09:00
+@@ -10,6 +10,7 @@
+ #include <string.h>
+ #include <stdint.h>
+ static uint8_t mem[0x80000];
++static uint32_t lt_addr,fl_lt[100000];
+ static uint32_t reg[32], pc;
+ static uint32_t tr_pc[64],tr_sp[64],tr_to[64];static unsigned trn;
+ static int ps,pskip,plen,pn;/* dump-packet parser state so pixel bytes are never taken for markers */
+@@ -26,10 +27,10 @@
+   f=fopen(argv[2],"rb");if(!f){perror("disk");return 2;}
+   fseek(f,0,SEEK_END);long dn=ftell(f);fseek(f,0,SEEK_SET);uint8_t*disk=malloc(dn);if(fread(disk,1,dn,f)!=(size_t)dn)return 2;fclose(f);
+   uint32_t kbox=strtoul(argv[3],0,16),dbox=strtoul(argv[4],0,16);
+-  FILE*out=fopen(argv[5],"wb");uint64_t maxi=strtoull(argv[6],0,10);
++  FILE*out=fopen(argv[5],"wb");if(getenv("LT_ADDR"))lt_addr=strtoul(getenv("LT_ADDR"),0,16);/* optional: hex address of the engine's leveltime, logged per frame */uint64_t maxi=strtoull(argv[6],0,10);
+   int nkeys=argc-7;struct{int c;int fr;int done;}keys[256];
+   for(int i=0;i<nkeys&&i<256;i++){keys[i].c=argv[7+i][0];keys[i].fr=atoi(argv[7+i]+2);keys[i].done=0;}
+-  uint32_t last_req=0,kseq=100;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
++  static uint64_t rq_n,rq_bytes,rq_hist[9];uint32_t last_req=0,kseq=100;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
+   uint64_t last_frame_step=0;
+   while(steps<maxi){
+     if(pc<0x40000||pc>0x7fffc||(pc&3))die("fetch",pc,steps);
+@@ -76,9 +77,10 @@
+       if(reg[17]==1){int c=reg[10]&511;if(c<256){fputc(c,out);int mark=0;
+   if(pskip>0){pskip--;}
+   else if(ps==0){if(c==1)ps=1;else if(c==2)mark=1;}
+-  else if(ps==1){ps=0;if(c=='D'){ps=2;pn=0;plen=0;}else if(c=='W')pskip=10;else if(c=='P')pskip=1;else if(c=='E')pskip=2;}
++  else if(ps==1){ps=0;if(c=='V'||c=='H'){ps=3;pn=0;}else if(c=='K')pskip=1;else if(c=='D'){ps=2;pn=0;plen=0;}else if(c=='W')pskip=10;else if(c=='P')pskip=1;else if(c=='E')pskip=2;}
++  else if(ps==3){if(++pn==3)pskip=c,ps=0;}
+   else if(ps==2){plen|=c<<(8*pn);if(++pn==2){ps=0;pskip=plen;}}
+-  if(mark){fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;
++  if(mark){if(lt_addr)fl_lt[frames<100000?frames:99999]=rd32(lt_addr);fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;
+             for(int i=0;i<nkeys;i++)if(!keys[i].done&&frames>=keys[i].fr){keys[i].done=1;wr32(kbox+4,keys[i].c);wr32(kbox,kseq++);break;}}}}
+       else if(reg[17]==93){exitcode=reg[10];goto done;}
+       else die("ecall",reg[17],steps);
+@@ -90,14 +92,15 @@
+     uint32_t seq=rd32(dbox);
+     if(seq&&seq!=last_req){uint32_t off=rd32(dbox+4),len=rd32(dbox+8);
+       if(!len||len>256)die("bad disk request",len,steps);
+-      last_req=seq;int good=off<=(uint32_t)dn&&len<=(uint32_t)dn-off;
++      last_req=seq;rq_n++;rq_bytes+=len;{int k=0;while((1u<<k)<len&&k<8)k++;rq_hist[k]++;}int good=off<=(uint32_t)dn&&len<=(uint32_t)dn-off;
+       if(good)memcpy(mem+dbox+20,disk+off,len);
+       wr32(dbox+16,good?1:2);wr32(dbox+12,seq);}
+   }
+ done:
+   fclose(out);
+   fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);
+-  for(int i=0;i<frames&&i<100000;i++)fprintf(stderr,"frame %d at %llu delta %llu\n",i,(unsigned long long)fstep[i],(unsigned long long)(fstep[i]-(i?fstep[i-1]:0)));
++  fprintf(stderr,"disk requests=%llu bytes=%llu hist(<=1,2,4,..256):",(unsigned long long)rq_n,(unsigned long long)rq_bytes);for(int i=0;i<9;i++)fprintf(stderr," %llu",(unsigned long long)rq_hist[i]);fprintf(stderr,"\n");
++  for(int i=0;i<frames&&i<100000;i++)fprintf(stderr,"frame %d at %llu delta %llu lt %u\n",i,(unsigned long long)fstep[i],(unsigned long long)(fstep[i]-(i?fstep[i-1]:0)),fl_lt[i]);
+   /* dump RAM for post-mortem */
+   char rn[512];snprintf(rn,sizeof rn,"%s.ram",argv[5]);FILE*r=fopen(rn,"wb");if(r){fwrite(mem,1,0x8000,r);fclose(r);}
+   return exitcode<0?1:0;

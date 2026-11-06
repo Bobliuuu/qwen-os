@@ -1,0 +1,1285 @@
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/Makefile wt-os/repo2/Makefile
+--- wt-perf/repo2/Makefile	2026-11-03 18:55:14
++++ wt-os/repo2/Makefile	2026-11-03 19:35:55
+@@ -27,6 +27,17 @@
+ 	$(CC) $(CFLAGS) -DQOS_BOOT_DOOMD $(LINK) -Wl,-T,linker/kernel.ld kernel/start.S kernel/app_call.S kernel/main.c -o $@
+ build/qwenos-doomd.elf: build/kernel-doomd.elf $(APPS) tools/merge_elf.py
+ 	python3 tools/merge_elf.py $@ build/kernel-doomd.elf $(APPS)
++# Live (interactive) OS: kernel without boot script/banner + typed-input shell. See README "Live shell".
++build/kernel-live.elf: kernel/start.S kernel/app_call.S kernel/main.c include/qos.h linker/kernel.ld
++	mkdir -p build
++	$(CC) $(CFLAGS) -DQOS_LIVE $(LINK) -Wl,-T,linker/kernel.ld kernel/start.S kernel/app_call.S kernel/main.c -o $@
++build/shell-live.elf: apps/shell.c include/qos.h linker/shell.ld
++	mkdir -p build
++	$(CC) $(CFLAGS) -DSHELL_LIVE $(LINK) -Wl,-T,linker/shell.ld apps/shell.c -o $@
++LIVE_APPS = build/shell-live.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf build/doomd.elf
++build/qwenos-live.elf: build/kernel-live.elf $(LIVE_APPS) tools/merge_elf.py
++	python3 tools/merge_elf.py $@ build/kernel-live.elf $(LIVE_APPS)
++live: build/qwenos-live.elf
+ build/qwenos-model-probe.elf: kernel/start.S kernel/app_call.S kernel/main.c include/qos.h linker/kernel.ld
+ 	mkdir -p build
+ 	$(CC) $(CFLAGS) -DQOS_MODEL_BRIDGE $(LINK) -Wl,-T,linker/kernel.ld kernel/start.S kernel/app_call.S kernel/main.c -o $@
+@@ -49,10 +60,12 @@
+ 	python3 tools/wad_device.py $(OUT)
+ frame: all
+ 	python3 tools/render_frame.py $(OUT)
+-check: all model-probe build/qwenos-doomd.elf
++build/rv32_fast: tools/rv32_fast.c
++	cc -O2 -o $@ $<
++check: all model-probe build/qwenos-doomd.elf build/qwenos-live.elf build/rv32_fast
+ 	python3 tools/check_layout.py $(OUT)
+ 	python3 tools/rv32_qwenputer.py $(OUT)
+ 	python3 -m unittest discover -s tests -v
+ clean:
+ 	rm -rf build
+-.PHONY: doomdmc all check clean frame asset doom-frame model-probe
++.PHONY: live doomdmc all check clean frame asset doom-frame model-probe
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/README.md wt-os/repo2/README.md
+--- wt-perf/repo2/README.md	2026-11-03 18:55:15
++++ wt-os/repo2/README.md	2026-11-03 19:38:36
+@@ -262,6 +262,45 @@
+ A proper BSP traversal and asset-cache/paging strategy are required before
+ production maps can be efficient.
+ 
++## Live shell, typed keys, one-command terminal (v0.13)
++
++The OS can now be driven like a machine with a keyboard. `make live` builds `build/qwenos-live.elf`
++(kernel `-DQOS_LIVE` + `-DSHELL_LIVE` shell; the boot-script kernel/shell used by the old tests are unchanged).
++Cold boot prints **no banner**: the first thing the guest does is print `$ ` and park in `KEY_WAIT`
++(184 instructions after reset). The shell (apps/shell.c, 2 KiB of its 4 KiB slot) echoes typed characters via
++PUTC, handles backspace/Enter and runs `ls`, `cat F`, `echo a b [> /tmp/note]`, `run /bin/X`, `exit`;
++`run /bin/doomd` takes over RAM and, in the mode-3 doomd, starts straight at **E1M1** and then plays on whatever keys
++arrive (w/s move, a/d turn, f/space fire, e use, p = dump the next frame over PUTC).
++
++**Run it (one command)** - needs `make live`, the DMC100 NOR image and a doomd mode-3 image
++(`OS=live ports/doomdmc/mkmode.sh 3`; the launcher builds what is missing):
++
++    tools/qwenos_live.sh            # type: run /bin/doomd <Enter>      (add --auto to have it typed for you)
++    # Quit: Ctrl-]  (or Ctrl-C). Arrow keys are sent as w/s/d/a. --fps N paces the display (default 35, 0 = unlimited)
++
++The host (`tools/rv32_fast -L`) does only three things: raw tty keystrokes -> guest keyboard mailbox (flow-controlled by
++the guest's read counter), serving E1.img blocks, and display: guest PUTC bytes are the console and, once DOOM prints
++frame markers, the guest's 32x24 kernel framebuffer is drawn with 24-bit ANSI colours from the real PLAYPAL
++(`--wad`, default freedoom1.wad; half-block characters when the terminal is short). Prompt, echo, `ls`, `run`, DOOM and
++all game logic are guest RV32 instructions. On exit it prints the guest instruction count and frames shown.
++The 32x24 framebuffer is what the guest always maintains; full 320x240 frames exist only through the `p` dump (tools/os_demo.sh).
++
++**Keyboard mailbox** (include/qos.h): still 8 bytes at 0x100, now a 4-deep ring: `u32 seq` + `u8 q[4]`; push = write
++`q[seq&3]`, then `seq+1` (last). The kernel's read counter lives in core RAM, so keys survive `run /bin/doomd`
++(exec/takeover) and queue while the engine is busy; `KEY_POLL` pops the oldest, `KEY_WAIT` parks until one arrives.
++**Scripted keys / model driver protocol**: `-K schedule.txt` for rv32_fast and `tools/keysched.py` for the Python
++reference (`shell_ready <key>`, `frame N <key>`, `<instr> <key>`); keysched.py documents the exact mailbox
++address/value writes and pause points (pc == `qos_key_park`, a single `ret`, one key pushed per park).
++`tools/os_demo.sh` replays boot -> typed `run /bin/doomd` -> E1M1 -> simulated play, prints instruction counts and writes PNG frames.
++Tests: `tests/test_shell_live.py` (Python reference CPU + rv32_fast), `tests/test_live.py` (pty-driven human session).
++
++Measured (rv32_fast, instructions; run tools/os_demo.sh to reproduce): cold boot -> prompt 184; typing the 15 keys of
++`run /bin/doomd<Enter>` 1,050 (70 each); Enter -> doomd_main 2,509; doomd init to level start 130.5K; level load + first frame 3.60M;
++**total cold boot -> first E1M1 frame 3.73M** (was 3.92M with the old boot script + doomd mode 2 on the same perf tree); later frames
++about 2.7M each with keys. Savings came from: no bss byte-clear loop at boot (22K), no boot script/banner, doomd's RAM
++zeroing moved to the kernel (only the 4.4 KB overlay when only the shell ran; saves 25K+), table CRC for the
++image header (-29K), direct framebuffer writes (FB_PTR, about -30K per frame), leaf fast paths for PUTC/KEY_WAIT/DISK_READ.
++
+ ## 32-KiB RAM budgeting (v0.10)
+ 
+ The kernel originally reserved 8 * 1536 = 12,288 bytes for application stacks,
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/apps/doomd_crt0.S wt-os/repo2/apps/doomd_crt0.S
+--- wt-perf/repo2/apps/doomd_crt0.S	2026-11-03 18:55:16
++++ wt-os/repo2/apps/doomd_crt0.S	2026-11-03 19:21:38
+@@ -1,6 +1,7 @@
+ /* /bin/doomd C runtime entry. The kernel calls app_main(api) with sp=0x8000.
+- * RAM is dirty (shell/RAMFS state) and .data is not preloaded: copy it from
+- * its data-ROM image and zero .bss, then call doomd_main(api).
++ * RAM from 0x5c0 up is ZERO on entry (the kernel clears what the shell/apps dirtied, see
++ * qos_takeover_run) but .data is not preloaded: copy it from its data-ROM image, then call
++ * doomd_main(api). (.bss needs no clearing.)
+  * RV32IM, no compressed instructions. */
+ .section .text.start,"ax"
+ .globl app_main
+@@ -17,13 +18,8 @@
+  addi t0,t0,4
+  addi t1,t1,4
+  j 1b
+-2: la t1,__bss_start
+- la t2,__bss_end
+-3: bgeu t1,t2,4f
+- sw zero,0(t1)
+- addi t1,t1,4
+- j 3b
+-4: lw a0,8(sp)
++2: /* no .bss clear: the kernel hands over RAM that is already zero (qos_takeover_run) */
++ lw a0,8(sp)
+  call doomd_main
+  lw ra,12(sp)
+  addi sp,sp,16
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/apps/shell.c wt-os/repo2/apps/shell.c
+--- wt-perf/repo2/apps/shell.c	2026-11-03 18:55:16
++++ wt-os/repo2/apps/shell.c	2026-11-03 19:16:38
+@@ -1,5 +1,60 @@
++#ifdef SHELL_LIVE
++/* Interactive shell: reads typed keys from the keyboard mailbox (KEY_WAIT parks the guest until
++ * the device injects a key), echoes them, handles backspace/Enter and runs ls, cat, echo [> file],
++ * run /bin/X, exit. ~1.3 KiB; must stay inside its 4 KiB ROM slot. */
+ #include "qos.h"
++#define PC(c) qcall(a,QOS_SYS_PUTC,(c),0,0)
++static void ps(const qos_api *a,const char *s){while(*s)PC((uint8_t)*s++);}
++static int eq(const char *x,const char *y){while(*x&&*x==*y){x++;y++;}return *x==*y;}
++static void say(const qos_api *a,unsigned fd,const char *s){
++ if(fd==~0u){ps(a,s);return;}
++ unsigned n=0;while(s[n])n++;
++ qcall(a,QOS_SYS_WRITE,fd,(uintptr_t)s,n);
++}
+ int app_main(const qos_api *a){
++ char line[64],blk[48];char *av[8];
++ for(;;){
++  ps(a,"$ ");
++  unsigned n=0,c;
++  for(;;){
++   c=qcall(a,QOS_SYS_KEY_WAIT,0,0,0);
++   if(c=='\n'||c=='\r')break;
++   if(c==8||c==127){if(n){n--;ps(a,"\b \b");}}
++   else if(c>=32&&n<sizeof line-1){line[n++]=(char)c;PC(c);}
++  }
++  PC('\n');line[n]=0;
++  unsigned ac=0;
++  for(char *p=line;*p;){
++   while(*p==' ')*p++=0;
++   if(*p&&ac<8){av[ac++]=p;while(*p&&*p!=' ')p++;}
++  }
++  if(!ac)continue;
++  const char *cmd=av[0];
++  if(eq(cmd,"ls"))ps(a,"/README\n/bin/sh\n/bin/paint\n/bin/raycast\n/bin/asset\n/bin/doom\n/bin/doomd\n/tmp/note\n/tmp/log\n");
++  else if(eq(cmd,"cat")&&ac>1){
++   unsigned fd=qcall(a,QOS_SYS_OPEN,(uintptr_t)av[1],QOS_O_READ,0);
++   if(fd>QOS_MAX_FD){ps(a,"?\n");continue;}
++   unsigned r;while((r=qcall(a,QOS_SYS_READ,fd,(uintptr_t)blk,sizeof blk))&&r<=sizeof blk)for(unsigned i=0;i<r;i++)PC((uint8_t)blk[i]);
++   qcall(a,QOS_SYS_CLOSE,fd,0,0);
++  }
++  else if(eq(cmd,"echo")){
++   unsigned k=1,fd=~0u;
++   while(k<ac&&!eq(av[k],">"))k++;
++   if(k+1<ac){ /* echo ... > file */
++    if(qcall(a,QOS_SYS_CREATE,(uintptr_t)av[k+1],0,0)||(fd=qcall(a,QOS_SYS_OPEN,(uintptr_t)av[k+1],QOS_O_WRITE,0))>QOS_MAX_FD){ps(a,"?\n");continue;}
++   }
++   for(unsigned i=1;i<k;i++){if(i>1)say(a,fd," ");say(a,fd,av[i]);}
++   say(a,fd,"\n");
++   if(fd!=~0u)qcall(a,QOS_SYS_CLOSE,fd,0,0);
++  }
++  else if(eq(cmd,"run")&&ac>1){if(qcall(a,QOS_SYS_EXEC,(uintptr_t)av[1],0,0)==~0u)ps(a,"?\n");}
++  else if(eq(cmd,"exit"))return 0;
++  else ps(a,"?\n");
++ }
++}
++#else
++#include "qos.h"
++int app_main(const qos_api *a){
+  if(a->abi_version!=1)return 1;
+  unsigned key=qcall(a,QOS_SYS_KEY_POLL,0,0,0);
+  if(key){qputs(a,"QwenOS input: ");qcall(a,QOS_SYS_PUTC,key&255,0,0);qputs(a,"\n");}
+@@ -27,3 +82,4 @@
+  qputs(a,"$ run /bin/doom\n");if(qcall(a,QOS_SYS_EXEC,(uintptr_t)"/bin/doom",0,0))return 10;
+  qputs(a,"QwenOS shell finished\n");return 0;
+ }
++#endif
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/include/qos.h wt-os/repo2/include/qos.h
+--- wt-perf/repo2/include/qos.h	2026-11-03 19:01:23
++++ wt-os/repo2/include/qos.h	2026-11-03 19:21:23
+@@ -41,12 +41,23 @@
+ #define QOS_SYS_PS 14u
+ #define QOS_SYS_FB_ROW 15u /* y, src pointer, width */
+ #define QOS_SYS_FB_PRESENT 16u /* returns FNV-1a checksum of frame */
+-#define QOS_SYS_KEY_POLL 17u /* consumes newest injected key, or 0 */
++#define QOS_SYS_KEY_POLL 17u /* consumes the OLDEST queued key (4-deep ring, see qos_input_mailbox), or 0 */
++#define QOS_SYS_FB_PTR 23u /* returns the address of the 32x24 byte framebuffer (row-major) for direct pixel writes */
++#define QOS_SYS_KEY_WAIT 22u /* like KEY_POLL but parks at qos_key_park until a key is injected: never returns 0 */
+ #define QOS_SYS_DISK_REQUEST 18u /* byte offset, destination RAM pointer, length<=256; 0 accepted */
+ #define QOS_SYS_DISK_POLL 19u /* 0=pending, len=completed, negative=failure */
+ #define QOS_SYS_DISK_CANCEL 20u /* abort pending request */
+ #define QOS_SYS_DISK_READ 21u /* offset, dest RAM ptr, len<=256: request+wait+copy in one call; returns len, 0 = still pending (continue with DISK_POLL), <0 error */
+ #define QOS_DISK_WINDOW 256u
++/* Input mailbox (8 bytes at the start of RAM, symbol qos_input_mailbox, 0x100):
++     +0 u32 seq   number of keys the device has pushed so far (starts at 0, host writes it LAST)
++     +4 u8 q[4]   ring: key number n (0-based) lives in q[n&3]
++   Push protocol: q[seq&3]=key; seq=seq+1.  The kernel keeps its own read count (core RAM,
++   survives /bin/doomd takeover), so keys pushed while no program polls are queued (up to 4);
++   if more arrive the oldest are dropped.  Key code 0 is not a key.
++   Park protocol (KEY_WAIT): when the guest has nothing to read it calls qos_key_park (a single
++   `ret` in kernel ROM) in a loop.  A host/driver that wants to type stops when pc==&qos_key_park,
++   pushes a key as above, and resumes at that same pc. */
+ #define QOS_O_READ 0u
+ #define QOS_O_WRITE 1u
+ typedef uint32_t (*qos_syscall_t)(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c);
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/kernel/main.c wt-os/repo2/kernel/main.c
+--- wt-perf/repo2/kernel/main.c	2026-11-03 19:01:23
++++ wt-os/repo2/kernel/main.c	2026-11-03 19:36:45
+@@ -11,10 +11,9 @@
+ static uint8_t app_stacks[QOS_MAX_PROC][APP_STACK_BYTES] __attribute__((aligned(16)));
+ extern int qos_app_call(uintptr_t entry,const qos_api *api,uintptr_t stack_top);
+ static uint8_t framebuffer[QOS_FB_W*QOS_FB_H] CORE(c_fb);
+-/* Firmware-visible mailbox. The model may inject external device events by
+- * updating the RAM snapshot between execution bursts. Not a hardware keyboard.
+- * seq is written LAST by the device driver; key code 0 means no event. */
+-volatile struct {uint32_t seq,key;} qos_input_mailbox CORE(a_in);
++/* Firmware-visible keyboard mailbox (layout and push protocol in include/qos.h): a 4-deep ring.
++ * The model/host injects keys by updating the RAM snapshot between execution bursts. */
++volatile struct {uint32_t seq;uint8_t q[4];} qos_input_mailbox CORE(a_in);
+ /* Disk mailbox: an external data device may fill bytes while the model is
+  * paused between execution steps. It cannot execute guest instructions.
+  * ready_seq is written LAST by the driver after bytes and status are set. */
+@@ -26,7 +25,12 @@
+ static uint32_t disk_active CORE(d_vars),disk_dest CORE(d_vars),disk_length CORE(d_vars),disk_seq CORE(d_vars);
+ static uint32_t key_seq_seen CORE(d_vars);
+ static uint32_t last_present_checksum CORE(d_vars);
+-static uint32_t takeover CORE(d_vars),reboots CORE(d_vars),current_pid CORE(d_vars);
++static uint32_t reboots CORE(d_vars),current_pid CORE(d_vars);
++/* 1 once any program other than the shell has run (or doomd has run): application RAM beyond the kernel
++   overlay may then hold garbage and the next /bin/doomd takeover must zero all of it. */
++static struct{uint16_t takeover,dirty;} tk CORE(d_vars); /* one core word for both flags */
++#define takeover tk.takeover
++#define ram_dirty tk.dirty
+ extern uint32_t __ov_start[],__ov_end[];
+ extern int qos_main(void);
+ extern void qos_takeover_enter(void) __attribute__((noreturn));
+@@ -44,46 +48,60 @@
+ static int inside(uintptr_t a,uintptr_t n,uintptr_t lo,uintptr_t hi){return a>=lo&&a<hi&&n<=hi-a;}
+ static int readable(uintptr_t a,uintptr_t n){return inside(a,n,QOS_RAM_BEGIN,QOS_RAM_END)||inside(a,n,QOS_DROM_BEGIN,QOS_DROM_END);}
+ static int writable_addr(uintptr_t a,uintptr_t n){return inside(a,n,QOS_RAM_BEGIN,QOS_RAM_END);}
+-static int name_ok(const char *s){uintptr_t p=(uintptr_t)s;for(unsigned i=0;i<80;i++){if(!readable(p+i,1))return 0;if(!s[i])return 1;}return 0;}
++/* NUL-terminated name (<80 chars) entirely inside RAM or data ROM: one range check, then scan. */
++static int name_ok(const char *s){uintptr_t p=(uintptr_t)s,hi=(p>=QOS_RAM_BEGIN&&p<QOS_RAM_END)?QOS_RAM_END:(p>=QOS_DROM_BEGIN&&p<QOS_DROM_END)?QOS_DROM_END:0;
++ for(unsigned i=0;i<80&&p+i<hi;i++)if(!s[i])return 1;return 0;}
+ static int file_number(const char *name){if(!name_ok(name))return -1;for(int i=0;i<FILES;i++)if(streq(name,file_names[i]))return i;return -1;}
+ static int getfd(unsigned f){return f<QOS_MAX_FD&&fds[f].used&&fds[f].owner==current_pid;}
+ static unsigned sys(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c);
+ static unsigned sys_entry(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c);
+ static const qos_api api={1,sys_entry};
+ typedef int (*app_entry)(const qos_api*);
+-static int spawn(const char *name){
+- int which=file_number(name);uintptr_t addr;
+- if(which==1)addr=QOS_SHELL_ENTRY;
+- else if(which==2)addr=QOS_PAINT_ENTRY;
+- else if(which==3)addr=QOS_RAY_ENTRY;
+- else if(which==4)addr=QOS_ASSET_ENTRY;
+- else if(which==5)addr=QOS_DOOM_ENTRY;
+- else if(which==F_DOOMD)qos_takeover_enter(); /* never returns */
+- else return -1;
++extern void qos_key_park(void);
++static const uint32_t entries[]={QOS_SHELL_ENTRY,QOS_PAINT_ENTRY,QOS_RAY_ENTRY,QOS_ASSET_ENTRY,QOS_DOOM_ENTRY};
++static int spawn_idx(int which){ /* which = file index from file_number(), or -1 */
++ if(which<1||which>F_DOOMD)return -1;
++ if(which==F_DOOMD)qos_takeover_enter(); /* never returns */
++ uintptr_t addr=entries[which-1];
+  if(proc_top>=QOS_MAX_PROC)return -2;
++ if(which!=1)ram_dirty=1;
+  unsigned old=current_pid,slot=proc_top++,pid=++next_pid;
+  procs[slot]=(proc_t){pid,old,1,0};current_pid=pid;executions++;
+- /* Each nested application gets an independent, bounded guest stack. */
+- for(unsigned i=0;i<16;i++)app_stacks[slot][i]=0xA5;
++ /* Each nested application gets an independent, bounded guest stack (16-byte canary at its end). */
++ uint32_t *cv=(uint32_t*)(void*)app_stacks[slot];
++ cv[0]=cv[1]=cv[2]=cv[3]=0xA5A5A5A5u;
+  int result=qos_app_call(addr,&api,(uintptr_t)&app_stacks[slot][APP_STACK_BYTES]);
+- for(unsigned i=0;i<16;i++)if(app_stacks[slot][i]!=0xA5)return -9;
++ if((cv[0]&cv[1]&cv[2]&cv[3])!=0xA5A5A5A5u||(cv[0]|cv[1]|cv[2]|cv[3])!=0xA5A5A5A5u)return -9;
+  procs[slot].state=2;procs[slot].exitcode=(unsigned)result;
+  for(unsigned i=0;i<QOS_MAX_FD;i++)if(fds[i].used&&fds[i].owner==pid)fds[i].used=0;
+  current_pid=old;proc_top--;
+  return result;
+ }
++#ifndef QOS_LIVE
++static int spawn(const char *name){return spawn_idx(file_number(name));}
++#endif
+ static void disk_copy(void){unsigned n=disk_length;const uint8_t*sp=(const uint8_t*)qos_disk_mailbox.bytes;uint8_t*dp=(uint8_t*)(uintptr_t)disk_dest;
+   if(!(((uintptr_t)dp)&3)){const uint32_t*s4=(const uint32_t*)(const void*)sp;uint32_t*d4=(uint32_t*)(void*)dp;
+    for(;n>=16;n-=16){uint32_t a=s4[0],b=s4[1],c2=s4[2],d=s4[3];d4[0]=a;d4[1]=b;d4[2]=c2;d4[3]=d;s4+=4;d4+=4;}
+    for(;n>=4;n-=4)*d4++=*s4++;sp=(const uint8_t*)s4;dp=(uint8_t*)d4;}
+   while(n--)*dp++=*sp++;}
+-static unsigned sys(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
++/* Oldest queued key or 0. key_seq_seen (core RAM) is the read count; if the device got more
++   than 4 ahead, the oldest keys were overwritten and are skipped. */
++static unsigned key_get(void){
++ uint32_t s=qos_input_mailbox.seq,r=key_seq_seen;
++ if(s==r)return 0;
++ if(s-r>4)r=s-4;
++ key_seq_seen=r+1;
++ return qos_input_mailbox.q[r&3];
++}
++static unsigned key_wait(void){unsigned k;while(!(k=key_get()))qos_key_park();return k;}
++__attribute__((noinline)) static unsigned sys(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
+  /* While /bin/doomd owns RAM, the RAMFS/fd/proc tables are gone: only the
+     core syscalls (console, fb, keys, disk, pid, yield) are available. */
+  if(takeover)switch(n){
+   case QOS_SYS_PUTC:case QOS_SYS_FB_SET:case QOS_SYS_FB_CLEAR:case QOS_SYS_FB_GET:
+   case QOS_SYS_FB_ROW:case QOS_SYS_FB_PRESENT:case QOS_SYS_KEY_POLL:case QOS_SYS_DISK_REQUEST:
+-  case QOS_SYS_DISK_POLL:case QOS_SYS_DISK_CANCEL:case QOS_SYS_GETPID:case QOS_SYS_YIELD:break;
++  case QOS_SYS_DISK_POLL:case QOS_SYS_DISK_CANCEL:case QOS_SYS_GETPID:case QOS_SYS_YIELD:case QOS_SYS_KEY_WAIT:case QOS_SYS_FB_PTR:break;
+   default:return (unsigned)-1;
+  }
+  switch(n){
+@@ -107,7 +125,7 @@
+   if(len>FILE_SIZE-f->pos)len=FILE_SIZE-f->pos;
+   for(unsigned i=0;i<len;i++)writable[k][f->pos+i]=((const char*)b)[i];f->pos+=len;
+   if(f->pos>lengths[k])lengths[k]=f->pos;return len;}
+- case QOS_SYS_EXEC:if(!name_ok((const char*)a))return (unsigned)-1;return (unsigned)spawn((const char*)a);
++ case QOS_SYS_EXEC:return (unsigned)spawn_idx(file_number((const char*)a));
+  case QOS_SYS_FB_SET:if(a>=QOS_FB_W||b>=QOS_FB_H)return (unsigned)-1;framebuffer[b*QOS_FB_W+a]=(uint8_t)c;return 0;
+  case QOS_SYS_FB_CLEAR:for(unsigned i=0;i<sizeof(framebuffer);i++)framebuffer[i]=(uint8_t)a;return 0;
+  case QOS_SYS_STAT:{int f=file_number((const char*)a);if(f<0)return (unsigned)-1;if(f==0)return sizeof(readme)-1;if(f>=F_TMP0)return lengths[f-F_TMP0];return 0;}
+@@ -145,18 +163,16 @@
+   disk_copy();
+   disk_active=0;
+   return disk_length;
+- case QOS_SYS_KEY_POLL:
+-  if(qos_input_mailbox.seq==key_seq_seen)return 0;
+-  key_seq_seen=qos_input_mailbox.seq;
+-  return qos_input_mailbox.key;
++ case QOS_SYS_KEY_POLL:return key_get();
++ case QOS_SYS_KEY_WAIT:return key_wait();
++ case QOS_SYS_FB_PTR:return (unsigned)(uintptr_t)framebuffer; /* apps may write pixels (row-major, QOS_FB_W*QOS_FB_H bytes) directly */
+ 
+  default:return (unsigned)-1;
+  }
+ }
+ /* API entry. DISK_READ = request + bounded wait + copy in one call (the hot path of DOOM's NOR reads);
+    everything else is sys(). The host services the mailbox exactly as for DISK_REQUEST/DISK_POLL. */
+-static unsigned sys_entry(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
+- if(n!=QOS_SYS_DISK_READ)return sys(n,a,b,c);
++__attribute__((noinline)) static unsigned disk_read(uintptr_t a,uintptr_t b,uintptr_t c){
+  if(disk_active||c-1u>=QOS_DISK_WINDOW||b<QOS_RAM_BEGIN||b>QOS_RAM_END-c||a>0xffffffffu-c)return (unsigned)-1;
+  uint32_t seq=++disk_seq;
+  qos_disk_mailbox.offset=(uint32_t)a;qos_disk_mailbox.length=(uint32_t)c;qos_disk_mailbox.status=0;
+@@ -175,6 +191,13 @@
+  disk_active=0;
+  return (unsigned)c;
+ }
++/* hot paths first, each as a leaf/tail call so they pay no big prologue */
++static unsigned sys_entry(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
++ if(n==QOS_SYS_PUTC){hw_putc((uint8_t)a);return 0;}
++ if(n==QOS_SYS_DISK_READ)return disk_read(a,b,c);
++ if(n==QOS_SYS_KEY_WAIT)return key_wait();
++ return sys(n,a,b,c);
++}
+ /* Takeover entry (kernel stack, reached via qos_takeover_enter in start.S).
+  * The shell/RAMFS overlay is abandoned, doomd runs on a stack at the very top
+  * of RAM, and when it returns the overlay is zeroed and the OS warm-reboots
+@@ -183,11 +206,18 @@
+ /* The park/resume probe must stay tiny (see model_probe_ref): no takeover. */
+ void qos_takeover_run(void){for(;;);}
+ #else
++/* Zero [lo,hi) (16-byte units, 4 stores per loop trip). */
++static void zero_ram(uint32_t *p,uintptr_t hi){for(uint32_t *e=(uint32_t*)((hi+15)&~15u);p<e;p+=4)p[0]=p[1]=p[2]=p[3]=0;}
+ void qos_takeover_run(void){
++ /* Contract with /bin/doomd (apps/doomd_crt0.S, doomd_main): all of RAM from QOS_DOOMD_RAM_BASE up is ZERO on
++    entry. Only the kernel overlay is dirty after a shell-only session (4.4 KB); after other apps or a previous
++    doomd run everything may be, so clear it all. */
++ zero_ram(ram_dirty?(uint32_t*)QOS_DOOMD_RAM_BASE:__ov_start,ram_dirty?QOS_RAM_END:(uintptr_t)__ov_end);
++ ram_dirty=1;
+  takeover=1;current_pid=2;disk_active=0;
+  qos_app_call(QOS_DOOMD_ENTRY,&api,QOS_RAM_END);
+  takeover=0;disk_active=0;reboots++;current_pid=0;
+- for(uint32_t *p=__ov_start;p<__ov_end;p++)*p=0;
++ zero_ram(__ov_start,(uintptr_t)__ov_end);
+  const char *s="QWENOS_DOOMD_EXIT\n";while(*s)hw_putc((uint8_t)*s++);
+  register unsigned a0 asm("a0")=(unsigned)qos_main(),a7 asm("a7")=93;
+  asm volatile("ecall" : "+r"(a0):"r"(a7):"memory");
+@@ -219,6 +249,12 @@
+  return 0;
+ }
+ #else
++#ifdef QOS_LIVE
++/* Live mode: no banner, no boot script. The shell (apps/shell.c, SHELL_LIVE) prints its prompt and
++ * reads typed keys from the keyboard mailbox; it returns only on `exit`. After a /bin/doomd
++ * takeover returns, the warm reboot lands here again and the prompt comes back. */
++int qos_main(void){return spawn_idx(1);}
++#else
+ int qos_main(void){
+  const char *s="QwenOS: Qwenputer RV32IM kernel\n";while(*s)hw_putc(*s++);
+  int rc=spawn("/bin/sh");
+@@ -230,4 +266,5 @@
+  return 0;
+ }
+ 
++#endif /* QOS_LIVE */
+ #endif /* QOS_MODEL_BRIDGE */
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/kernel/start.S wt-os/repo2/kernel/start.S
+--- wt-perf/repo2/kernel/start.S	2026-11-03 18:55:16
++++ wt-os/repo2/kernel/start.S	2026-11-03 19:15:46
+@@ -2,15 +2,11 @@
+ .globl _start
+ _start:
+  la sp,__kstack_top
+- /* Upstream Qwenputer ELF snapshot preloads .data into guest RAM.
+-    Do not recopy from a nonexistent runtime load address. */
+- la t1,__bss_start
+- la t2,__bss_end
+-1: beq t1,t2,2f
+- sb zero,0(t1)
+- addi t1,t1,1
+- j 1b
+-2: call qos_main
++ /* The merged snapshot ELF (tools/merge_elf.py) ships the kernel's .bss as zero-filled
++    bytes and the rest of RAM is zero at power-on, so no runtime bss clear (a byte loop
++    over 5.5 KB was 22,000 instructions = 30,000 chip tokens). The warm reboot after a
++    /bin/doomd takeover zeroes the overlay itself (qos_takeover_run). */
++ call qos_main
+  li a7,93
+  ecall
+ 3: j 3b
+@@ -22,3 +18,8 @@
+  la sp,__kstack_top
+  call qos_takeover_run
+ 4: j 4b
++
++/* Key-wait park point (see include/qos.h). One instruction; a driver breaks here. */
++.globl qos_key_park
++qos_key_park:
++ ret
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/ports/doomdmc/README.txt wt-os/repo2/ports/doomdmc/README.txt
+--- wt-perf/repo2/ports/doomdmc/README.txt	2026-11-03 18:55:16
++++ wt-os/repo2/ports/doomdmc/README.txt	2026-11-03 19:38:36
+@@ -5,11 +5,12 @@
+          (or tools/doomd_ref_run.py for the Python reference CPU). Host = dumb storage only.
+ Frames:  'p' key arms a serial dump over PUTC; tools/doomd_frames.py out.bin freedoom1.wad prefix -> PNGs.
+          The 32x24 kernel framebuffer is also filled (nearest sample) every frame.
+-Input:   none needed: title loop plays DEMO1 from the image (vanilla demo, real game logic).
++Input:   keys from the QwenOS keyboard ring (qplat.c dji_tic drains it every loop); none needed in mode 0: title loop plays DEMO1 from the image (vanilla demo, real game logic).
+ Overlays are linked straight into ROM (ovl_rv.c); clock is virtual (qplat.c); no sound/save/USB.
+ Run modes (compile time; ports/doomdmc/mkmode.sh MODE [FRAMES [DUMP]] -> build/qwenos-doomdmc-m<MODE>[f<FRAMES>][d].elf;
+   the default `make build/qwenos-doomdmc.elf` stays mode 0 = attract loop from the title):
+   mode 1  DEMO1 straight away (no title/credit pages); the vanilla demo drives the player; exits at its end
++  mode 3  E1M1 player start, no script: only mailbox keys drive the player (what the live shell launches; OS=live mkmode.sh 3)
+   mode 2  E1M1 player start (plan B, textured floors), scripted buttons (q_script in doomd_main.c)
+   FRAMES  leave doomd_main after that many game frames (1 = one frame then exit); DUMP=1 sends the last
+           frame over PUTC (tools/doomd_frames.py), costs ~3.7M instructions
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/ports/doomdmc/build.sh wt-os/repo2/ports/doomdmc/build.sh
+--- wt-perf/repo2/ports/doomdmc/build.sh	2026-11-03 19:02:30
++++ wt-os/repo2/ports/doomdmc/build.sh	2026-11-03 19:21:39
+@@ -4,7 +4,7 @@
+ set -e
+ HERE=$(cd "$(dirname "$0")" && pwd)
+ REPO=$HERE/../..
+-DMC=${DMC:-/Users/jhome/qwenos-work/engine/DMC100-Doom}
++DMC=${DMC:-$REPO/../engine/DMC100-Doom}
+ GEN=${GEN:-$DMC/build/sw/gen}
+ OUT=${1:-$HERE/../../build/doomd}
+ LLVM=${LLVM:-/opt/homebrew/opt/llvm/bin}
+@@ -25,11 +25,11 @@
+   b=$(basename $f .c); case $b in am_map|z_zone|m_argv|w_wad|w_file|i_endoom|m_fixed) continue;; esac; SRCS="$SRCS $f"
+ done
+ for f in $DMC/port/data/*.c $DMC/port/render/*.c $DMC/port/math/trig.c $DMC/port/obj/*.c; do
+-  b=$(basename $f .c); SRCS="$SRCS $f"
++  b=$(basename $f .c); case $b in crc32) continue;; esac; SRCS="$SRCS $f"   # crc32 -> ports/doomdmc/qcrc.c
+ done
+ for b in i_dmc libc_dmc fe_glue i_input s_pcspk l_level l_lines l_menu l_wi l_finale g_save l_save; do SRCS="$SRCS $DMC/port/game/$b.c"; done
+ SRCS="$SRCS $GEN/info.c $GEN/colormap.c $GEN/trig_tables.c $GEN/view.c"
+-SRCS="$SRCS $DMC/platform/rt.c $DMC/platform/text.c $HERE/qplat.c $REPO/ports/doom/hal.c $HERE/doomd_main.c $HERE/ovl_rv.c $HERE/fastfix.c $HERE/rtlib.c $HERE/qimg.c $HERE/qsolid.c $HERE/qbake.c $BAKE $HERE/qnor.c $HERE/qlcd.c"
++SRCS="$SRCS $DMC/platform/rt.c $DMC/platform/text.c $HERE/qplat.c $REPO/ports/doom/hal.c $HERE/doomd_main.c $HERE/ovl_rv.c $HERE/fastfix.c $HERE/rtlib.c $HERE/qimg.c $HERE/qsolid.c $HERE/qbake.c $BAKE $HERE/qnor.c $HERE/qlcd.c $HERE/qcrc.c"
+ objs=""
+ $CC $ARCH -c $REPO/apps/doomd_crt0.S -o $OUT/o/crt0.o
+ objs="$OUT/o/crt0.o"
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/ports/doomdmc/doomd_main.c wt-os/repo2/ports/doomdmc/doomd_main.c
+--- wt-perf/repo2/ports/doomdmc/doomd_main.c	2026-11-03 19:02:30
++++ wt-os/repo2/ports/doomdmc/doomd_main.c	2026-11-03 19:21:38
+@@ -51,6 +51,8 @@
+  *   0 attract loop from the title screen (default, what `make` builds)
+  *   1 DEMO1 straight away: no title / credit pages, vanilla demo drives the player, exits at its end
+  *   2 E1M1 player start, scripted input (q_script below) instead of a demo
++ *   3 E1M1 player start, NO script: the player is driven only by keys from the QwenOS keyboard
++ *     mailbox (what the live shell launches: `run /bin/doomd`; w/a/s/d move+turn, f/space fire, e use)
+  * DOOMD_FRAMES=n  (compile time, default 0 = run forever): leave after n GAME frames, printing
+  *   "DOOMD_FRAMES_DONE" (modes 1 and 2). DOOMD_DUMP=1 additionally dumps the last frame over PUTC.
+  * Markers on the console: "DOOMD_LEVEL_START", "DOOMD_FRAME n", "DOOMD_FRAMES_DONE". */
+@@ -78,8 +80,7 @@
+ int doomd_main(const qos_api *api)
+ {
+     qapi = api;
+-    // dirty RAM: zero everything between .bss and the stack reserve, paint the stack
+-    memset(__bss_end, 0, (uint32_t)(uintptr_t)(__stack_limit - __bss_end));
++    // RAM is already zero (kernel contract, qos_takeover_run); only paint the stack (diagnostics)
+     {
+         uint32_t *p = (uint32_t *)(void *)__stack_limit;
+         uint32_t *e = (uint32_t *)(void *)((uintptr_t)__builtin_frame_address(0) - 96);
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/ports/doomdmc/mkmode.sh wt-os/repo2/ports/doomdmc/mkmode.sh
+--- wt-perf/repo2/ports/doomdmc/mkmode.sh	2026-11-03 18:55:16
++++ wt-os/repo2/ports/doomdmc/mkmode.sh	2026-11-03 19:18:21
+@@ -1,12 +1,15 @@
+ #!/bin/bash
+ # Build a /bin/doomd run-mode variant as its own full image, without touching build/doomdmc.elf.
+ #   ports/doomdmc/mkmode.sh MODE [FRAMES [DUMP]]  ->  build/qwenos-doomdmc-m<MODE>[f<FRAMES>].elf
+-# MODE 1: DEMO1 straight away; MODE 2: E1M1 start with scripted input; FRAMES>0: exit after that
+-# many game frames (marker DOOMD_FRAMES_DONE). See doomd_main.c.
++# MODE 1: DEMO1 straight away; MODE 2: E1M1 start with scripted input; MODE 3: E1M1 start driven only
++# by keyboard-mailbox keys; FRAMES>0: exit after that many game frames (marker DOOMD_FRAMES_DONE).
++# See doomd_main.c.  OS=live merges with the interactive shell kernel (kernel-live + shell-live) and
++# names the image build/qwenos-live-doomdmc-<T>.elf; default OS=boot is the boot-script kernel.
+ set -e
+ HERE=$(cd "$(dirname "$0")" && pwd); REPO=$HERE/../..
+ M=${1:?mode}; F=${2:-0}; D=${3:-0}
+ T=m$M; [ "$F" != 0 ] && T=${T}f$F; [ "$D" != 0 ] && T=${T}d
++OS=${OS:-boot}
+ OUT=$REPO/build/doomdmc-$T
+ mkdir -p $OUT
+ # the mode is baked into doomd_main.o only; everything else is shared with the default build
+@@ -14,4 +17,8 @@
+ rm -f $OUT/o/doomd_main.o $OUT/o/qplat.o
+ DOOMD_MODE=$M DOOMD_DUMP=$D EXTRA_CF="-DDOOMD_FRAMES=$F" $HERE/build.sh $OUT >/dev/null
+ cd $REPO
+-python3 tools/merge_elf.py build/qwenos-doomdmc-$T.elf build/kernel-doomd.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf $OUT/doomd.elf | tail -1
++if [ "$OS" = live ]; then
++  python3 tools/merge_elf.py build/qwenos-live-doomdmc-$T.elf build/kernel-live.elf build/shell-live.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf $OUT/doomd.elf | tail -1
++else
++  python3 tools/merge_elf.py build/qwenos-doomdmc-$T.elf build/kernel-doomd.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf $OUT/doomd.elf | tail -1
++fi
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/ports/doomdmc/qcrc.c wt-os/repo2/ports/doomdmc/qcrc.c
+--- wt-perf/repo2/ports/doomdmc/qcrc.c	1969-12-31 19:00:00
++++ wt-os/repo2/ports/doomdmc/qcrc.c	2026-11-03 19:21:39
+@@ -0,0 +1,84 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Bit-exact replacement of DMC100-Doom port/data/crc32.c (excluded by build.sh): one table lookup per byte
++// (~10 instructions) instead of two nibble steps (~17). The header check alone is 4 KiB per boot.
++#include "crc32.h"
++
++static const uint32_t crc_tab[256] = {
++    0x00000000u, 0x77073096u, 0xEE0E612Cu, 0x990951BAu,
++    0x076DC419u, 0x706AF48Fu, 0xE963A535u, 0x9E6495A3u,
++    0x0EDB8832u, 0x79DCB8A4u, 0xE0D5E91Eu, 0x97D2D988u,
++    0x09B64C2Bu, 0x7EB17CBDu, 0xE7B82D07u, 0x90BF1D91u,
++    0x1DB71064u, 0x6AB020F2u, 0xF3B97148u, 0x84BE41DEu,
++    0x1ADAD47Du, 0x6DDDE4EBu, 0xF4D4B551u, 0x83D385C7u,
++    0x136C9856u, 0x646BA8C0u, 0xFD62F97Au, 0x8A65C9ECu,
++    0x14015C4Fu, 0x63066CD9u, 0xFA0F3D63u, 0x8D080DF5u,
++    0x3B6E20C8u, 0x4C69105Eu, 0xD56041E4u, 0xA2677172u,
++    0x3C03E4D1u, 0x4B04D447u, 0xD20D85FDu, 0xA50AB56Bu,
++    0x35B5A8FAu, 0x42B2986Cu, 0xDBBBC9D6u, 0xACBCF940u,
++    0x32D86CE3u, 0x45DF5C75u, 0xDCD60DCFu, 0xABD13D59u,
++    0x26D930ACu, 0x51DE003Au, 0xC8D75180u, 0xBFD06116u,
++    0x21B4F4B5u, 0x56B3C423u, 0xCFBA9599u, 0xB8BDA50Fu,
++    0x2802B89Eu, 0x5F058808u, 0xC60CD9B2u, 0xB10BE924u,
++    0x2F6F7C87u, 0x58684C11u, 0xC1611DABu, 0xB6662D3Du,
++    0x76DC4190u, 0x01DB7106u, 0x98D220BCu, 0xEFD5102Au,
++    0x71B18589u, 0x06B6B51Fu, 0x9FBFE4A5u, 0xE8B8D433u,
++    0x7807C9A2u, 0x0F00F934u, 0x9609A88Eu, 0xE10E9818u,
++    0x7F6A0DBBu, 0x086D3D2Du, 0x91646C97u, 0xE6635C01u,
++    0x6B6B51F4u, 0x1C6C6162u, 0x856530D8u, 0xF262004Eu,
++    0x6C0695EDu, 0x1B01A57Bu, 0x8208F4C1u, 0xF50FC457u,
++    0x65B0D9C6u, 0x12B7E950u, 0x8BBEB8EAu, 0xFCB9887Cu,
++    0x62DD1DDFu, 0x15DA2D49u, 0x8CD37CF3u, 0xFBD44C65u,
++    0x4DB26158u, 0x3AB551CEu, 0xA3BC0074u, 0xD4BB30E2u,
++    0x4ADFA541u, 0x3DD895D7u, 0xA4D1C46Du, 0xD3D6F4FBu,
++    0x4369E96Au, 0x346ED9FCu, 0xAD678846u, 0xDA60B8D0u,
++    0x44042D73u, 0x33031DE5u, 0xAA0A4C5Fu, 0xDD0D7CC9u,
++    0x5005713Cu, 0x270241AAu, 0xBE0B1010u, 0xC90C2086u,
++    0x5768B525u, 0x206F85B3u, 0xB966D409u, 0xCE61E49Fu,
++    0x5EDEF90Eu, 0x29D9C998u, 0xB0D09822u, 0xC7D7A8B4u,
++    0x59B33D17u, 0x2EB40D81u, 0xB7BD5C3Bu, 0xC0BA6CADu,
++    0xEDB88320u, 0x9ABFB3B6u, 0x03B6E20Cu, 0x74B1D29Au,
++    0xEAD54739u, 0x9DD277AFu, 0x04DB2615u, 0x73DC1683u,
++    0xE3630B12u, 0x94643B84u, 0x0D6D6A3Eu, 0x7A6A5AA8u,
++    0xE40ECF0Bu, 0x9309FF9Du, 0x0A00AE27u, 0x7D079EB1u,
++    0xF00F9344u, 0x8708A3D2u, 0x1E01F268u, 0x6906C2FEu,
++    0xF762575Du, 0x806567CBu, 0x196C3671u, 0x6E6B06E7u,
++    0xFED41B76u, 0x89D32BE0u, 0x10DA7A5Au, 0x67DD4ACCu,
++    0xF9B9DF6Fu, 0x8EBEEFF9u, 0x17B7BE43u, 0x60B08ED5u,
++    0xD6D6A3E8u, 0xA1D1937Eu, 0x38D8C2C4u, 0x4FDFF252u,
++    0xD1BB67F1u, 0xA6BC5767u, 0x3FB506DDu, 0x48B2364Bu,
++    0xD80D2BDAu, 0xAF0A1B4Cu, 0x36034AF6u, 0x41047A60u,
++    0xDF60EFC3u, 0xA867DF55u, 0x316E8EEFu, 0x4669BE79u,
++    0xCB61B38Cu, 0xBC66831Au, 0x256FD2A0u, 0x5268E236u,
++    0xCC0C7795u, 0xBB0B4703u, 0x220216B9u, 0x5505262Fu,
++    0xC5BA3BBEu, 0xB2BD0B28u, 0x2BB45A92u, 0x5CB36A04u,
++    0xC2D7FFA7u, 0xB5D0CF31u, 0x2CD99E8Bu, 0x5BDEAE1Du,
++    0x9B64C2B0u, 0xEC63F226u, 0x756AA39Cu, 0x026D930Au,
++    0x9C0906A9u, 0xEB0E363Fu, 0x72076785u, 0x05005713u,
++    0x95BF4A82u, 0xE2B87A14u, 0x7BB12BAEu, 0x0CB61B38u,
++    0x92D28E9Bu, 0xE5D5BE0Du, 0x7CDCEFB7u, 0x0BDBDF21u,
++    0x86D3D2D4u, 0xF1D4E242u, 0x68DDB3F8u, 0x1FDA836Eu,
++    0x81BE16CDu, 0xF6B9265Bu, 0x6FB077E1u, 0x18B74777u,
++    0x88085AE6u, 0xFF0F6A70u, 0x66063BCAu, 0x11010B5Cu,
++    0x8F659EFFu, 0xF862AE69u, 0x616BFFD3u, 0x166CCF45u,
++    0xA00AE278u, 0xD70DD2EEu, 0x4E048354u, 0x3903B3C2u,
++    0xA7672661u, 0xD06016F7u, 0x4969474Du, 0x3E6E77DBu,
++    0xAED16A4Au, 0xD9D65ADCu, 0x40DF0B66u, 0x37D83BF0u,
++    0xA9BCAE53u, 0xDEBB9EC5u, 0x47B2CF7Fu, 0x30B5FFE9u,
++    0xBDBDF21Cu, 0xCABAC28Au, 0x53B39330u, 0x24B4A3A6u,
++    0xBAD03605u, 0xCDD70693u, 0x54DE5729u, 0x23D967BFu,
++    0xB3667A2Eu, 0xC4614AB8u, 0x5D681B02u, 0x2A6F2B94u,
++    0xB40BBE37u, 0xC30C8EA1u, 0x5A05DF1Bu, 0x2D02EF8Du
++};
++
++uint32_t crc32_update(uint32_t reg, const void *p, uint32_t n)
++{
++    const uint8_t *b = p;
++    const uint8_t *e = b + n;
++    while (b != e) reg = (reg >> 8) ^ crc_tab[(reg ^ *b++) & 255];
++    return reg;
++}
++
++uint32_t crc32_buf(const void *p, uint32_t n)
++{
++    return crc32_final(crc32_update(CRC32_INIT, p, n));
++}
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/ports/doomdmc/qlcd.c wt-os/repo2/ports/doomdmc/qlcd.c
+--- wt-perf/repo2/ports/doomdmc/qlcd.c	2026-11-03 18:55:17
++++ wt-os/repo2/ports/doomdmc/qlcd.c	2026-11-03 19:21:47
+@@ -19,6 +19,7 @@
+ void q_pal_set(int p, void *lut) { (void)lut; q_pal = p; }
+ volatile struct pump_stats pump_stats;
+ 
++static volatile uint8_t *q_fb; /* kernel framebuffer, written directly (QOS_SYS_FB_PTR) */
+ static int wx0, wx1, wy0, wy1, wflags, wcur;
+ static int dumping;
+ static int pending;
+@@ -28,6 +29,7 @@
+ 
+ void pump_begin(int x0, int x1, int y0, int y1, int flags)
+ {
++    if (!q_fb) q_fb = (volatile uint8_t *)(uintptr_t)qapi->syscall(QOS_SYS_FB_PTR, 0, 0, 0);
+     wx0 = x0; wx1 = x1; wy0 = y0; wy1 = y1; wflags = flags; wcur = x0;
+     if (q_dump_req) { dumping = 1; q_dump_req = 0; }
+ #ifdef Q_DUMP_ALL
+@@ -59,7 +61,7 @@
+                 int cy0 = (wy0 + 4) / 10;
+                 for (int cy = cy0; cy < (int)QOS_FB_H && cy * 10 + 5 <= wy1; cy++)
+                     if (cy * 10 + 5 >= wy0)
+-                        qapi->syscall(QOS_SYS_FB_SET, cx, (unsigned)cy, col[cy * 10 + 5 - wy0]);
++                        q_fb[cy * QOS_FB_W + cx] = col[cy * 10 + 5 - wy0];
+             }
+         }
+     }
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/ports/doomdmc/qplat.c wt-os/repo2/ports/doomdmc/qplat.c
+--- wt-perf/repo2/ports/doomdmc/qplat.c	2026-11-03 19:01:23
++++ wt-os/repo2/ports/doomdmc/qplat.c	2026-11-03 19:18:11
+@@ -145,8 +145,9 @@
+ void dji_rx(const uint8_t *p, uint32_t n) { (void)p; (void)n; }
+ void dji_tic(void)
+ {
+-    uint32_t k = qapi->syscall(QOS_SYS_KEY_POLL, 0, 0, 0);
+-    if (k) {
++    uint32_t k;
++    /* drain the whole mailbox queue (up to 4 keys queued while the engine was busy or loading) */
++    while ((k = qapi->syscall(QOS_SYS_KEY_POLL, 0, 0, 0))) {
+         q_keys++;
+         switch (k) {
+         case 'w': btn_set(BTN_VA, 1);   btn_until[BTN_VA] = vclock + HOLD_MS; break;
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tests/test_cpu.py wt-os/repo2/tests/test_cpu.py
+--- wt-perf/repo2/tests/test_cpu.py	2026-11-03 18:55:14
++++ wt-os/repo2/tests/test_cpu.py	2026-11-03 19:23:36
+@@ -44,7 +44,7 @@
+             cpu.step()
+             if not injected and len(cpu.output)>=12:
+                 # Deliver a device event while firmware is running, after BSS init.
+-                cpu.store(addr+4,4,ord('K'))
++                cpu.store(addr+4,1,ord('K'))   # ring slot 0, then seq=1 (push protocol, include/qos.h)
+                 cpu.store(addr,4,1)
+                 injected=True
+         self.assertTrue(injected)
+@@ -62,8 +62,8 @@
+             if shifted.halted:break
+             shifted.step()
+             if not injected and '$ run /bin/raycast\n' in ''.join(shifted.output):
+-                shifted.store(addr+4,4,ord('d'))
+-                shifted.store(addr,4,2)
++                shifted.store(addr+4,1,ord('d'))
++                shifted.store(addr,4,1)
+                 injected=True
+         self.assertTrue(injected)
+         self.assertEqual(shifted.exitcode,0)
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tests/test_doom_map.py wt-os/repo2/tests/test_doom_map.py
+--- wt-perf/repo2/tests/test_doom_map.py	2026-11-03 18:55:15
++++ wt-os/repo2/tests/test_doom_map.py	2026-11-03 19:23:36
+@@ -35,8 +35,8 @@
+         cpu.step()
+         dev.tick()
+         if key and not injected and '$ run /bin/doom\n' in ''.join(cpu.output):
+-            cpu.store(inject_addr+4,4,ord(key))
+-            cpu.store(inject_addr,4,7)
++            cpu.store(inject_addr+4,4,ord(key))   # ring slot 0
++            cpu.store(inject_addr,4,1)            # seq=1: one key pushed
+             injected=True
+     return cpu,dev,''.join(cpu.output)
+ 
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tests/test_live.py wt-os/repo2/tests/test_live.py
+--- wt-perf/repo2/tests/test_live.py	1969-12-31 19:00:00
++++ wt-os/repo2/tests/test_live.py	2026-11-03 19:32:11
+@@ -0,0 +1,81 @@
++"""pty-driven end-to-end test of the live terminal runner (tools/qwenos_live.sh -> rv32_fast -L).
++The test plays the human: it types into a pseudo-terminal and reads what a terminal would show."""
++import fcntl,os,pty,re,select,struct,subprocess,sys,termios,time,unittest
++from pathlib import Path
++ROOT=Path(__file__).resolve().parents[1]
++E1=ROOT/'../engine/DMC100-Doom/build/sw/nor/E1.img'
++FAST=ROOT/'build/rv32_fast'
++
++class Term:
++    def __init__(self,elf,extra=(),env=None,rows=40,cols=100):
++        self.m,s=pty.openpty()
++        fcntl.ioctl(s,termios.TIOCSWINSZ,struct.pack('HHHH',rows,cols,0,0))
++        e=dict(os.environ);e.update(env or {});e['ELF']=str(elf)
++        self.p=subprocess.Popen([str(ROOT/'tools/qwenos_live.sh'),*extra],stdin=s,stdout=s,stderr=s,env=e,close_fds=True)
++        os.close(s);self.buf=b''
++    def read(self,t=0.05):
++        r,_,_=select.select([self.m],[],[],t)
++        if r:
++            try:d=os.read(self.m,65536)
++            except OSError:return False
++            if not d:return False
++            self.buf+=d
++        return True
++    def expect(self,pat,timeout=60,start=0):
++        end=time.time()+timeout
++        while time.time()<end:
++            if re.search(pat,self.buf[start:]):return True
++            if not self.read() and self.p.poll() is not None:break
++        return bool(re.search(pat,self.buf[start:]))
++    def type(self,s,gap=0.01):
++        for ch in s:
++            os.write(self.m,ch.encode());time.sleep(gap)
++    def finish(self,timeout=20):
++        end=time.time()+timeout
++        while time.time()<end and self.p.poll() is None:self.read()
++        while self.read(0.05):pass
++        return self.p.poll()
++
++def need(*ps):
++    return all(Path(p).exists() for p in ps)
++
++@unittest.skipUnless(need(FAST,ROOT/'build/qwenos-live.elf',E1),'build/rv32_fast, qwenos-live.elf and E1.img needed')
++class LiveShellPty(unittest.TestCase):
++    def test_typed_shell_session_and_quit(self):
++        t=Term(ROOT/'build/qwenos-live.elf')
++        self.assertTrue(t.expect(rb'\$ '))
++        t.type('ls\r');self.assertTrue(t.expect(rb'/bin/doomd\r\n/tmp/note'))
++        t.type('echo hix\x7f > /tmp/note\r');t.type('cat /tmp/note\r')
++        self.assertTrue(t.expect(rb'\r\nhi\r\n'))                   # backspace removed the x
++        self.assertIn(b'\x08 \x08',t.buf)                       # guest echoed the erase
++        t.type('bogus\r');self.assertTrue(t.expect(rb'\?\r\n'))
++        t.type('\x1d')                                          # Ctrl-]: host quit, not seen by guest
++        self.assertEqual(t.finish(),0)
++        self.assertRegex(t.buf,rb'QwenOS live: quit key after \d+ guest instructions, 0 frames shown')
++
++    def test_run_stub_doomd_returns_to_prompt(self):
++        t=Term(ROOT/'build/qwenos-live.elf')
++        self.assertTrue(t.expect(rb'\$ '))
++        t.type('run /bin/doomd\r')
++        self.assertTrue(t.expect(rb'QWENOS_DOOMD_EXIT\r\n\$ '))   # warm reboot, new prompt
++        t.type('exit\r');self.assertEqual(t.finish(),0)
++        self.assertRegex(t.buf,rb'guest exited after')
++
++DOOM=ROOT/'build/qwenos-live-doomdmc-m3.elf'
++@unittest.skipUnless(need(FAST,DOOM,E1),'build/qwenos-live-doomdmc-m3.elf (OS=live ports/doomdmc/mkmode.sh 3) needed')
++class LiveDoomPty(unittest.TestCase):
++    def test_boot_type_run_doomd_play_quit(self):
++        t=Term(DOOM,extra=('--fps','0'))
++        self.assertTrue(t.expect(rb'\$ '))
++        t.type('run /bin/doomd\r')
++        self.assertTrue(t.expect(rb'\x1b\[\?1049h',120))          # first DOOM frame -> game screen
++        self.assertTrue(t.expect(rb'frame [3-9] \|',120))         # several frames rendered (status line)
++        n=len(t.buf)
++        t.type('wwdf')                                            # real keys into the mailbox
++        self.assertTrue(t.expect(rb'48;2;',30,n))                  # fb painted with 24-bit colours
++        self.assertTrue(t.expect(rb'frame \d\d \|',120,n))
++        t.type('\x1d');self.assertEqual(t.finish(),0)
++        m=re.search(rb'QwenOS live: quit key after (\d+) guest instructions, (\d+) frames shown',t.buf)
++        self.assertTrue(m);self.assertGreater(int(m.group(1)),3_000_000);self.assertGreaterEqual(int(m.group(2)),10)
++
++if __name__=='__main__':unittest.main()
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tests/test_shell_live.py wt-os/repo2/tests/test_shell_live.py
+--- wt-perf/repo2/tests/test_shell_live.py	1969-12-31 19:00:00
++++ wt-os/repo2/tests/test_shell_live.py	2026-11-03 19:34:10
+@@ -0,0 +1,70 @@
++"""Interactive-shell tests on the Python reference CPU (+ rv32_fast for the DOOM takeover case)."""
++import re,subprocess,sys,tempfile,unittest
++from pathlib import Path
++ROOT=Path(__file__).resolve().parents[1]
++sys.path.insert(0,str(ROOT/'tools'))
++import keysched
++from rv32_qwenputer import CPU
++LIVE=ROOT/'build/qwenos-live.elf';KELF=ROOT/'build/kernel-live.elf'
++
++def sym(elf,name):
++    out=subprocess.check_output(['readelf','-sW',str(elf)],text=True)
++    for l in out.splitlines():
++        f=l.split()
++        if len(f)>=8 and f[-1]==name:return int(f[1],16)
++    raise KeyError(name)
++
++def session(text,limit=400000,extra=''):
++    cpu=CPU(str(LIVE));kb=sym(KELF,'qos_input_mailbox');pk=sym(KELF,'qos_key_park')
++    d=keysched.Driver(cpu,kb,pk,keysched.parse(keysched.type_lines(text)+extra))
++    out=d.run(limit);return cpu,d,out
++
++class LiveShell(unittest.TestCase):
++    def test_prompt_is_first_output_and_cheap(self):
++        cpu,d,out=session('')
++        self.assertEqual(out,'$ ')                      # no banner, no boot script
++        self.assertLess(cpu.steps,300)                  # cold boot -> prompt, parked waiting for a key
++    def test_commands_echo_and_exit(self):
++        cpu,d,out=session('ls\necho hi there > /tmp/note\ncat /tmp/note\nnope\nrun /bin/nope\nrun /bin/paint\nexit\n')
++        self.assertEqual(cpu.exitcode,0)
++        self.assertTrue(out.startswith('$ ls\n/README\n/bin/sh\n'))
++        self.assertIn('/bin/doomd\n/tmp/note\n/tmp/log\n$ echo hi there > /tmp/note\n$ cat /tmp/note\nhi there\n$ nope\n?\n$ run /bin/nope\n?\n$ run /bin/paint\npaint: framebuffer changed\n$ exit\n',out)
++    def test_backspace_and_empty_line(self):
++        cpu,d,out=session('lx\x08s\n\n')
++        self.assertIn('$ lx\x08 \x08s\n/README',out); self.assertTrue(out.endswith('$ \n$ '))
++    def test_key_ring_queues_and_drops_oldest(self):
++        cpu=CPU(str(LIVE));kb=sym(KELF,'qos_input_mailbox')
++        for i,c in enumerate('abcdef'):cpu.store(kb+4+(i&3),1,ord(c))   # device pushed 6 keys before the guest polled
++        cpu.store(kb,4,6)
++        for _ in range(2000):cpu.step()
++        out=''.join(cpu.output)
++        self.assertEqual(out,'$ cdef')   # a,b overwritten by e,f -> guest reads c d e f in order
++    def test_run_doomd_stub_takes_over_and_returns(self):
++        cpu,d,out=session('run /bin/doomd\nexit\n',limit=2000000)
++        self.assertEqual(cpu.exitcode,0)
++        self.assertRegex(out,r'(?s)doomd: takeover\n.*DOOMD_STUB_OK\nQWENOS_DOOMD_EXIT\n\$ exit\n')
++
++DOOM=ROOT/'build/qwenos-live-doomdmc-m3.elf';E1=ROOT/'../engine/DMC100-Doom/build/sw/nor/E1.img'
++FAST=ROOT/'build/rv32_fast'
++@unittest.skipUnless(DOOM.exists() and E1.exists() and FAST.exists(),'live DOOM image / E1.img / rv32_fast needed')
++class LiveDoom(unittest.TestCase):
++    def run_fast(self,sched,frames=3):
++        with tempfile.TemporaryDirectory() as td:
++            s=Path(td)/'s.txt';s.write_text(keysched.type_lines('run /bin/doomd\n')+sched)
++            o=Path(td)/'o.bin'
++            r=subprocess.run([str(FAST),'-W','%x'%sym(KELF,'qos_key_park'),'-K',str(s),'-F',str(frames),str(DOOM),str(E1),
++                '%x'%sym(KELF,'qos_input_mailbox'),'%x'%sym(KELF,'qos_disk_mailbox'),str(o),'200000000'],capture_output=True,text=True)
++            ram=Path(str(o)+'.ram').read_bytes();fb=sym(KELF,'framebuffer')
++            return r.stderr,o.read_bytes(),ram[fb:fb+768]
++    def test_typed_launch_reaches_e1m1_and_key_is_not_lost_across_takeover(self):
++        err,con,fb0=self.run_fast('')
++        self.assertIn(b'DOOMD_LEVEL_START e1m1',con);self.assertIn('exit=0 frames=3',err)
++        self.assertTrue(any(fb0))
++        # 'd' (turn right) pushed at instruction 2500: after the kernel entered takeover_run (~1.9k) and before
++        # doomd's first key poll. It must sit in the ring and still turn the player.
++        err,con,fb1=self.run_fast('2500 d\n')
++        self.assertNotEqual(fb0,fb1)
++        err,con,fb2=self.run_fast('frame 1 d\n')       # same key delivered later, while the engine runs
++        self.assertNotEqual(fb0,fb2)
++
++if __name__=='__main__':unittest.main()
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tools/interactive_frames.py wt-os/repo2/tools/interactive_frames.py
+--- wt-perf/repo2/tools/interactive_frames.py	2026-11-03 18:55:14
++++ wt-os/repo2/tools/interactive_frames.py	2026-11-03 19:23:36
+@@ -43,8 +43,8 @@
+                 frames.append(bytes(cpu.mem[fb:fb + 32 * 24]))
+                 cpu.frame_steps.append(cpu.steps)
+                 if num_events < len(keys):
+-                    cpu.store(keyboard + 4, 4, ord(keys[num_events]))
+-                    cpu.store(keyboard, 4, 100 + num_events)
++                    cpu.store(keyboard + 4 + (num_events & 3), 1, ord(keys[num_events]))
++                    cpu.store(keyboard, 4, num_events + 1)
+                     num_events += 1
+     log = ''.join(cpu.output)
+     if not cpu.halted or cpu.exitcode != 0 or 'QWENOS_BOOT_OK' not in log:
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tools/keysched.py wt-os/repo2/tools/keysched.py
+--- wt-perf/repo2/tools/keysched.py	1969-12-31 19:00:00
++++ wt-os/repo2/tools/keysched.py	2026-11-03 19:33:37
+@@ -0,0 +1,77 @@
++#!/usr/bin/env python3
++"""Key-injection schedules for the QwenOS keyboard mailbox (the Python twin of rv32_fast's -K).
++
++Schedule file, one key per line, in order (blank lines and # comments ignored):
++    shell_ready <key>     inject when the guest is parked in KEY_WAIT (pc == qos_key_park): one key per park,
++                          i.e. exactly like a person typing at the prompt
++    frame <N> <key>       inject once N frame markers (console byte 0x02) have been printed
++    <instr> <key>         inject once <instr> guest instructions have retired
++<key> is one character, or: \\n \\r \\b \\e space enter backspace esc 0xNN
++
++INJECTION PROTOCOL (what a pause/resume driver such as the Qwen chunk driver must do). Mailbox = RAM at
++symbol qos_input_mailbox (0x100): u32 seq at +0, u8 q[4] at +4.  To push key K while the guest is paused
++(between chunks / at a breakpoint), in this order:
++    1. write byte K to address 0x104 + (seq & 3)         (seq = current value of the u32 at 0x100)
++    2. write u32 (seq + 1) to address 0x100              (publish LAST)
++Pause points:  `shell_ready`: the pc of kernel symbol qos_key_park (readelf: 0x40030 in kernel-live.elf), which is a
++single `ret`; stop BEFORE executing it (a ROM breakpoint there), push one key, resume at that pc.  The guest then
++polls once more, echoes, and parks again: ~100 instructions per typed key.  `frame N`: the chunk that prints the
++Nth 0x02 byte ends; push then.  `<instr>`: push after exactly that many retired instructions.
++Never push more than 4 keys between guest polls (the guest drops the oldest) - rv32_fast pushes at most 4 per boundary.
++"""
++import re,sys
++from pathlib import Path
++
++KEYS={'\\n':10,'enter':10,'\\r':13,'\\b':8,'backspace':8,'\\e':27,'esc':27,'space':32}
++def key(tok):
++    if tok in KEYS:return KEYS[tok]
++    if tok.startswith('0x'):return int(tok,16)
++    if len(tok)==1:return ord(tok)
++    raise ValueError('bad key %r'%tok)
++
++def parse(text):
++    out=[]
++    for ln in text.splitlines():
++        t=ln.split('#')[0].split()
++        if not t:continue
++        if t[0]=='shell_ready' and len(t)==2:out.append(('park',0,key(t[1])))
++        elif t[0]=='frame' and len(t)==3:out.append(('frame',int(t[1]),key(t[2])))
++        elif t[0].isdigit() and len(t)==2:out.append(('instr',int(t[0]),key(t[1])))
++        else:raise ValueError('bad schedule line %r'%ln)
++    return out
++
++def type_lines(text,trigger='shell_ready'):
++    """schedule text that types `text` at the shell prompt ('\\n' = Enter)"""
++    names={' ':'space','\n':'\\n'}
++    return ''.join('%s %s\n'%(trigger,names.get(c,c)) for c in text)
++
++class Driver:
++    """Runs a python reference CPU (rv32_qwenputer.CPU) with a schedule.  `park_pc` is qos_key_park."""
++    def __init__(self,cpu,kbox,park_pc,sched):
++        self.cpu,self.kbox,self.park,self.sched,self.i=cpu,kbox,park_pc,list(sched),0
++        self.frames=0;self.nout=0;self.log=[]
++    def push(self,k,why):
++        c=self.cpu;seq=c.load(self.kbox,4)
++        c.store(self.kbox+4+(seq&3),1,k);c.store(self.kbox,4,seq+1)   # data first, seq LAST
++        self.log.append((c.steps,k,why));self.i+=1
++    def run(self,limit,stop=None):
++        c=self.cpu
++        for _ in range(limit):
++            if c.halted or (stop and stop(self)):break
++            if c.pc==self.park:
++                if self.i<len(self.sched) and self.sched[self.i][0]!='frame':self.push(self.sched[self.i][2],'park')
++                else:break   # idle: nothing to type
++            elif self.i<len(self.sched) and self.sched[self.i][0]=='instr' and c.steps>=self.sched[self.i][1]:
++                self.push(self.sched[self.i][2],'instr')
++            c.step()
++            if len(c.byte_events)!=self.nout:
++                for b in c.byte_events[self.nout:]:
++                    if b==2:
++                        self.frames+=1
++                        n=0
++                        while self.i<len(self.sched) and self.sched[self.i][0]=='frame' and self.frames>=self.sched[self.i][1] and n<4:
++                            self.push(self.sched[self.i][2],'frame');n+=1
++                self.nout=len(c.byte_events)
++        return ''.join(c.output)
++if __name__=='__main__':
++    for e in parse(Path(sys.argv[1]).read_text()):print(e)
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tools/os_demo.sh wt-os/repo2/tools/os_demo.sh
+--- wt-perf/repo2/tools/os_demo.sh	1969-12-31 19:00:00
++++ wt-os/repo2/tools/os_demo.sh	2026-11-03 19:35:16
+@@ -0,0 +1,67 @@
++#!/bin/bash
++# Scripted end-to-end QwenOS demo on rv32_fast: cold boot -> shell prompt -> typed `run /bin/doomd` -> E1M1 ->
++# simulated keyboard (move/turn/fire/use) while DOOM runs. All keys go through the guest keyboard mailbox
++# (schedule file = keysched.py format); the host only types, serves disk blocks and records.
++#   tools/os_demo.sh [outdir] [frames]        default build/os_demo, 40 frames
++# Writes: schedule.txt, console-measure.bin (guest console bytes), summary.txt (instruction counts),
++#         frames/*.png (full 320x240 frames, taken in a SECOND run with 'p' dump keys; the dump costs extra
++#         instructions, so the numbers in summary.txt come from the first, dump-free run).
++set -e
++HERE=$(cd "$(dirname "$0")" && pwd); REPO=$HERE/..
++OUT=${1:-$REPO/build/os_demo}; NF=${2:-40}
++ELF=${ELF:-$REPO/build/qwenos-live-doomdmc-m3.elf}
++KELF=$REPO/build/kernel-live.elf; DOOMELF=${DOOMELF:-$REPO/build/doomdmc-m3/doomd.elf}
++DISK=${DISK:-$REPO/../engine/DMC100-Doom/build/sw/nor/E1.img}
++if [ -z "$WAD" ]; then for w in "$REPO/../wads/freedoom1.wad" "$REPO/../../wads/freedoom1.wad" "$HOME/qwenos-work/wads/freedoom1.wad"; do [ -f "$w" ] && WAD=$w && break; done; fi
++mkdir -p "$OUT/frames"
++[ -x "$REPO/build/rv32_fast" ] || cc -O2 -o "$REPO/build/rv32_fast" "$REPO/tools/rv32_fast.c"
++if [ ! -f "$ELF" ]; then
++  make -C "$REPO" build/kernel-live.elf build/shell-live.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf >/dev/null
++  OS=live "$REPO/ports/doomdmc/mkmode.sh" 3 >/dev/null
++fi
++sym() { nm "$KELF" | awk -v s="$1" '$3==s{print $1}'; }
++# --- key schedule: type the command at the prompt, then play. Frame numbers count 0x02 markers since boot.
++{
++  echo "# typed at the prompt, one key per park of the shell (shell_ready)"
++  for c in r u n space / b i n / d o o m d '\n'; do echo "shell_ready $c"; done
++  echo "# DOOM: walk forward, turn right, walk, fire, use, turn left, back up (each key = ~4 tics held)"
++  f=2; for k in w w w w d d w w f f e a a s s w w f e; do echo "frame $f $k"; f=$((f+2)); done
++} > "$OUT/schedule.txt"
++COMMON=(-W "$(sym qos_key_park)" -F "$NF")
++ARGS=("$ELF" "$DISK" "$(sym qos_input_mailbox)" "$(sym qos_disk_mailbox)")
++# --- run A: measurement (no dumps)
++SYMELF=$DOOMELF,$KELF WATCH=qos_key_park,qos_takeover_run,doomd_main,P_SetupLevel \
++  "$REPO/build/rv32_fast" -v "${COMMON[@]}" -K "$OUT/schedule.txt" "${ARGS[@]}" "$OUT/console-measure.bin" 500000000 2> "$OUT/run-measure.log" || true
++python3 - "$OUT" <<'PY'
++import re,sys
++out=sys.argv[1];log=open(out+'/run-measure.log').read()
++keys=[(int(a),int(b),w) for a,b,w in re.findall(r'KEY step=(\d+) key=(\d+) seq=\d+ via (\S+)',log)]
++w=dict((n,int(s)) for n,s in re.findall(r'WATCH (\w+) at (\d+)',log))
++fr=[int(a) for a in re.findall(r'frame \d+ at (\d+)',log)]
++typed=[k for k in keys if k[2]=='shell_ready']
++enter=typed[-1][0] if typed else 0
++m=re.search(r'steps=(\d+) exit=(\S+) frames=(\d+)',log)
++L=[]
++def p(s):L.append(s);print(s)
++p('QwenOS end-to-end demo (rv32_fast, instructions = guest RV32 instructions; chip tokens ~ 1.35 x instr)')
++p('  cold boot -> shell prompt parked at KEY_WAIT : %9d' % w['qos_key_park'])
++p('  typing "run /bin/doomd\\n" (%d keys, %d..%d): %9d  (%d per key)' % (len(typed),typed[0][0],enter,enter-w['qos_key_park'],(enter-w['qos_key_park'])//max(1,len(typed))))
++p('  Enter -> kernel takeover entry               : %9d' % (w['qos_takeover_run']-enter))
++p('  takeover -> doomd_main                       : %9d' % (w['doomd_main']-w['qos_takeover_run']))
++p('  doomd init (img, FAT, engine) -> level start : %9d' % (w['P_SetupLevel']-w['doomd_main']))
++p('  level load + first E1M1 frame                : %9d' % (fr[0]-w['P_SetupLevel']))
++p('  TOTAL cold boot -> first E1M1 frame          : %9d' % fr[0])
++p('    of which OS (boot+shell+typing+exec+takeover) : %9d' % w['doomd_main'])
++d=[b-a for a,b in zip(fr,fr[1:])]
++if d:
++  kf=[i for i in range(len(d)) if True]
++  p('  per frame (%d frames, %d keys injected in-game): mean %d  min %d  max %d' % (len(d),len(keys)-len(typed),sum(d)//len(d),min(d),max(d)))
++p('  run: %s' % m.group(0) if m else '  run: ?')
++open(out+'/summary.txt','w').write('\n'.join(L)+'\n')
++PY
++# --- run B: same flow plus 'p' (serial LCD dump) keys -> full-resolution PNG frames
++# (schedule order is strict: 'p' arms the dump of the NEXT frame; 4000 = before doomd's first key poll -> first E1M1 frame)
++awk '/^frame (6|14|30) /{print; print "frame " $2 " p"; next} /^frame 2 /{print "4000 p"} {print}' "$OUT/schedule.txt" > "$OUT/schedule-dump.txt"
++"$REPO/build/rv32_fast" "${COMMON[@]}" -K "$OUT/schedule-dump.txt" "${ARGS[@]}" "$OUT/console-dump.bin" 500000000 2> "$OUT/run-dump.log" || true
++if [ -f "$WAD" ]; then python3 "$REPO/tools/doomd_frames.py" "$OUT/console-dump.bin" "$WAD" "$OUT/frames/frame" 2 | tail -5; else echo "no WAD at $WAD (set WAD=) - skipping PNGs"; fi
++echo "outputs in $OUT"
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tools/qwenos_live.sh wt-os/repo2/tools/qwenos_live.sh
+--- wt-perf/repo2/tools/qwenos_live.sh	1969-12-31 19:00:00
++++ wt-os/repo2/tools/qwenos_live.sh	2026-11-03 19:27:01
+@@ -0,0 +1,31 @@
++#!/bin/bash
++# One-command live QwenOS terminal:  tools/qwenos_live.sh [--auto] [--fps N] [--keys sched.txt] [--wad freedoom1.wad] [--disk E1.img]
++# The host (tools/rv32_fast -L) is only a keyboard, a block device and a display: boot banner/prompt/echo/ls/
++# `run /bin/doomd` and DOOM itself all run as guest RV32 instructions. Type  run /bin/doomd  <Enter>.
++# Quit: Ctrl-]  (or Ctrl-C) - handled by the host, never sent to the guest.  Arrow keys = w/s/d/a.
++#   --auto   type "run /bin/doomd" for you (scripted keys), then hand the keyboard over
++#   --keys   extra key schedule (tools/keysched.py format), replayable in non-live runs too
++set -e
++HERE=$(cd "$(dirname "$0")" && pwd); REPO=$HERE/..
++ELF=${ELF:-$REPO/build/qwenos-live-doomdmc-m3.elf}
++KELF=${KELF:-$REPO/build/kernel-live.elf}
++DISK=${DISK:-$REPO/../engine/DMC100-Doom/build/sw/nor/E1.img}
++WAD=${WAD:-}
++for w in "$REPO/../wads/freedoom1.wad" "$REPO/../../wads/freedoom1.wad" "$HOME/qwenos-work/wads/freedoom1.wad"; do [ -z "$WAD" ] && [ -f "$w" ] && WAD=$w; done
++FPS=35; KEYS=; AUTO=0
++while [ $# -gt 0 ]; do case $1 in
++  --auto) AUTO=1;; --fps) FPS=$2; shift;; --keys) KEYS=$2; shift;; --wad) WAD=$2; shift;; --disk) DISK=$2; shift;; --elf) ELF=$2; shift;;
++  *) echo "unknown option $1" >&2; exit 2;; esac; shift; done
++[ -x "$REPO/build/rv32_fast" ] || cc -O2 -o "$REPO/build/rv32_fast" "$REPO/tools/rv32_fast.c"
++if [ ! -f "$ELF" ]; then
++  [ -f "$KELF" ] || make -C "$REPO" build/kernel-live.elf build/shell-live.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf >/dev/null
++  OS=live "$REPO/ports/doomdmc/mkmode.sh" 3 >/dev/null
++fi
++sym() { nm "$KELF" | awk -v s="$1" '$3==s{print $1}'; }
++T=$(mktemp -t qoskeys.XXXXXX); trap 'rm -f "$T"' EXIT
++if [ $AUTO = 1 ]; then
++  for c in r u n space / b i n / d o o m d '\n'; do echo "shell_ready $c"; done > "$T"
++fi
++[ -n "$KEYS" ] && cat "$KEYS" >> "$T"
++exec "$REPO/build/rv32_fast" -L -K "$T" -W "$(sym qos_key_park)" -B "$(sym framebuffer)" -R "$(sym key_seq_seen)" -S "$FPS" ${WAD:+-A "$WAD"} \
++  "$ELF" "$DISK" "$(sym qos_input_mailbox)" "$(sym qos_disk_mailbox)" /dev/null 0
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tools/rv32_fast.c wt-os/repo2/tools/rv32_fast.c
+--- wt-perf/repo2/tools/rv32_fast.c	2026-11-03 18:58:58
++++ wt-os/repo2/tools/rv32_fast.c	2026-11-03 19:29:56
+@@ -1,5 +1,10 @@
+ /* Fast C twin of tools/rv32_qwenputer.py + wad_device.py + key injection, for long
+- * runs (DOOM). Same memory rules: fetch only 0x40000-0x7ffff, loads RAM(0..0x7fff) or
++ * runs (DOOM).
++ * Options (before the positional args):  -K schedule.txt   key-injection schedule (see tools/keysched.py)
++ *   -W hexpc  key-wait park pc (default: symbol qos_key_park from SYMELF)   -F n  stop after n frame markers
++ *   -v  log each injection.  Env WATCH=sym,sym (+SYMELF) prints the instruction count at the first hit of each.
++ * Keyboard mailbox = 4-deep ring (include/qos.h): q[seq&3]=key then seq++ . A schedule line is
++ *   shell_ready <key> | frame N <key> | <instr> <key>      (one `type` per line, in file order). Same memory rules: fetch only 0x40000-0x7ffff, loads RAM(0..0x7fff) or
+  * data ROM (0x20000-0x3ffff), stores RAM only. The "disk" device only copies requested
+  * bytes into the guest mailbox; keys are written into the guest input mailbox.
+  * usage: rv32_fast ELF DISK mailbox_in mailbox_disk OUT.bin max_instr [key@frame ...]
+@@ -9,6 +14,11 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <stdint.h>
++#include <termios.h>
++#include <poll.h>
++#include <unistd.h>
++#include <time.h>
++#include <sys/ioctl.h>
+ static uint8_t mem[0x80000];
+ static uint32_t reg[32], pc;
+ static uint32_t tr_pc[64],tr_sp[64],tr_to[64];static unsigned trn;
+@@ -53,22 +63,114 @@
+   if(getenv("TICLIST"))for(int i=0;i<n;i++)fprintf(stderr,"tic %d at %llu cost %llu\n",i,(unsigned long long)ticstep[i],(unsigned long long)d[i]);
+   qsort(d,n,8,u64cmp);
+   fprintf(stderr,"TICS n=%d first_tic_at=%llu mean=%llu median=%llu p90=%llu max=%llu\n",n,(unsigned long long)ticstep[0],(unsigned long long)(tot/n),(unsigned long long)d[n/2],(unsigned long long)d[n*9/10],(unsigned long long)mx);}
++
++/* ---- live terminal mode (-L): the host is only a keyboard, a console, a block device and a display ----
++ * (1) raw tty bytes -> guest keyboard mailbox ring (flow-controlled by the guest read counter, -R),
++ * (2) the disk mailbox (existing), (3) guest PUTC bytes are the console; the guest's 32x24 framebuffer
++ * (RAM at -B) is shown with 24-bit ANSI colours using the PLAYPAL of -A wad. No shell/game logic here.
++ * Quit: Ctrl-] or Ctrl-C (never sent to the guest). Arrow keys are translated to w/s/d/a (keyboard layout). */
++static uint32_t rd32(uint32_t a);static void wr32(uint32_t a,uint32_t v);static const char*live_pal_wad;static int frames_g;static int live,live_eof,live_quit,live_game,live_fps=35,live_rows=24,live_cols=80,live_term;
++static uint32_t kbox_g,kseq,fbaddr,krd_addr;static uint8_t pal[256][3];
++static uint8_t kq[512];static int nq,esc;static struct termios tio0;
++static char clog[8][120];static int cln,clc;static uint64_t live_frames_shown,live_steps_now;
++static struct timespec t_start,t_last_draw;
++static double now_s(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
++static void live_restore(void){if(!live_term)return;live_term=0;const char*r="\x1b[0m\x1b[?25h\x1b[?1049l";if(live_game)write(1,r,strlen(r));tcsetattr(0,TCSANOW,&tio0);}
++static void kpush_raw(int c){mem[kbox_g+4+(kseq&3)]=(uint8_t)c;kseq++;wr32(kbox_g,kseq);}
++static void live_flush_keys(void){while(nq>0&&(int32_t)(kseq-rd32(krd_addr))<4){kpush_raw(kq[0]);memmove(kq,kq+1,--nq);}}
++static void live_in(uint8_t c){
++  if(esc==1){esc=(c=='[')?2:0;if(esc)return;if(c!=27){}}   /* ESC then non-'[': drop ESC, handle c */
++  else if(esc==2){esc=0;int k=c=='A'?'w':c=='B'?'s':c=='C'?'d':c=='D'?'a':0;if(k&&nq<512)kq[nq++]=k;return;}
++  if(c==0x1d||c==3){live_quit=1;return;}
++  if(c==27){esc=1;return;}
++  if(nq<512)kq[nq++]=c;}
++static void live_poll(int block){struct pollfd p={0,POLLIN,0};
++  if(live_eof)return;
++  if(poll(&p,1,block?-1:0)>0&&(p.revents&(POLLIN|POLLHUP))){uint8_t b[64];int n=read(0,b,sizeof b);
++    if(n<=0){live_eof=1;return;}for(int i=0;i<n;i++)live_in(b[i]);}
++  if(esc==1&&!block){/* lone ESC (menu): deliver */ kq[nq++]=27;esc=0;}
++  live_flush_keys();}
++static void live_draw(int final){
++  static char buf[1<<16];int n=0;
++  if(!live_game){live_game=1;n+=snprintf(buf+n,sizeof buf-n,"\x1b[?1049h\x1b[2J\x1b[?25l");}
++  n+=snprintf(buf+n,sizeof buf-n,"\x1b[H");
++  int full=live_rows>=24+8+2;
++  for(int y=0;y<(full?24:12);y++){
++    for(int x=0;x<32;x++){
++      if(full){const uint8_t*c=pal[mem[fbaddr+y*32+x]];n+=snprintf(buf+n,sizeof buf-n,"\x1b[48;2;%d;%d;%dm  ",c[0],c[1],c[2]);}
++      else{const uint8_t*t=pal[mem[fbaddr+2*y*32+x]],*b=pal[mem[fbaddr+(2*y+1)*32+x]];
++        n+=snprintf(buf+n,sizeof buf-n,"\x1b[38;2;%d;%d;%d;48;2;%d;%d;%dm\xe2\x96\x80\xe2\x96\x80",t[0],t[1],t[2],b[0],b[1],b[2]);}}
++    n+=snprintf(buf+n,sizeof buf-n,"\x1b[0m\x1b[K\r\n");}
++  double el=now_s()-(t_start.tv_sec+t_start.tv_nsec*1e-9);
++  n+=snprintf(buf+n,sizeof buf-n,"\x1b[7m guest instr %llu | frame %d | %.1f fps | Ctrl-] quits \x1b[0m\x1b[K\r\n",(unsigned long long)live_steps_now,frames_g,el>0?live_frames_shown/el:0.0);
++  int maxl=live_rows-(full?24:12)-2;if(maxl>8)maxl=8;
++  for(int i=0;i<maxl;i++){int k=(cln-maxl+i);if(k<0){n+=snprintf(buf+n,sizeof buf-n,"\x1b[K\r\n");continue;}n+=snprintf(buf+n,sizeof buf-n,"%s\x1b[K\r\n",clog[k&7]);}
++  (void)final;write(1,buf,n);live_frames_shown++;}
++static void live_putc(int c){
++  if(!live_game){char ch=(char)c;write(1,&ch,1);return;}   /* tty keeps OPOST: \n -> \r\n */
++  if(c=='\n'){clog[cln&7][clc]=0;cln++;clc=0;clog[cln&7][0]=0;}else if(c>=32&&c<127&&clc<110){clog[cln&7][clc++]=(char)c;clog[cln&7][clc]=0;}}
++static void live_load_pal(const char*wad){FILE*f=fopen(wad,"rb");if(!f){fprintf(stderr,"palette wad %s not found: greyscale\n",wad);for(int i=0;i<256;i++)pal[i][0]=pal[i][1]=pal[i][2]=i;return;}
++  uint8_t h[12];if(fread(h,1,12,f)!=12){fclose(f);return;}uint32_t n=*(uint32_t*)(h+4),off=*(uint32_t*)(h+8);
++  for(uint32_t i=0;i<n;i++){uint8_t e[16];fseek(f,off+16*i,SEEK_SET);if(fread(e,1,16,f)!=16)break;if(!memcmp(e+8,"PLAYPAL",8)){fseek(f,*(uint32_t*)e,SEEK_SET);if(fread(pal,1,768,f)!=768)break;break;}}
++  fclose(f);}
++
+ static int32_t S(uint32_t v){return (int32_t)v;}
++/* key-injection schedule: kind 0 = at each key-wait park (shell_ready), 1 = once N frame markers seen, 2 = once N instructions done */
++static struct{int kind;uint64_t n;int key;}sched[1024];static int ns;
++static int nw;static uint32_t wpc[16];static char*wn[16];static uint64_t wstep[16];static int whit[16];
++static int keyparse(const char*t){
++  if(!strcmp(t,"\\n")||!strcmp(t,"enter"))return '\n';if(!strcmp(t,"\\r"))return '\r';if(!strcmp(t,"\\b")||!strcmp(t,"backspace"))return 8;
++  if(!strcmp(t,"\\e")||!strcmp(t,"esc"))return 27;if(!strcmp(t,"space"))return ' ';if(!strncmp(t,"0x",2))return (int)strtol(t,0,16);
++  if(strlen(t)==1)return (uint8_t)t[0];fprintf(stderr,"bad key '%s'\n",t);exit(2);}
++static void load_sched(const char*fn){FILE*f=fopen(fn,"r");if(!f){perror(fn);exit(2);}char ln[256];
++  while(fgets(ln,sizeof ln,f)){char*h=strchr(ln,'#');if(h)*h=0;char*a=strtok(ln," \t\r\n");if(!a)continue;char*b=strtok(0," \t\r\n");char*c=strtok(0," \t\r\n");if(ns>=1024)break;
++    if(!strcmp(a,"shell_ready")&&b){sched[ns].kind=0;sched[ns].key=keyparse(b);}
++    else if(!strcmp(a,"frame")&&b&&c){sched[ns].kind=1;sched[ns].n=strtoull(b,0,10);sched[ns].key=keyparse(c);}
++    else if(a[0]>='0'&&a[0]<='9'&&b){sched[ns].kind=2;sched[ns].n=strtoull(a,0,10);sched[ns].key=keyparse(b);}
++    else{fprintf(stderr,"%s: bad schedule line near '%s'\n",fn,a);exit(2);}
++    ns++;}
++  fclose(f);}
+ static uint32_t rd32(uint32_t a){uint32_t v;memcpy(&v,mem+a,4);return v;}
+ static void wr32(uint32_t a,uint32_t v){memcpy(mem+a,&v,4);}
+ static void die(const char*m,uint32_t a,uint64_t steps){fprintf(stderr,"FAULT %s at %#x pc=%#x steps=%llu\n",m,a,pc,(unsigned long long)steps);for(int i=0;i<64;i++){unsigned k=(trn+i)&63;fprintf(stderr,"call %08x -> %08x sp=%08x\n",tr_pc[k],tr_to[k],tr_sp[k]);}for(int i=0;i<32;i++)fprintf(stderr,"x%d=%08x%s",i,reg[i],(i%8==7)?"\n":" ");exit(3);}
+ int main(int argc,char**argv){
+-  if(argc<7){fprintf(stderr,"usage\n");return 2;}
++  const char*kfile=0;uint32_t parkpc=0;int stopframes=0,verbose=0;
++  {int j=1;for(int i=1;i<argc;i++){
++    if(!strcmp(argv[i],"-K")&&i+1<argc)kfile=argv[++i];
++    else if(!strcmp(argv[i],"-W")&&i+1<argc)parkpc=strtoul(argv[++i],0,16);
++    else if(!strcmp(argv[i],"-F")&&i+1<argc)stopframes=atoi(argv[++i]);
++    else if(!strcmp(argv[i],"-v"))verbose=1;
++    else if(!strcmp(argv[i],"-L"))live=1;
++    else if(!strcmp(argv[i],"-B")&&i+1<argc)fbaddr=strtoul(argv[++i],0,16);
++    else if(!strcmp(argv[i],"-R")&&i+1<argc)krd_addr=strtoul(argv[++i],0,16);
++    else if(!strcmp(argv[i],"-A")&&i+1<argc)live_pal_wad=argv[++i];
++    else if(!strcmp(argv[i],"-S")&&i+1<argc)live_fps=atoi(argv[++i]);
++    else argv[j++]=argv[i];}
++    argc=j;}
++  if(argc<7){fprintf(stderr,"usage: rv32_fast [-K sched] [-W parkpc] [-F frames] [-v] ELF DISK kbox dbox OUT max_instr [key@frame ...]\n");return 2;}
+   FILE*f=fopen(argv[1],"rb");if(!f){perror("elf");return 2;}
+   static uint8_t elf[1<<20];size_t en=fread(elf,1,sizeof elf,f);fclose(f);(void)en;
+   pc=*(uint32_t*)(elf+24);uint32_t phoff=*(uint32_t*)(elf+28);uint16_t phes=*(uint16_t*)(elf+42),phn=*(uint16_t*)(elf+44);
+   for(int i=0;i<phn;i++){uint32_t*p=(uint32_t*)(elf+phoff+i*phes);if(p[0]!=1)continue;memcpy(mem+p[2],elf+p[1],p[4]);}
+   f=fopen(argv[2],"rb");if(!f){perror("disk");return 2;}
+   fseek(f,0,SEEK_END);long dn=ftell(f);fseek(f,0,SEEK_SET);uint8_t*disk=malloc(dn);if(fread(disk,1,dn,f)!=(size_t)dn)return 2;fclose(f);
+-  uint32_t kbox=strtoul(argv[3],0,16),dbox=strtoul(argv[4],0,16);
++  uint32_t kbox=strtoul(argv[3],0,16),dbox=strtoul(argv[4],0,16);kbox_g=kbox;
+   FILE*out=fopen(argv[5],"wb");uint64_t maxi=strtoull(argv[6],0,10);
+-  int nkeys=argc-7;struct{int c;int fr;int done;}keys[256];
+-  for(int i=0;i<nkeys&&i<256;i++){keys[i].c=argv[7+i][0];keys[i].fr=atoi(argv[7+i]+2);keys[i].done=0;}
++  if(live){if(!maxi)maxi=UINT64_MAX;if(!fbaddr||!krd_addr){fprintf(stderr,"live mode needs -B fbaddr -R key-read-counter-addr\n");return 2;}
++    live_load_pal(live_pal_wad?live_pal_wad:"");
++    if(isatty(0)){struct termios t;tcgetattr(0,&tio0);t=tio0;t.c_lflag&=~(ICANON|ECHO|ISIG);t.c_cc[VMIN]=1;t.c_cc[VTIME]=0;tcsetattr(0,TCSANOW,&t);live_term=1;
++      struct winsize w;if(!ioctl(1,TIOCGWINSZ,&w)&&w.ws_row){live_rows=w.ws_row;live_cols=w.ws_col;}}
++    atexit(live_restore);clock_gettime(CLOCK_MONOTONIC,&t_start);}
++  for(int i=7;i<argc&&ns<1024;i++){sched[ns].kind=1;sched[ns].key=(uint8_t)argv[i][0];sched[ns].n=atoi(argv[i]+2);ns++;}
++  if(kfile)load_sched(kfile);
++  int si=0;uint64_t nxt=UINT64_MAX;
++  #define KPUSH(why) do{mem[kbox+4+(kseq&3)]=(uint8_t)sched[si].key;kseq++;wr32(kbox,kseq);if(verbose)fprintf(stderr,"KEY step=%llu key=%d seq=%u via %s\n",(unsigned long long)steps,sched[si].key,kseq,why);si++;}while(0)
++  #define NEXT_INSTR() (nxt=(si<ns&&sched[si].kind==2)?sched[si].n:UINT64_MAX)
++  NEXT_INSTR();
++  {const char*w=getenv("WATCH");const char*se=getenv("SYMELF");
++   if(se&&(w||!parkpc)){char*t=strtok(strdup(se),",");while(t){uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);load_syms(el2);}t=strtok(0,",");}
++     char*wl=strdup(w?w:"");for(char*t2=strtok(wl,",");t2&&nw<16;t2=strtok(0,",")){for(int q=0;q<nsyms;q++)if(!strcmp(syms[q].n,t2)){wn[nw]=strdup(t2);wpc[nw++]=syms[q].a;break;}}
++     if(!parkpc)for(int q=0;q<nsyms;q++)if(!strcmp(syms[q].n,"qos_key_park"))parkpc=syms[q].a;}}
+   if(getenv("PROF")||getenv("REQPROF")){prof=getenv("PROF")!=0;{char*se=getenv("SYMELF");if(se){char*t=strtok(strdup(se),",");while(t){uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);load_syms(el2);}t=strtok(0,",");}}else load_syms(elf);}for(int i=0;i<NPH;i++)hist[i]=calloc(0x10000,4);
+     char*ph=getenv("PHASES");if(ph){char*t=strtok(strdup(ph),",");while(t&&nph<NPH-1){phb[nph++]=atoi(t);t=strtok(0,",");}}}
+   {const char*ts=getenv("TICSYM");if(!ts)ts="G_Ticker";const char*se=getenv("SYMELF");if(se){char*t=strtok(strdup(se),",");uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);
+@@ -76,10 +178,19 @@
+     for(int i=0;i<shn;i++){const uint32_t*sh=(const uint32_t*)(el2+shoff+i*shes);if(sh[1]!=2)continue;const uint32_t*strh=(const uint32_t*)(el2+shoff+sh[6]*shes);const char*str=(const char*)el2+strh[4];
+       for(uint32_t j=0;j<sh[5]/16;j++){const uint8_t*e=el2+sh[4]+j*16;if(!strcmp(str+*(uint32_t*)e,ts))ticpc=*(uint32_t*)(e+4);if(!strcmp(str+*(uint32_t*)e,"P_SetupLevel"))lvlpc=*(uint32_t*)(e+4);}}}}}
+   reqprof=getenv("REQPROF")!=0;if(getenv("REQLOG"))reqlog=fopen(getenv("REQLOG"),"wb");
+-  uint32_t last_req=0,kseq=100;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
++  uint32_t last_req=0;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
+   uint64_t last_frame_step=0;
+   while(steps<maxi){
+     if(pc<0x40000||pc>0x7fffc||(pc&3))die("fetch",pc,steps);
++    if(live&&!(steps&0xFFFF)){live_steps_now=steps;live_poll(0);if(live_quit){exitcode=-3;goto done;}}
++    if(steps>=nxt){while(si<ns&&sched[si].kind==2&&steps>=sched[si].n)KPUSH("instr");NEXT_INSTR();}
++    if(pc==parkpc&&parkpc){ /* guest is waiting for a key (KEY_WAIT) */
++      if(si<ns&&sched[si].kind!=1){if(sched[si].kind==2&&steps<sched[si].n&&verbose)fprintf(stderr,"warp: idle until instr %llu\n",(unsigned long long)sched[si].n);KPUSH(sched[si].kind?"park-warp":"shell_ready");NEXT_INSTR();}
++      else if(live){live_steps_now=steps;uint32_t k0=kseq;while(kseq==k0&&!live_quit&&!live_eof)live_poll(1);
++        if(live_quit){exitcode=-3;goto done;}
++        if(kseq==k0){fprintf(stderr,"\r\nstdin closed while the guest waits for a key\r\n");exitcode=-2;goto done;}}
++      else{fprintf(stderr,"IDLE: guest waits for a key at step %llu, nothing schedulable\n",(unsigned long long)steps);exitcode=-2;goto done;}}
++    if(nw)for(int q=0;q<nw;q++)if(pc==wpc[q]&&!whit[q]){whit[q]=1;wstep[q]=steps;}
+     if(pc==lvlpc&&!lvlseen){lvlseen=1;lvlstep=steps;lvlticidx=nticks;}
+     if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticstep[nticks++]=steps;while(phase<nph&&nticks>phb[phase])phase++;}
+     if(prof)hist[phase][(pc-0x40000)>>2]++;
+@@ -123,13 +234,18 @@
+       break;
+     case 0x0f:break;
+     case 0x73:
+-      if(reg[17]==1){int c=reg[10]&511;if(c<256){fputc(c,out);int mark=0;
++      if(reg[17]==1){int c=reg[10]&511;if(c<256){fputc(c,out);int mark=0;int vis=(pskip==0&&ps==0&&c!=1&&c!=2);
+   if(pskip>0){pskip--;}
+   else if(ps==0){if(c==1)ps=1;else if(c==2)mark=1;}
+   else if(ps==1){ps=0;if(c=='D'){ps=2;pn=0;plen=0;}else if(c=='W')pskip=10;else if(c=='P')pskip=1;else if(c=='E')pskip=2;}
+   else if(ps==2){plen|=c<<(8*pn);if(++pn==2){ps=0;pskip=plen;}}
+-  if(mark){fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;if(lvlseen&&!lvlframe)lvlframe=steps;
+-            for(int i=0;i<nkeys;i++)if(!keys[i].done&&frames>=keys[i].fr){keys[i].done=1;wr32(kbox+4,keys[i].c);wr32(kbox,kseq++);break;}}}}
++  if(live&&vis)live_putc(c);
++  if(mark){fstep[frames<100000?frames:99999]=steps;frames++;
++            if(live){frames_g=frames;live_steps_now=steps;
++              if(live_fps>0){double tgt=(t_start.tv_sec+t_start.tv_nsec*1e-9)+live_frames_shown/(double)live_fps,d=tgt-now_s();if(d>0)usleep((useconds_t)(d*1e6));}
++              live_draw(0);live_poll(0);if(live_quit){exitcode=-3;goto done;}}last_frame_step=steps;if(lvlseen&&!lvlframe)lvlframe=steps;
++            {int pushed=0;while(si<ns&&sched[si].kind==1&&frames>=(int)sched[si].n&&pushed<4){KPUSH("frame");pushed++;}NEXT_INSTR();}
++            if(stopframes&&frames>=stopframes){exitcode=0;goto done;}}}}
+       else if(reg[17]==93){exitcode=reg[10];goto done;}
+       else die("ecall",reg[17],steps);
+       break;
+@@ -145,8 +261,13 @@
+       wr32(dbox+16,good?1:2);wr32(dbox+12,seq);}
+   }
+ done:
++  if(live){live_restore();
++    fprintf(stderr,"\nQwenOS live: %s after %llu guest instructions, %d frames shown (%d frame markers), guest exit code %d\n",
++      exitcode==-3?"quit key":exitcode==-2?"input closed":"guest exited",(unsigned long long)steps,(int)live_frames_shown,frames,exitcode);
++    return exitcode==-3||exitcode==0?0:1;}
+   fclose(out);if(reqlog)fclose(reqlog);if(reqprof){qsort(syms,nsyms,sizeof *syms,symcmp);for(int q=0;q<nrq;q++){uint32_t a=rqpc[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"REQ %8llu req %9llu B  ra=%x %s+%x\n",(unsigned long long)rqn[q],(unsigned long long)rqb[q],a,k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
+   if(prof)prof_report();tic_report();
++  for(int q=0;q<nw;q++)fprintf(stderr,"WATCH %s %s %llu\n",wn[q],whit[q]?"at":"never",(unsigned long long)wstep[q]);
+   fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);
+   for(int i=0;i<frames&&i<100000;i++)fprintf(stderr,"frame %d at %llu delta %llu\n",i,(unsigned long long)fstep[i],(unsigned long long)(fstep[i]-(i?fstep[i-1]:0)));
+   /* dump RAM for post-mortem */
+diff -ruN -x build -x .git -x __pycache__ -x *.bin -x *.ram -x *.o -x *.elf -x base -x *.png -x *.pgm -x rv32_fast wt-perf/repo2/tools/upstream_doomd.py wt-os/repo2/tools/upstream_doomd.py
+--- wt-perf/repo2/tools/upstream_doomd.py	2026-11-03 18:55:14
++++ wt-os/repo2/tools/upstream_doomd.py	2026-11-03 19:23:36
+@@ -47,7 +47,7 @@
+     from chipformer.rv import elf as relf, ref
+     m = ref.Machine.from_program(relf.program(elf))
+     dev = ReferenceDiskDevice(m, dbox, disk)
+-    par = MarkerParser(); seen = 0; marks = []; kseq = 100
++    par = MarkerParser(); seen = 0; marks = []; kseq = 0
+     pend = [[c, int(n), False] for c, n in keys]
+     t0 = time.time(); records = 0; toks = 1; nxt = 1000000
+     while not m.halted and m.steps < max_instr:
+@@ -61,7 +61,8 @@
+                     for k in pend:
+                         if not k[2] and len(marks) >= k[1]:
+                             k[2] = True
+-                            m.ram[(kbox + 4) // 4] = ord(k[0]); m.ram[kbox // 4] = kseq; kseq += 1
++                            sh = 8 * (kseq & 3); w = m.ram[(kbox + 4) // 4]
++                            m.ram[(kbox + 4) // 4] = (w & ~(255 << sh)) | (ord(k[0]) << sh); kseq += 1; m.ram[kbox // 4] = kseq
+                             break
+             seen = len(m.out)
+         if progress and m.steps >= nxt:

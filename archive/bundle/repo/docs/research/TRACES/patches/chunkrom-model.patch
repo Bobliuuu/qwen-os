@@ -1,0 +1,326 @@
+diff -ruN a/tools/chunkrom.py b/tools/chunkrom.py
+--- a/tools/chunkrom.py	1969-12-31 19:00:00
++++ b/tools/chunkrom.py	2026-11-03 19:54:52
+@@ -0,0 +1,175 @@
++#!/usr/bin/env python3
++"""Chunk ROM: eliminate guest disk requests inside a run chunk by pre-filling the data ROM.
++
++The guest (ports/doomdmc/qplat.c crx_read, built with -DQ_CHUNKROM) looks every disk read up in an
++extent table at Q_CRX_BASE in the data ROM; a hit is a ROM copy (no mailbox request, no model pause).
++The host builds that window per chunk from the exact disk ranges the chunk will read (a host dry run
++with the C twin: rv32_fast REQLOG=file records (offset,len,ra,tic) per request) and writes it into the
++snapshot's data ROM (fill_drom).
++
++Window layout (u32 LE): [0] 'CRX1' [1] n  [2..130] guide (257 u16), then (disk offset, ROM address) i=0..n (entry n is the
++end sentinel); then the blob. Every extent starts at a ROM address congruent to its disk offset mod 4
++(padding bytes are real disk bytes appended to the previous extent) so word copies stay aligned.
++
++Chunks are ranges of FRAME-MARKER counts (lo <= markers seen < hi): a window switch is only possible at a
++model segment boundary, and a frame marker is the one place a segment can always end.
++usage:
++  chunkrom.py REQLOG DISK --tics C   (C = markers per chunk) [--budget B] [--out plan.bin]    fixed chunks of C tics
++  chunkrom.py REQLOG DISK --greedy [--budget B] [--out plan.bin]    longest chunks that fit B bytes
++plan.bin (for rv32_fast CRXPLAN=): records u32 start_tic,end_tic,nwords,words[]
++"""
++import argparse, struct, sys
++import numpy as np
++
++CRX_BASE = 0x28C00      # must match Q_CRX_BASE (qplat.c) / Q_CRX_BASE_LD (lowres.sh CHUNKROM=1)
++DROM_BASE = 0x20000
++DROM_END = 0x3F000      # 0x3f000.. holds the small-app rodata of the merged image
++MAGIC = 0x31585243      # 'CRX1'
++GUIDE_BYTES = 516       # 257 u16 guide entries (16 KB buckets over a 4 MB disk), padded to a word
++GAP = 16                # merge extents closer than this (the hole is filled with real disk bytes)
++
++
++def load_reqlog(path):
++    a = np.fromfile(path, dtype='<u4').reshape(-1, 5)   # rv32_fast REQLOG: off, len, ra, tic, frame-marker count
++    return a[:, 0].astype(np.int64), a[:, 1].astype(np.int64), a[:, 4].astype(np.int64)  # off, len, markers seen
++
++
++def extents_of(off, ln, disk_len, gap=GAP):
++    """Merged [start,end) disk extents covering all requests (holes <= gap bytes are bridged)."""
++    if len(off) == 0:
++        return []
++    m = np.zeros(disk_len + 1, dtype=bool)
++    # difference array over request intervals
++    d = np.zeros(disk_len + 2, dtype=np.int32)
++    np.add.at(d, off, 1)
++    np.add.at(d, off + ln, -1)
++    m = np.cumsum(d[:disk_len + 1]) > 0
++    idx = np.flatnonzero(m)
++    cut = np.flatnonzero(np.diff(idx) > gap + 1)
++    st = np.concatenate(([0], cut + 1))
++    en = np.concatenate((cut, [len(idx) - 1]))
++    return [(int(idx[a]), int(idx[b]) + 1) for a, b in zip(st, en)]
++
++
++def window_size_bound(ext):
++    """Conservative window bytes for extents: header + table + blob + <=3 alignment bytes per extent."""
++    return 8 + GUIDE_BYTES + 8 * (len(ext) + 1) + 3 + sum(e - s + 3 for s, e in ext)
++
++
++def build_window(ext, disk, base=CRX_BASE, limit=DROM_END):
++    """Bytes of the ROM window for extents [(start,end)...] (sorted, disjoint) cut from `disk`."""
++    n = len(ext)
++    pos = base + 8 + GUIDE_BYTES + 8 * (n + 1)
++    ents, blob = [], bytearray()
++    blob_base = pos
++    for i, (s, e) in enumerate(ext):
++        while (pos - s) & 3:                       # align the extent start; filler = bytes before s or zero
++            blob.append(0); pos += 1               # (only possible for i == 0: later pads go into prev extent)
++        ents.append((s, pos))
++        chunk = bytes(disk[s:e])
++        pos += len(chunk); blob += chunk
++        if i + 1 < n:                              # pad this extent with real bytes so the next one is aligned
++            nxt = ext[i + 1][0]
++            pad = (nxt - pos) & 3
++            assert e + pad <= nxt, 'extents too close for padding'
++            blob += bytes(disk[e:e + pad]); pos += pad
++    ents.append((0xFFFFFFFF, pos))
++    if pos > limit:
++        raise ValueError(f'chunk ROM window needs {pos - base} B, only {limit - base} available')
++    starts = [o for o, _ in ents[:-1]] + [0xFFFFFFFF]
++    import bisect
++    guide = struct.pack('<258H', *[max(0, min(n, bisect.bisect_right(starts[:n], b << 14) - 1)) for b in range(257)], 0)
++    assert len(guide) == GUIDE_BYTES
++    hdr = struct.pack('<II', MAGIC, n) + guide + b''.join(struct.pack('<II', o, r) for o, r in ents)
++    out = bytes(hdr) + bytes(blob)
++    assert len(out) == pos - base
++    return out
++
++
++def fill_drom(machine, extents, disk, base=CRX_BASE):
++    """Install the chunk's extents into a ref.Machine's data ROM (what the host does to a snapshot before
++    the next Qwen turn). machine.drom is `bytes` (chipformer.rv.ref.Machine); core.snapshot() loads it
++    (and rebuilds its DROM tables because hash(m.drom) changes). Reads are then ROM hits in the guest.
++    extents: [(start,end)...] disk ranges; disk: the block-device image. Returns the window length."""
++    win = build_window(extents, disk, base)
++    off = base - DROM_BASE
++    d = bytearray(machine.drom.ljust(DROM_END - DROM_BASE, b'\0'))
++    d[off:DROM_END - DROM_BASE] = bytes(DROM_END - base)       # zero the whole window first
++    d[off:off + len(win)] = win
++    machine.drom = bytes(d)
++    return len(win)
++
++
++def clear_drom(machine, base=CRX_BASE):
++    d = bytearray(machine.drom)
++    for i in range(base - DROM_BASE, min(len(d), base - DROM_BASE + 8)):
++        d[i] = 0
++    machine.drom = bytes(d)
++
++
++def plan_fixed(off, ln, tic, disk_len, C):
++    out = []
++    for lo in range(0, int(tic.max()) + 1, C):
++        sel = (tic >= lo) & (tic < lo + C)
++        out.append((lo, lo + C, extents_of(off[sel], ln[sel], disk_len)))
++    return out
++
++
++def plan_greedy(off, ln, tic, disk_len, budget):
++    """Longest chunks whose window fits `budget` bytes (a tic that alone exceeds it is an error)."""
++    nt = int(tic.max()) + 1
++    order = np.argsort(tic, kind='stable')
++    off, ln, tic = off[order], ln[order], tic[order]
++    bounds = np.searchsorted(tic, np.arange(nt + 1))
++    out, lo = [], 0
++    while lo < nt:
++        hi = lo + 1
++        best = extents_of(off[bounds[lo]:bounds[hi]], ln[bounds[lo]:bounds[hi]], disk_len)
++        if window_size_bound(best) > budget:
++            raise ValueError(f'tic {lo} alone needs {window_size_bound(best)} B > budget {budget}')
++        while hi < nt:
++            cand = extents_of(off[bounds[lo]:bounds[hi + 1]], ln[bounds[lo]:bounds[hi + 1]], disk_len)
++            if window_size_bound(cand) > budget:
++                break
++            best, hi = cand, hi + 1
++        out.append((lo, hi, best)); lo = hi
++    return out
++
++
++def write_plan(path, plan, disk):
++    with open(path, 'wb') as f:
++        for lo, hi, ext in plan:
++            w = build_window(ext, disk)
++            w += bytes(-len(w) % 4)
++            f.write(struct.pack('<III', lo, hi, len(w) // 4) + w)
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument('reqlog'); ap.add_argument('disk')
++    g = ap.add_mutually_exclusive_group(required=True)
++    g.add_argument('--tics', type=int); g.add_argument('--greedy', action='store_true')
++    ap.add_argument('--budget', type=int, default=DROM_END - CRX_BASE)
++    ap.add_argument('--out', help='binary plan for rv32_fast CRXPLAN')
++    ap.add_argument('--json', help='JSON plan for model_doom_qwen.py --rom-plan')
++    a = ap.parse_args()
++    disk = open(a.disk, 'rb').read()
++    off, ln, tic = load_reqlog(a.reqlog)
++    plan = plan_greedy(off, ln, tic, len(disk), a.budget) if a.greedy else plan_fixed(off, ln, tic, len(disk), a.tics)
++    for lo, hi, ext in plan:
++        sel = (tic >= lo) & (tic < hi)
++        w = len(build_window(ext, disk, limit=1 << 30))
++        print(f'chunk markers {lo:3d}-{hi:3d}: reqs {int(sel.sum()):6d} reqB {int(ln[sel].sum()):8d} '
++              f'extents {len(ext):4d} blob {sum(e - s for s, e in ext):7d} window {w:7d} '
++              f'{"OK" if w <= a.budget else "OVER"}')
++    print('chunks', len(plan))
++    if a.out:
++        write_plan(a.out, plan, disk)
++    if a.json:
++        import json
++        json.dump(dict(base=CRX_BASE, chunks=[dict(lo=lo, hi=hi, extents=ext) for lo, hi, ext in plan]),
++                  open(a.json, 'w'))
++
++
++if __name__ == '__main__':
++    main()
+diff -ruN a/tools/model_doom_qwen.py b/tools/model_doom_qwen.py
+--- a/tools/model_doom_qwen.py	2026-11-03 19:54:52
++++ b/tools/model_doom_qwen.py	2026-11-03 19:54:52
+@@ -93,7 +93,7 @@
+ class Truth:
+     """The official reference machine + block device + key injection: the host's view."""
+ 
+-    def __init__(self, elf, disk, kelf, keys, disk_pause):
++    def __init__(self, elf, disk, kelf, keys, disk_pause, rom_plan=None):
+         from chipformer.rv import elf as relf, ref
+         sy = symbols(kelf)
+         self.kbox, self.dbox = sy['qos_input_mailbox'], sy['qos_disk_mailbox']
+@@ -103,7 +103,43 @@
+         self.keys = [[c, int(n), False] for c, n in keys]
+         self.disk_pause = disk_pause
+         self.tokens = 1
++        # chunk ROM (tools/chunkrom.py): the host fills the data-ROM window of the ROM chunk that contains the
++        # current frame-marker count; the guest (-DQ_CHUNKROM build) then serves those disk reads from ROM.
++        self.disk_bytes = disk
++        self.rom_chunks = rom_plan['chunks'] if rom_plan else []
++        self.rom_base = rom_plan['base'] if rom_plan else None
++        self.rom_cur = None            # index of the chunk whose window is installed (None = cleared)
+ 
++    def rom_index(self):
++        """ROM chunk containing the current frame-marker count (chunks are [lo, hi) marker counts)."""
++        n = len(self.marks)
++        for i, c in enumerate(self.rom_chunks):
++            if c['lo'] <= n < c['hi']:
++                return i
++        return None
++
++    def apply_rom_window(self):
++        """Install (fill_drom) or clear the window for the chunk containing the marker count on the truth machine.
++        Called only at a segment boundary, BEFORE the segment's start snapshot is cloned, so the model's
++        snapshot (core.snapshot -> DROM tables) and the oracle clone both contain it."""
++        if not self.rom_chunks:
++            return
++        i = self.rom_index()
++        if i == self.rom_cur:
++            return
++        import chunkrom
++        if i is None:
++            chunkrom.clear_drom(self.m, self.rom_base)
++        else:
++            ext = [tuple(e) for e in self.rom_chunks[i]['extents']]
++            chunkrom.fill_drom(self.m, ext, self.disk_bytes, self.rom_base)
++        self.rom_cur = i
++
++    def rom_boundary_due(self):
++        """True once the tic counter has left the installed chunk (the segment must end soon so the next
++        one starts with the right window; only checked at frame markers)."""
++        return bool(self.rom_chunks) and self.rom_index() != self.rom_cur
++
+     def key_pending(self):
+         return any(not k[2] and len(self.marks) >= k[1] for k in self.keys)
+ 
+@@ -167,6 +203,7 @@
+     nseg = 0
+     while len(truth.marks) < target:
+         truth.inject_due()
++        truth.apply_rom_window()
+         start = clone(m)
+         s0, t0, o0 = m.steps, truth.tokens, len(m.out)
+         ev, visited = None, set()
+@@ -175,6 +212,9 @@
+             ev = truth.step()
+             if ev == 'marker' and truth.key_pending():
+                 break  # a due key is injected at this boundary: end the segment at the marker
++            if ev == 'marker' and truth.rom_boundary_due():
++                ev = 'rom'  # the marker count left the installed ROM chunk: end the segment at this marker
++                break
+             if ev == 'disk':
+                 # stop BEFORE the store that published the request: the model halts at pc, the host
+                 # executes the store (+ the device's reply) and the next segment starts after it
+@@ -194,7 +234,9 @@
+                 if m.pc not in visited:
+                     break
+                 visited.add(m.pc)
+-                truth.step()
++                if truth.step() == 'disk':
++                    raise RuntimeError('disk request while advancing to a fresh breakpoint pc (ROM-chunk boundary): '
++                                       'shift the chunk boundary or add margin to the extents')
+             else:
+                 raise RuntimeError('no fresh breakpoint pc found')
+             stop_pc, instr, tokens = m.pc, m.steps - s0, truth.tokens - t0
+@@ -202,7 +244,7 @@
+         nseg += 1
+         yield dict(index=nseg, start=start, start_steps=s0, stop_pc=stop_pc, instr=instr,
+                    tokens=tokens, out=bytes(m.out[o0:]),
+-                   reason='disk' if ev == 'disk' else 'marker', markers=bytes(m.out[o0:]).count(b'\x02'))
++                   reason={'disk': 'disk', 'rom': 'rom'}.get(ev, 'marker'), rom_chunk=truth.rom_cur, markers=bytes(m.out[o0:]).count(b'\x02'))
+ 
+ 
+ def main():
+@@ -234,6 +276,9 @@
+                          'fast-forwards through the others (chunked/parallel verification, see model_doom_chunks.py)')
+     ap.add_argument('--keys', default='', help="key schedule 'CHAR@MARKERS,...' (e.g. 'p@3,\\n@10'): CHAR is typed (written to "
+                     "the input mailbox) at the first segment boundary after that many frame markers; \\n \\r \\s=space escapes")
++    ap.add_argument('--rom-plan', default=None, metavar='JSON', help='chunk-ROM plan from tools/chunkrom.py --json (needs the '
++                    '-DQ_CHUNKROM ELF): the host installs each ROM chunk\'s disk-extent window in the snapshot DROM so reads inside it never '
++                    'pause; segments are split at ROM-chunk boundaries (also honored by --segment-range and --plan-json)')
+     ap.add_argument('--plan-json', default=None, help='write per-segment plan (instr, tokens, bytes) and exit')
+     ap.add_argument('--result-json', default=None, help='write the final report here too')
+     ap.add_argument('--dry-run', action='store_true', help='reference machine stands in for the model')
+@@ -254,7 +299,8 @@
+     for tok in filter(None, args.keys.split(',')):
+         c, n = tok.rsplit('@', 1)
+         keys.append(({'\\n': '\n', '\\r': '\r', '\\s': ' '}.get(c, c), int(n)))
+-    truth = Truth(args.elf, Path(args.disk).read_bytes(), kelf, keys, not args.no_disk_pause)
++    rom_plan = json.loads(Path(args.rom_plan).read_text()) if args.rom_plan else None
++    truth = Truth(args.elf, Path(args.disk).read_bytes(), kelf, keys, not args.no_disk_pause, rom_plan)
+ 
+     chat = bridge = S = ids = None
+     if not args.dry_run:
+@@ -272,7 +318,7 @@
+         ra, rb = (int(x) for x in args.segment_range.split(':'))
+     if args.plan_json:
+         segs = [dict(index=g['index'], instr=g['instr'], tokens=g['tokens'], out=len(g['out']),
+-                     reason=g['reason'], stop_pc=g['stop_pc'], markers=g['markers']) for g in plan(truth, args)]
++                     reason=g['reason'], stop_pc=g['stop_pc'], markers=g['markers'], rom_chunk=g['rom_chunk']) for g in plan(truth, args)]
+         Path(args.plan_json).write_text(json.dumps(segs))
+         print(f'planned {len(segs)} segments, {sum(g["instr"] for g in segs)} instr, '
+               f'{sum(g["tokens"] for g in segs)} tokens')
+@@ -282,6 +328,7 @@
+     nver = 0
+     model_secs = 0.0
+     detail = []
++    reasons = {}
+     for seg in plan(truth, args):
+         nseg += 1
+         if not (ra <= nseg < rb):
+@@ -328,6 +375,7 @@
+                   and oracle.steps - seg['start_steps'] == seg['instr'] + 1)
+             model_chip += st['chip']; tot_text += st['text']
+         detail.append([nseg, bool(ok), seg['markers'], seg['instr'], seg['tokens']])
++        reasons[seg['reason']] = reasons.get(seg['reason'], 0) + 1
+         tot_i += seg['instr']; tot_t += seg['tokens']
+         produced += seg['out']
+         if not ok:
+@@ -354,6 +402,7 @@
+         console_bytes=len(produced), extra_full_text_tokens_for_echo=len(produced),
+         est_chip_seconds=round(tot_t / args.tok_per_s, 1), tok_per_s_assumed=args.tok_per_s,
+         frame_markers_in_output=produced.count(b'\x02'), out=args.out,
++        segments_by_reason=reasons, rom_plan=args.rom_plan,
+         segment_detail=detail)  # [index, ok, markers, instr, planned_tokens]
+     print(json.dumps(rep, indent=2))
+     if args.result_json:
