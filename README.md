@@ -58,16 +58,6 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 
 <p align="center"><img src="docs/assets/qwenos-doom-modelpixels.gif" alt="12 model-decoded DOOM frames from the clip (frames 2-4 and 12-20)" width="480"></p>
 
-**Per-frame facts and honest caveats** ([full table](docs/research/MODEL_PIXELS.md)):
-
-- 12 frames x about 32,100 bytes (frame 16: 32,887, which includes a 787-byte partial status-bar update). Each frame took about 2.2 M to 2.7 M instructions and 3.1 M to 3.7 M chip tokens (dump armed, about 10% more instructions than the production clip frames). All 12 are byte-exact against the emulator on rows 0-199, with zero lockstep divergence. A 13th attempt (frame 1) did not finish its dump and is not counted.
-- Frames not run on the model: the other 33 of the 45. The hero clip above still shows all 45, with pixels read by the emulator.
-- Cost: about 40 Modal A100 container runs (estimate, not billing data; frames 2-4 and 20 took about 34-36 container-minutes each, 6 sub-segments in parallel). Running all 45 frames this way would be roughly $60-70 more.
-- The host sets one guest RAM variable `q_dump_req=1` before each frame (typing `p` panics in this build) and cuts each frame into 6 sub-segments run on parallel GPUs.
-- The host maps palette index to RGB with the IWAD PLAYPAL to write the PNG. That is the only host-side pixel step; the saved model-emitted bytes equal the host reference bytes.
-- Status bar rows 200-239 are not in a frame's dump (a dump contains only the windows the engine redrew), so they are blank in the model PNGs.
-- The state before each frame was verified in the original clip run, not re-proved.
-
 ### 🛠️ What we fixed since the first clip
 
 - Before, every instruction of the clip was verified, but **the emulator read the pixels out of memory**. Now the **model emits the pixels**, each byte lockstep-checked.
