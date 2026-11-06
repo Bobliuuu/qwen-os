@@ -1,0 +1,42 @@
+{
+  "host": "ip-172-31-17-25",
+  "model_seconds": 775.0,
+  "gpu": "NVIDIA A10G",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 2033.5,
+  "instr_per_s": 1407.4,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "38:39",
+  "wall_seconds": 775.0,
+  "snapshot_marker": 0,
+  "frames": 45,
+  "segments": 1,
+  "total_segments": 38,
+  "first_segment": 38,
+  "instructions": 1090708,
+  "planned_chip_tokens": 1575907,
+  "tok_per_instr": 1.4448,
+  "model_chip_tokens": 1575918,
+  "model_text_tokens": 30,
+  "console_bytes": 1,
+  "extra_full_text_tokens_for_echo": 1,
+  "est_chip_seconds": 492.5,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 1,
+  "out": "/home/ubuntu/out/c34/console.bin",
+  "segments_by_reason": {
+    "split": 1
+  },
+  "rom_plan": "build/crx-plan.json",
+  "segment_detail": [
+    [
+      38,
+      true,
+      1,
+      1090708,
+      1575907
+    ]
+  ]
+}

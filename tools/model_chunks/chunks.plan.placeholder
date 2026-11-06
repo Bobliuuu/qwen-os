@@ -1,0 +1,9 @@
+# name target segment-range (A:B, 1-based segments; edit to the real plan). Extra args after 3rd column are passed through.
+c01 boot-frame 1:37
+c02 boot-frame 38:74
+c03 boot-frame 75:111
+c04 boot-frame 112:148
+c05 boot-frame 149:185
+c06 boot-frame 186:222
+c07 boot-frame 223:259
+c08 boot-frame 260:292

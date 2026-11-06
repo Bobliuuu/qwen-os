@@ -1,0 +1,69 @@
+Note that running a local entrypoint in detached mode only keeps the last triggered Modal function alive after the parent process has been killed or disconnected.
+✓ Initialized. View run at 
+https://modal.com/apps/jerry-zhu/main/ap-Znt3kletbdYrvNq5VPfJlt
+✓ Created objects.
+├── ✓ Uploaded /Users/jhome/qwenos-work/out/model/modal_chunks.py
+├── ✓ Uploaded 
+│   /Users/jhome/qwenos-work/out/model/../../qwenputer/experimental/riscv
+├── ✓ Created Function dump_starts.
+├── ✓ Created Function run_chunk_a100_40gb.
+├── ✓ Created Function run_chunk_a100_80gb.
+├── ✓ Created Function run_chunk_h100.
+├── ✓ Created Function run_chunk_l40s.
+└── ✓ Created Function run_chunk_a10g.
+35 chunks, bundle=final tag=prod1 gpus={'A100-40GB': 35}
+spawned dump_starts on Modal CPU
+22:14:27 spawned c00 A100-40GB
+22:14:28 spawned c01 A100-40GB
+dumped seg 1 instr=73456 steps=0 (1s)
+dumped seg 2 instr=1527 steps=73457 (1s)
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/jhome/qwenos-work/out/model/modal_chunks.py:162 in main               │
+│                                                                              │
+│   161 │   │   for i, (n, a) in list(pending):                                │
+│ ❱ 162 │   │   │   if ready(a):                                               │
+│   163 │   │   │   │   g = slots[min(i, len(slots) - 1)]                      │
+│                                                                              │
+│ /Users/jhome/qwenos-work/out/model/modal_chunks.py:157 in ready              │
+│                                                                              │
+│   156 │   │   ra, rb = (int(x) for x in a[a.index("--segment-range") + 1].sp │
+│ ❱ 157 │   │   have = {e.path.split("/")[-1] for e in sv.listdir("/")}        │
+│   158 │   │   return all(f"seg{k}.pkl" in have for k in range(ra, rb))       │
+│                                                                              │
+│ /Users/jhome/.pyenv/versions/3.12.10/lib/python3.12/site-packages/modal/_obj │
+│ ect.py:49 in wrapped                                                         │
+│                                                                              │
+│    48 │   │   await self.hydrate()                                           │
+│ ❱  49 │   │   return await method(self, *args, **kwargs)                     │
+│    50                                                                        │
+│                                                                              │
+│ /Users/jhome/.pyenv/versions/3.12.10/lib/python3.12/site-packages/modal/volu │
+│ me.py:975 in listdir                                                         │
+│                                                                              │
+│    974 │   │   """                                                           │
+│ ❱  975 │   │   return [entry async for entry in self.iterdir(path, recursive │
+│    976                                                                       │
+│                                                                              │
+│ /Users/jhome/.pyenv/versions/3.12.10/lib/python3.12/site-packages/modal/_obj │
+│ ect.py:61 in wrapped                                                         │
+│                                                                              │
+│    60 │   │   async with aclosing(method(self, *args, **kwargs)) as stream:  │
+│ ❱  61 │   │   │   async for item in stream:                                  │
+│    62 │   │   │   │   yield item                                             │
+│                                                                              │
+│ /Users/jhome/.pyenv/versions/3.12.10/lib/python3.12/site-packages/modal/volu │
+│ me.py:958 in iterdir                                                         │
+│                                                                              │
+│    957 │   │   │   req = api_pb2.VolumeListFilesRequest(volume_id=self.objec │
+│ ❱  958 │   │   │   async for batch in self.client._stub.VolumeListFiles.unar │
+│    959 │   │   │   │   for entry in batch.entries:                           │
+│                                                                              │
+│ /Users/jhome/.pyenv/versions/3.12.10/lib/python3.12/site-packages/modal/_grp │
+│ c_client.py:195 in unary_stream                                              │
+│                                                                              │
+│   194 │   │   self.wrapped_method.channel = await self.client._get_channel(s │
+│ ❱ 195 │   │   with grpc_error_converter():                                   │
+│   196 │   │   │   async for response in self.client._call_stream(self.wrappe │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ResourceExhaustedError: VolumeListFiles rate limit exceeded. Please wait and 
+retry.

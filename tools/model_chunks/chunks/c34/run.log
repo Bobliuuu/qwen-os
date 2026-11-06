@@ -1,0 +1,47 @@
+Current Python version 3.10 is below the recommended 3.11 version. It is recommended to upgrade to Python 3.11 or higher for the best experience.
+Loading weights:   0%|          | 0/580 [00:00<?, ?it/s]Loading weights:  34%|███▍      | 198/580 [00:00<00:00, 1973.90it/s]Loading weights:  68%|██████▊   | 396/580 [00:00<00:00, 1552.36it/s]Loading weights: 100%|██████████| 580/580 [00:00<00:00, 1884.22it/s]
+[transformers] The tokenizer you are loading from '/home/ubuntu/q4-rv1' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+{
+  "host": "ip-172-31-17-25",
+  "model_seconds": 775.0,
+  "gpu": "NVIDIA A10G",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 2033.5,
+  "instr_per_s": 1407.4,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "38:39",
+  "wall_seconds": 775.0,
+  "snapshot_marker": 0,
+  "frames": 45,
+  "segments": 1,
+  "total_segments": 38,
+  "first_segment": 38,
+  "instructions": 1090708,
+  "planned_chip_tokens": 1575907,
+  "tok_per_instr": 1.4448,
+  "model_chip_tokens": 1575918,
+  "model_text_tokens": 30,
+  "console_bytes": 1,
+  "extra_full_text_tokens_for_echo": 1,
+  "est_chip_seconds": 492.5,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 1,
+  "out": "/home/ubuntu/out/c34/console.bin",
+  "segments_by_reason": {
+    "split": 1
+  },
+  "rom_plan": "build/crx-plan.json",
+  "segment_detail": [
+    [
+      38,
+      true,
+      1,
+      1090708,
+      1575907
+    ]
+  ]
+}

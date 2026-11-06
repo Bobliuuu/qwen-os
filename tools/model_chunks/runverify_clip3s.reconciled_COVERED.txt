@@ -1,0 +1,1 @@
+COVERED frames 1..45: 35 chunks, 116333007 chip tokens verified, slowest chunk 6035 s

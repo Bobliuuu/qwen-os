@@ -1,0 +1,14 @@
+✓ Initialized. View run at 
+https://modal.com/apps/jerry-zhu/main/ap-UcPrWTNBmPbILSqPPIuL5V
+✓ Created objects.
+├── ✓ Uploaded /Users/jhome/qwenos-work/out/model/modal_chunks.py
+├── ✓ Uploaded 
+│   /Users/jhome/qwenos-work/out/model/../../qwenputer/experimental/riscv
+├── ✓ Created Function dump_starts.
+├── ✓ Created Function run_chunk_a100_40gb.
+├── ✓ Created Function run_chunk_a100_80gb.
+├── ✓ Created Function run_chunk_h100.
+├── ✓ Created Function run_chunk_l40s.
+└── ✓ Created Function run_chunk_a10g.
+1 chunks, bundle=final tag=prod1h gpus={'L40S': 1}
+22:28:04 spawned c30 L40S
