@@ -65,6 +65,19 @@ Note that the asset demo specifically looks for the synthetic `QOSDEMO` lump
 and will report a mismatch on ordinary DOOM WADs; **the virtual disk adapter
 itself accepts arbitrary WAD bytes**. The actual DOOM engine has not been ported.
 
+## v0.12: real-WAD BSP viewer
+
+`/bin/doom` now renders Freedoom 0.13.0 `freedoom1.wad` E1M1 (fetch separately;
+tests skip if absent, override via `$QOS_FREEDOOM_WAD`): guest-side streamed
+NODES/SSECTORS/SEGS front-to-back BSP traversal, per-column clipping, sector
+light/sky shading, BLOCKMAP collision with step/headroom checks. ~225-290K guest
+instructions per frame on the reference emulator. Still a 32x24 flat-colour map
+viewer: no textures, sprites, monsters, doors, ticks or sound. `make check`: 32 tests.
+
+**Engine port feasibility:** vanilla doomgeneric on rv32im is ~168 KiB text (fits ROM
+after stripping) but needs far more than 22 KiB RAM; a DMC100-style port needs ~21.7 KB
+minimum, so it would require reclaiming kernel `.bss`. Not started.
+
 ## Upstream CPU verification
 
 With Qwenputer checked out, run its **real upstream reference CPU**:
@@ -78,8 +91,11 @@ Omit `--wad-device` to test no-device boot. Use `--wad /path/to/file.wad`
 to supply a real WAD. The tool uses upstream `chipformer.rv.elf.program` and
 `chipformer.rv.ref.Machine` and writes replies through the real reference
 machine's RAM word array. The adapter's memory logic is locally tested;
-**we could not run the upstream package here** because it is not installed
-and network fetching is unavailable.
+**Verified (2026-11-03):** upstream `ref.Machine` boots QwenOS with the WAD
+device (exit 0, `QWENOS_BOOT_OK`, 120,267 instructions, ~173k chip tokens) and
+`tools/upstream_probe.py` passes park/resume. Note upstream `generate()` defaults
+to `max_chip=60000`, so a full boot needs a larger chip-token budget on the model
+path. No GPU/checkpoint run has been done.
 
 ## DOOM platform HAL and genuine-engine status
 
@@ -267,3 +283,28 @@ firmware architecture uses externally loaded overlays and several megabytes
 of flash. It cannot simply be linked into our current 16-KiB `doom` ROM slot
 or loaded as runtime code on stock Qwenputer, whose ROM is immutable. Porting
 it requires rebuilding its platform layer and repacking the ROM/overlays.
+
+## /bin/doomd takeover mode and RAM map (v0.11)
+
+`/bin/doomd` (exec ROM `0x41000`, entry `app_main` from `apps/doomd_crt0.S`) is a
+*takeover* app: `exec("/bin/doomd")` (or `-DQOS_BOOT_DOOMD` kernel, `make
+build/qwenos-doomd.elf`) abandons the shell stack and RAMFS and gives the app all
+RAM from `0x0098` to `0x8000` (32616 B), with its stack growing down from `0x8000`.
+Resident kernel **core** (`0x0..0x97`, 152 B): a 48-byte takeover stack at the very
+bottom of RAM (an overflow faults), 12 B of state, the input mailbox and the disk
+mailbox header plus its first 64 window bytes (while doomd runs `DISK_REQUEST` length
+is limited to `QOS_DISK_TAKEOVER_WINDOW` = 64; the rest of the 256-byte window is
+doomd RAM). The 32x24 framebuffer, the normal kernel stack and RAMFS live in the
+destroyable overlay: while doomd runs the framebuffer syscalls stream to the console
+instead (`0x01 'V' x y n bytes` column run, `0x01 'H' x y n bytes` row run, `0x01 'K' c`
+clear; new `FB_COL` syscall; `FB_GET` fails, `FB_PRESENT` returns 1). While doomd runs
+only console, framebuffer, key, disk and getpid/yield syscalls work (file syscalls
+return -1). When doomd returns the kernel zeroes its overlay and warm-reboots
+(RAMFS content is lost). RAM is dirty at entry and `.data` is not preloaded:
+crt0 copies `.data` from its data-ROM image and zeroes `.bss`.
+
+Exec ROM was repacked: kernel `0x40000` (4 KiB), doomd `0x41000..0x77fff`
+(220 KiB), shell/paint/raycast/asset `0x78000..0x7bfff` (4 KiB each), WAD viewer
+`0x7c000`. Data ROM: kernel `0x20000`, doomd `0x21000..0x3efff` (120 KiB),
+small-app rodata `0x3f000..0x3ffff`. See `linker/doomd.ld`,
+`include/qos.h`, and `tools/check_layout.py` (enforces all of this).

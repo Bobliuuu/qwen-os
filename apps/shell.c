@@ -3,7 +3,7 @@ int app_main(const qos_api *a){
  if(a->abi_version!=1)return 1;
  unsigned key=qcall(a,QOS_SYS_KEY_POLL,0,0,0);
  if(key){qputs(a,"QwenOS input: ");qcall(a,QOS_SYS_PUTC,key&255,0,0);qputs(a,"\n");}
- qputs(a,"QwenOS /bin/sh: pid ");qcall(a,QOS_SYS_PUTC,'0'+qcall(a,QOS_SYS_GETPID,0,0,0),0,0);qputs(a,"\n$ ls\n/README\n/bin/sh\n/bin/paint\n/bin/raycast\n/bin/asset\n/bin/doom\n/tmp/note\n/tmp/log\n");
+ qputs(a,"QwenOS /bin/sh: pid ");qcall(a,QOS_SYS_PUTC,'0'+qcall(a,QOS_SYS_GETPID,0,0,0),0,0);qputs(a,"\n$ ls\n/README\n/bin/sh\n/bin/paint\n/bin/raycast\n/bin/asset\n/bin/doom\n/bin/doomd\n/tmp/note\n/tmp/log\n");
  qputs(a,"$ cat /README\n");
  unsigned fd=qcall(a,QOS_SYS_OPEN,(uintptr_t)"/README",QOS_O_READ,0);
  if(fd>QOS_MAX_FD)return 2;

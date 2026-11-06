@@ -1,7 +1,7 @@
 ENTRY(app_main)
 MEMORY {
- ROM (rx): ORIGIN = 0x68000, LENGTH = 0x8000
- DROM (r): ORIGIN = 0x34000, LENGTH = 0x4000
+ ROM (rx): ORIGIN = 0x79000, LENGTH = 0x1000
+ DROM (r): ORIGIN = 0x3f400, LENGTH = 0x100
 }
 SECTIONS {
  .text : { *(.text*) } > ROM

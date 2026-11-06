@@ -1,0 +1,30 @@
+QwenOS /bin/doomd RAM budget, v2 (RAM squeeze).  32 KiB RAM = 0x0000-0x7fff (hardwired in the circuit).
+
+                              before (v1)            after (v2)
+ kernel core                  0x100..0x5bf  1216 B   0x000..0x097   152 B  (+256 reserved gap, +1064 core)
+   input mailbox                       8                   8
+   disk mailbox                      276                  84  (20 hdr + 64 window while doomd runs)
+   framebuffer                       768                   0  (overlay; FB syscalls stream to console)
+   kernel stack                      128                  48  (takeover stack; normal stack is in the overlay)
+   state words                        36                  12
+ doomd stack reserve                1408                1152  (measured peak 1016 B = 136 B margin, 12e9 instr)
+ engine .data/.bss                  4276                4276  (frame region starts 16 B aligned)
+ => __frame_start                   5760 (0x1680)       4448 (0x1160)   -1312 B
+ => fixed + stack                   7168                5600            -1568 B
+ flat cache (4 x 1028, plans A-C)   4112                1028 (1 slot for the flats that did not fit ROM)   -3084 B
+ data ROM (120 KiB at 0x21000)      29.4 KB used        119.8 KB used  (88 flats = 90112 B baked, free 3 KB)
+ record cache                       2336 (16Bx32setx4)  1168 (16Bx16setx4)
+
+Frame regions (RV32 sizes, always textured): plan A (w16) 15200 B, plans B/C/D (w8) 9596 B (a smaller plan
+would overlap the front-end compose buffers at frame offset 7168..8368, so there is no w < 8 plan).
+The converter picks A, else B per map and skill. Arena (level state + object pages) = what is left:
+ plan A arena 9764 B (v1: 3848 B, E1M8 only), plan B arena 15324 B (v1: 9408 B).
+E1, 27 map/skill combos: v1 3xA 19xB 1xC 4xD (and its frames show flat-colour floors)
+                          v2 22xA 5xB, textured floors and ceilings everywhere, flats = ROM or the 1 slot.
+ (QFLAT_SLOTS=0 for mklayout.py: 24xA 3xB, the ~3 % of sector flat references that are not in ROM go flat-colour.)
+Measured with tools/rv32_fast (E1M1, DEMO1, frames 400-440): v1 5.10 M instr/frame (flat-colour floors),
+v2 5.56 M (textured, w16; the same textured frames from disk flats cost 6.32 M, so ROM flats save 12 %).
+Same image, same frame: ROM flats vs disk flats are pixel-identical. w8 instead of w16 costs +10 %.
+Record cache: 16 sets x 4 ways x 16 B measured best (4: 5.38 M, 8: 5.19 M, 16: 5.01 M, 32: 5.25 M instr/frame
+in the A/k0 experiments); 32 sets plus anything bigger than 4384 B no longer fits E1M7 skill 3 in plan B.
+Rebuild with RC_DEFS="-DRC_LINE=<16|32> -DRC_SETS=<n>" (power of 2) and repack the image.

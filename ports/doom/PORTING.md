@@ -1,6 +1,8 @@
 # Genuine DOOM engine port — integration contract
 
-This folder is an OS-device HAL used by the WAD map viewer. It is not an
+This folder is an OS-device HAL used by `/bin/doom`, a guest-side BSP renderer
+that runs Freedoom E1M1 (streamed NODES/SSECTORS/SEGS, per-sector shading,
+BLOCKMAP collision, flat colours, no textures/sprites/game logic). It is not an
 engine port. For playable DOOM, use the original GPL DOOM engine or the
 32-KiB-RAM DMC100-Doom fork, not this viewer as a replacement.
 

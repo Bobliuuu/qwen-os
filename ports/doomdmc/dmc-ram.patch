@@ -1,0 +1,80 @@
+diff -u a/cache.h b/cache.h
+--- a/cache.h	2026-11-03 18:49:28
++++ b/cache.h	2026-11-03 18:49:29
+@@ -10,9 +10,13 @@
+ 
+ #include <stdint.h>
+ 
+-#define RC_LINE 16
++#ifndef RC_LINE
++#define RC_LINE 16      // QwenOS: -DRC_LINE / -DRC_SETS pick the cache geometry (powers of 2)
++#endif
+ #define RC_WAYS 4
++#ifndef RC_SETS
+ #define RC_SETS 32
++#endif
+ #define RC_LINES (RC_WAYS * RC_SETS)
+ // RAM of the cache: line data, u16 tags and the LRU bytes
+ #define RC_BYTES (RC_LINES * RC_LINE + RC_LINES * 2 + RC_SETS)
+diff -u a/fetch.c b/fetch.c
+--- a/fetch.c	2026-11-03 18:49:28
++++ b/fetch.c	2026-11-03 18:49:29
+@@ -347,11 +347,17 @@
+     flat_touch(s);
+ }
+ 
++// QwenOS: the flats the E1 maps use live in the data ROM (ports/doomdmc/mkflatrom.py), so no
++// flat cache RAM and no flat reads; any other flat falls back to the slots (k = 0: solid colour).
++extern const uint16_t q_flat_idx[];
++extern const uint8_t q_flat_rom[][DMC_FLAT_SIZE];
+ const uint8_t *flat_get(int flat)
+ {
++    flat_check(flat);
++    if (q_flat_idx[flat] != 0xFFFFu)
++        return q_flat_rom[q_flat_idx[flat]];
+     if (!flat_slots)
+         return NULL;
+-    flat_check(flat);
+     int s = flat_find(flat);
+     if (s < 0) {
+         // the previous flat is done with, slots of prefetches are kept
+@@ -371,6 +377,8 @@
+ void flat_prefetch(int flat)
+ {
+     flat_check(flat);
++    if (q_flat_idx[flat] != 0xFFFFu)
++        return;
+     if (flat_slots < 2 || flat_find(flat) >= 0)
+         return;
+     // never the slot in use or one still loading
+diff -u a/level.c b/level.c
+--- a/level.c	2026-11-03 18:49:28
++++ b/level.c	2026-11-03 18:49:29
+@@ -31,7 +31,7 @@
+ int			o_page_cap;
+ int			o_mover_cap;
+ #else
+-#define ARENA_MAX	14800	// plan D
++#define ARENA_MAX	24000	// QwenOS: arenas are larger than the AT32's plan D (no flat cache RAM)
+ #endif
+ #define ARENA_END	O_ARENA_END
+ 
+diff -u a/r_frame.c b/r_frame.c
+--- a/r_frame.c	2026-11-03 18:49:28
++++ b/r_frame.c	2026-11-03 18:49:29
+@@ -213,13 +213,13 @@
+         config_plan = plan;
+         flat_set_slots(slots_request >= 0 ? slots_request : M.plan.k);
+         r_layout_t l;
+-        if (R_Layout(&l, pw, M.plan.k != 0))
++        if (R_Layout(&l, pw, 1))  // QwenOS: always textured (ROM flats)
+             I_Error("R_FrameSetup: plan needs %u B of frame region", (unsigned)l.total);
+         frame_len = ALIGN16(l.total);
+         lay.w = 0;
+     }
+     int w = w_request ? w_request : pw;
+-    int textured = solid_request >= 0 ? !solid_request : M.plan.k != 0;
++    int textured = solid_request >= 0 ? !solid_request : 1;  // QwenOS: ROM flats
+     if (w != lay.w || textured != lay.textured) {
+         R_PumpIdle();
+         R_ApplyLayout(w, textured);

@@ -2,17 +2,25 @@
 #define QWENOS_QOS_H
 #include <stdint.h>
 #include <stddef.h>
-#define QOS_RAM_BEGIN   0x100u
+#define QOS_RAM_BEGIN   0x0u
 #define QOS_RAM_END     0x8000u
 #define QOS_DROM_BEGIN  0x20000u
 #define QOS_DROM_END    0x40000u
 #define QOS_ROM_BEGIN   0x40000u
 #define QOS_ROM_END     0x80000u
-#define QOS_SHELL_ENTRY 0x60000u
-#define QOS_PAINT_ENTRY 0x68000u
-#define QOS_RAY_ENTRY   0x70000u
-#define QOS_ASSET_ENTRY 0x78000u
-#define QOS_DOOM_ENTRY 0x7c000u
+/* Executable ROM map (repacked: small apps at the top, engine gets the middle).
+   0x40000-0x40fff kernel (4 KiB)        0x41000-0x77fff /bin/doomd (220 KiB)
+   0x78000 shell, 0x79000 paint, 0x7a000 raycast, 0x7b000 asset (4 KiB each),
+   0x7c000-0x7ffff WAD viewer (16 KiB). */
+#define QOS_DOOMD_ENTRY 0x41000u
+#define QOS_SHELL_ENTRY 0x78000u
+#define QOS_PAINT_ENTRY 0x79000u
+#define QOS_RAY_ENTRY   0x7a000u
+#define QOS_ASSET_ENTRY 0x7b000u
+#define QOS_DOOM_ENTRY  0x7c000u
+/* /bin/doomd takeover: kernel core ends below QOS_DOOMD_RAM_BASE; doomd owns
+   QOS_DOOMD_RAM_BASE..QOS_RAM_END (stack top = QOS_RAM_END). */
+#define QOS_DOOMD_RAM_BASE 0x98u
 #define QOS_FB_W 32u
 #define QOS_FB_H 24u
 #define QOS_MAX_FD 12u
@@ -37,7 +45,11 @@
 #define QOS_SYS_DISK_REQUEST 18u /* byte offset, destination RAM pointer, length<=256; 0 accepted */
 #define QOS_SYS_DISK_POLL 19u /* 0=pending, len=completed, negative=failure */
 #define QOS_SYS_DISK_CANCEL 20u /* abort pending request */
+#define QOS_SYS_FB_COL 21u /* x|y0<<8, pointer, n: n samples down column x from row y0 */
 #define QOS_DISK_WINDOW 256u
+/* While /bin/doomd runs only this many window bytes are resident (the rest of the mailbox
+   window is doomd RAM): DISK_REQUEST length is limited to it. */
+#define QOS_DISK_TAKEOVER_WINDOW 64u
 #define QOS_O_READ 0u
 #define QOS_O_WRITE 1u
 typedef uint32_t (*qos_syscall_t)(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c);
