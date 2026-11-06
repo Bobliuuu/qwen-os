@@ -1,6 +1,6 @@
 # Model-decoded pixels: 8 contiguous DOOM frames emitted by the Qwen model
 
-Status 2026-11-04: **8 frames (clip frames 12-19, E1M1) have their pixel bytes emitted by the real Qwen3.5-4B checkpoint as console BYTE tokens, in lockstep with the oracle, and the decoded view is byte-identical to the emulator's frame.** The other 37 of the 45 clip frames were NOT done (cost, see below). The earlier clip (README) is unchanged: there Qwen verified the instruction trace and the emulator read the pixels.
+Status 2026-11-05: **12 frames (clip frames 2-4 and 12-20, E1M1) have their pixel bytes emitted by the real Qwen3.5-4B checkpoint as console BYTE tokens, in lockstep with the oracle, and the decoded view is byte-identical to the emulator's frame.** The other 33 of the 45 clip frames were NOT done (cost, see below). The earlier clip (README) is unchanged: there Qwen verified the instruction trace and the emulator read the pixels.
 
 ## What is the model, what is the host
 
@@ -27,7 +27,7 @@ Compared against the emulator frames `out/clip/frames/frame_NN.png` (decoded fro
 | 18 | 32,100 | 2,314,556 | 3,233,391 | byte-identical | not in dump |
 | 19 | 32,100 | 2,233,570 | 3,144,697 | byte-identical | not in dump |
 
-**8 of 45 frames model-decoded and byte-identical on the 320x200 view; 37 not run.** The status bar (rows 200-239, drawn by the engine only when it changes) is not part of a frame's dump, so it is not model-decoded for these frames and is blank in the PNGs/video; a frame whose dump carries a bar update (16) has only that window. Every one of the 14 model runs: mode MODEL, all sub-segments ok, zero lockstep divergence (`result.json` per run, see `out/clip_modelpixels/comparison.txt`).
+**12 of 45 frames model-decoded and byte-identical on the 320x200 view; 33 not run.** Frames 2, 3, 4 and 20 (added 2026-11-05, one run each, 6 sub-segments, A100, 2.29 M to 2.66 M instr, `exact: true`, `bad_rows_0_199: 0`) join 12-19. A run of frame 1 did not finish its dump (12,871 of 32,100 bytes) and is not counted. The status bar (rows 200-239, drawn by the engine only when it changes) is not part of a frame's dump, so it is not model-decoded for these frames and is blank in the PNGs/video; a frame whose dump carries a bar update (16) has only that window. Every one of the 14 model runs: mode MODEL, all sub-segments ok, zero lockstep divergence (`result.json` per run, see `out/clip_modelpixels/comparison.txt`).
 
 ## Cost
 
@@ -58,4 +58,4 @@ python3 tools/make_mp_video.py out/clip_modelpixels docs/assets/qwenos-doom-mode
 
 - Sub-segment start states and `q_dump_req` are host-written; the frame's pixels are produced by guest code running on the model from the verified state before that frame. The state before frame N was itself verified in the clip run (not re-proved here).
 - The dump-armed frame runs ~10% more instructions than the production frame (dump routine); instruction counts of the production clip are unaffected.
-- Not covered: frames other than 12-19, the status bar, the frame-1 level load.
+- Not covered: frames other than 2-4 and 12-20, the status bar, the frame-1 level load.
