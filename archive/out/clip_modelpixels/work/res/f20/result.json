@@ -1,0 +1,88 @@
+{
+  "k_graph": 64,
+  "gpu_mem_peak_mb": 19371,
+  "kgraph_stats": {
+    "pipelined": 0,
+    "blocks": 47114,
+    "block_tokens": 3015296,
+    "slow_blocks": 0,
+    "single_tokens": 200918
+  },
+  "gen_chip_seconds": 0.0,
+  "gen_text_seconds": 0.0,
+  "host": "modal",
+  "model_seconds": 2042.1,
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 1575.0,
+  "instr_per_s": 1122.3,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "2000:2006",
+  "wall_seconds": 2043.2,
+  "snapshot_marker": 0,
+  "frames": 45,
+  "segments": 6,
+  "total_segments": 2005,
+  "first_segment": 2000,
+  "instructions": 2291778,
+  "planned_chip_tokens": 3216208,
+  "tok_per_instr": 1.4034,
+  "model_chip_tokens": 3216214,
+  "model_text_tokens": 32274,
+  "console_bytes": 32100,
+  "extra_full_text_tokens_for_echo": 32100,
+  "est_chip_seconds": 1005.1,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 745,
+  "out": "/results/fp45/f20/console.bin",
+  "segments_by_reason": {
+    "split": 6
+  },
+  "rom_plan": "build/crx-plan.json",
+  "segment_detail": [
+    [
+      2000,
+      true,
+      0,
+      382132,
+      529985
+    ],
+    [
+      2001,
+      true,
+      0,
+      387990,
+      543916
+    ],
+    [
+      2002,
+      true,
+      0,
+      429110,
+      601865
+    ],
+    [
+      2003,
+      true,
+      0,
+      341476,
+      480084
+    ],
+    [
+      2004,
+      true,
+      0,
+      410945,
+      575269
+    ],
+    [
+      2005,
+      true,
+      0,
+      340125,
+      485089
+    ]
+  ]
+}

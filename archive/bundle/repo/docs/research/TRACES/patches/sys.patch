@@ -1,0 +1,363 @@
+diff -ruN -x build wt-perf/repo2/include/qos.h wt-sys/repo2/include/qos.h
+--- wt-perf/repo2/include/qos.h	2026-11-03 19:01:23
++++ wt-sys/repo2/include/qos.h	2026-11-03 19:19:43
+@@ -21,6 +21,12 @@
+ /* /bin/doomd takeover: kernel core ends below QOS_DOOMD_RAM_BASE; doomd owns
+    QOS_DOOMD_RAM_BASE..QOS_RAM_END (stack top = QOS_RAM_END). */
+ #define QOS_DOOMD_RAM_BASE 0x5c0u
++/* Resident core addresses (kernel.ld ASSERTs them): trusted takeover code (/bin/doomd) may access the
++   mailboxes and framebuffer directly instead of through syscalls. Disk mailbox layout:
++   request_seq,offset,length,ready_seq,status (u32 each), bytes[QOS_DISK_WINDOW]. */
++#define QOS_IN_MB 0x100u
++#define QOS_DISK_MB 0x108u
++#define QOS_FB_ADDR 0x21cu
+ #define QOS_FB_W 32u
+ #define QOS_FB_H 24u
+ #define QOS_MAX_FD 12u
+diff -ruN -x build wt-perf/repo2/kernel/main.c wt-sys/repo2/kernel/main.c
+--- wt-perf/repo2/kernel/main.c	2026-11-03 19:01:23
++++ wt-sys/repo2/kernel/main.c	2026-11-03 19:19:43
+@@ -10,7 +10,8 @@
+ #define APP_STACK_BYTES 1536u
+ static uint8_t app_stacks[QOS_MAX_PROC][APP_STACK_BYTES] __attribute__((aligned(16)));
+ extern int qos_app_call(uintptr_t entry,const qos_api *api,uintptr_t stack_top);
+-static uint8_t framebuffer[QOS_FB_W*QOS_FB_H] CORE(c_fb);
++uint8_t qos_framebuffer[QOS_FB_W*QOS_FB_H] CORE(c_fb);
++#define framebuffer qos_framebuffer
+ /* Firmware-visible mailbox. The model may inject external device events by
+  * updating the RAM snapshot between execution bursts. Not a hardware keyboard.
+  * seq is written LAST by the device driver; key code 0 means no event. */
+@@ -132,7 +133,7 @@
+   if(disk_active || c==0 || c>QOS_DISK_WINDOW || !writable_addr(b,c) || a>0xffffffffu-c)
+    return (unsigned)-1;
+   disk_dest=(uint32_t)b;disk_length=(uint32_t)c;disk_active=1;
+-  disk_seq++;
++  disk_seq=qos_disk_mailbox.request_seq+1; /* the mailbox is the sequence authority (takeover code writes it directly) */
+   qos_disk_mailbox.offset=(uint32_t)a;
+   qos_disk_mailbox.length=(uint32_t)c;
+   qos_disk_mailbox.status=0;
+@@ -158,7 +159,7 @@
+ static unsigned sys_entry(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
+  if(n!=QOS_SYS_DISK_READ)return sys(n,a,b,c);
+  if(disk_active||c-1u>=QOS_DISK_WINDOW||b<QOS_RAM_BEGIN||b>QOS_RAM_END-c||a>0xffffffffu-c)return (unsigned)-1;
+- uint32_t seq=++disk_seq;
++ uint32_t seq=qos_disk_mailbox.request_seq+1;disk_seq=seq;
+  qos_disk_mailbox.offset=(uint32_t)a;qos_disk_mailbox.length=(uint32_t)c;qos_disk_mailbox.status=0;
+  qos_disk_mailbox.request_seq=seq;
+  if(qos_disk_mailbox.ready_seq!=seq){
+@@ -186,7 +187,7 @@
+ void qos_takeover_run(void){
+  takeover=1;current_pid=2;disk_active=0;
+  qos_app_call(QOS_DOOMD_ENTRY,&api,QOS_RAM_END);
+- takeover=0;disk_active=0;reboots++;current_pid=0;
++ takeover=0;disk_active=0;key_seq_seen=qos_input_mailbox.seq;reboots++;current_pid=0;
+  for(uint32_t *p=__ov_start;p<__ov_end;p++)*p=0;
+  const char *s="QWENOS_DOOMD_EXIT\n";while(*s)hw_putc((uint8_t)*s++);
+  register unsigned a0 asm("a0")=(unsigned)qos_main(),a7 asm("a7")=93;
+diff -ruN -x build wt-perf/repo2/linker/kernel.ld wt-sys/repo2/linker/kernel.ld
+--- wt-perf/repo2/linker/kernel.ld	2026-11-03 18:55:14
++++ wt-sys/repo2/linker/kernel.ld	2026-11-03 19:19:43
+@@ -24,6 +24,9 @@
+   __core_end = .;
+  } > RAM
+  .bss (NOLOAD) : ALIGN(16) { __ov_start = .; *(.bss*) *(.sbss*) *(COMMON) . = ALIGN(4); __ov_end = .; __bss_end = .; } > RAM
++ ASSERT(qos_input_mailbox == 0x100, "QOS_IN_MB moved")
++ ASSERT(qos_disk_mailbox == 0x108, "QOS_DISK_MB moved")
++ ASSERT(qos_framebuffer == 0x21c, "QOS_FB_ADDR moved")
+  ASSERT(__core_end <= 0x5c0, "kernel core exceeds doomd app RAM base 0x5c0")
+  ASSERT(__bss_end <= 0x1800, "kernel encroaches on application RAM")
+  ASSERT(SIZEOF(.data) == 0, "kernel .data not supported (warm reboot would not restore it)")
+diff -ruN -x build wt-perf/repo2/ports/doomdmc/doomd_main.c wt-sys/repo2/ports/doomdmc/doomd_main.c
+--- wt-perf/repo2/ports/doomdmc/doomd_main.c	2026-11-03 19:02:30
++++ wt-sys/repo2/ports/doomdmc/doomd_main.c	2026-11-03 19:19:56
+@@ -78,6 +78,7 @@
+ int doomd_main(const qos_api *api)
+ {
+     qapi = api;
++    q_input_init();
+     // dirty RAM: zero everything between .bss and the stack reserve, paint the stack
+     memset(__bss_end, 0, (uint32_t)(uintptr_t)(__stack_limit - __bss_end));
+     {
+diff -ruN -x build wt-perf/repo2/ports/doomdmc/qlcd.c wt-sys/repo2/ports/doomdmc/qlcd.c
+--- wt-perf/repo2/ports/doomdmc/qlcd.c	2026-11-03 18:55:17
++++ wt-sys/repo2/ports/doomdmc/qlcd.c	2026-11-03 19:20:16
+@@ -20,6 +20,10 @@
+ volatile struct pump_stats pump_stats;
+ 
+ static int wx0, wx1, wy0, wy1, wflags, wcur;
++static int wph, wcx;           /* wcur % 10, wcur / 10 (tracked incrementally) */
++static int wph0, wcx0;         /* the same for wx0 */
++static int fb_n, fb_s0;        /* FB sample rows in this window: count, offset of the first sample in a column */
++static volatile uint8_t *fb_base; /* &framebuffer[first sample row][0] */
+ static int dumping;
+ static int pending;
+ uint32_t q_frames;
+@@ -29,6 +33,14 @@
+ void pump_begin(int x0, int x1, int y0, int y1, int flags)
+ {
+     wx0 = x0; wx1 = x1; wy0 = y0; wy1 = y1; wflags = flags; wcur = x0;
++    wph0 = x0 % 10; wcx0 = x0 / 10; wph = wph0; wcx = wcx0;
++    {   /* FB rows whose sample row (cy*10+5) lies in this window */
++        int cy0 = (y0 + 4) / 10;
++        int n = 0;
++        if (y1 >= 5) { int cy1 = (y1 - 5) / 10; if (cy1 >= (int)QOS_FB_H) cy1 = (int)QOS_FB_H - 1; n = cy1 - cy0 + 1; }
++        if (n < 0 || cy0 >= (int)QOS_FB_H) n = 0;
++        fb_n = n; fb_s0 = cy0 * 10 + 5 - y0; fb_base = Q_FB + cy0 * QOS_FB_W;
++    }
+     if (q_dump_req) { dumping = 1; q_dump_req = 0; }
+ #ifdef Q_DUMP_ALL
+     dumping = 1; /* verification build: stream every pump window (see tools/fh.py) */
+@@ -41,27 +53,48 @@
+     }
+ }
+ 
++// Each pixel stream goes to the 32x24 framebuffer (nearest sample of every 10x10 block), stored
++// straight into the resident framebuffer (takeover owns RAM; no FB_SET syscall).
++static inline __attribute__((always_inline)) void fb_col(const uint8_t *col)
++{
++    volatile uint8_t *d = fb_base + wcx;
++    const uint8_t *s = col + fb_s0;
++    for (int i = fb_n; i; i--) { *d = *s; d += QOS_FB_W; s += 10; }
++}
++static inline __attribute__((always_inline)) void adv(void)
++{
++    if (++wcur > wx1) { wcur = wx0; wph = wph0; wcx = wcx0; }
++    else if (++wph == 10) { wph = 0; wcx++; }
++}
++
+ void pump_submit(const uint8_t *cols, int ncols)
+ {
+     int h = wy1 - wy0 + 1;
+     int rep = (wflags & PUMP_DOUBLE) ? 2 : 1;
+-    if (dumping) { q_putc(1); q_putc('D'); put16((unsigned)(ncols * rep * h)); }
+-    for (int c = 0; c < ncols; c++) {
+-        const uint8_t *col = cols + c * h;
+-        for (int r = 0; r < rep; r++) {
+-            int x = wcur;
+-            if (++wcur > wx1) wcur = wx0;
+-            if (dumping)
++    if (dumping) {
++        q_putc(1); q_putc('D'); put16((unsigned)(ncols * rep * h));
++        for (int c = 0; c < ncols; c++) {
++            const uint8_t *col = cols + c * h;
++            for (int r = 0; r < rep; r++) {
++                if (wph == 5) fb_col(col);
++                adv();
+                 for (int y = 0; y < h; y++) q_putc(col[y]);
+-            if (x % 10 == 5) {
+-                unsigned cx = (unsigned)(x / 10);
+-                // FB rows whose sample row (cy*10+5) lies in this window
+-                int cy0 = (wy0 + 4) / 10;
+-                for (int cy = cy0; cy < (int)QOS_FB_H && cy * 10 + 5 <= wy1; cy++)
+-                    if (cy * 10 + 5 >= wy0)
+-                        qapi->syscall(QOS_SYS_FB_SET, cx, (unsigned)cy, col[cy * 10 + 5 - wy0]);
+             }
+         }
++    } else if (rep == 1) {
++        const uint8_t *col = cols;
++        for (int c = ncols; c; c--, col += h) {
++            if (wph == 5) fb_col(col);
++            adv();
++        }
++    } else {
++        const uint8_t *col = cols;
++        for (int c = ncols; c; c--, col += h) {
++            if (wph == 5) fb_col(col);
++            adv();
++            if (wph == 5) fb_col(col);
++            adv();
++        }
+     }
+     pump_stats.fills += (uint32_t)ncols;
+ }
+@@ -69,12 +102,13 @@
+ int pump_pending(void) { return pending; }
+ void pump_end(void) {}
+ 
+-// the frame is done: called by the main loop
++// the frame is done: called by the main loop. The framebuffer is the live display memory (the
++// FB_PRESENT syscall only computed a checksum nobody reads while doomd owns the machine), so
++// presenting is just the frame marker.
+ void q_frame_end(void)
+ {
+     q_frames++;
+     if (dumping) { q_putc(1); q_putc('E'); put16(q_frames); dumping = 0; }
+-    qapi->syscall(QOS_SYS_FB_PRESENT, 0, 0, 0);
+     q_putc(2);  /* frame marker for the harness */
+ }
+ 
+diff -ruN -x build wt-perf/repo2/ports/doomdmc/qplat.c wt-sys/repo2/ports/doomdmc/qplat.c
+--- wt-perf/repo2/ports/doomdmc/qplat.c	2026-11-03 19:01:23
++++ wt-sys/repo2/ports/doomdmc/qplat.c	2026-11-03 19:22:43
+@@ -20,7 +20,6 @@
+ const qos_api *qapi;
+ 
+ // ---- console / exit -----------------------------------------------------------------
+-void q_putc(int c) { qapi->syscall(QOS_SYS_PUTC, (uint8_t)c, 0, 0); }
+ void q_puts(const char *s) { while (*s) q_putc(*s++); }
+ void q_putu(uint32_t v)
+ {
+@@ -67,8 +66,49 @@
+ }
+ static inline __attribute__((always_inline)) void nor_chunk(uint32_t phys, void *out, uint32_t c)
+ {
+-    uint32_t r = qapi->syscall(QOS_SYS_DISK_READ, phys, (uintptr_t)out, c);
+-    if (r != c) nor_wait_slow(r, c);
++    /* inline DISK_READ: publish the request in the disk mailbox, wait for the host, copy the bytes.
++       Same protocol as the kernel's DISK_READ (sequence = request_seq+1, request_seq written last).
++       If the host has not answered within the bounded spin, fall back to the syscall path. */
++    volatile q_diskmb_t *mb = Q_DISKMB;
++    uint32_t seq = mb->request_seq + 1;
++    mb->offset = phys; mb->length = c; mb->status = 0;
++    mb->request_seq = seq;
++    if (__builtin_expect(mb->ready_seq != seq, 0)) {
++        unsigned i = 0;
++        while (mb->ready_seq != seq && ++i < 4096) {}
++        if (mb->ready_seq != seq) {
++            uint32_t r = qapi->syscall(QOS_SYS_DISK_READ, phys, (uintptr_t)out, c);
++            if (r != c) nor_wait_slow(r, c);
++            return;
++        }
++    }
++    if (__builtin_expect(mb->status != 1, 0)) nor_wait_slow((uint32_t)-2, c);
++    {
++        const volatile uint32_t *s4 = (const volatile uint32_t *)(const volatile void *)mb->bytes;
++        uint8_t *d1 = (uint8_t *)out;
++        uint32_t w = c >> 2;
++        if (!((uintptr_t)d1 & 3)) {
++            uint32_t *d4 = (uint32_t *)(void *)d1;
++            for (; w >= 4; w -= 4) {
++                uint32_t x0 = s4[0], x1 = s4[1], x2 = s4[2], x3 = s4[3];
++                d4[0] = x0; d4[1] = x1; d4[2] = x2; d4[3] = x3; s4 += 4; d4 += 4;
++            }
++            while (w--) *d4++ = *s4++;
++            d1 = (uint8_t *)d4;
++        } else {   /* unaligned destination: aligned source words, byte stores */
++            while (w--) {
++                uint32_t x = *s4++;
++                d1[0] = (uint8_t)x; d1[1] = (uint8_t)(x >> 8); d1[2] = (uint8_t)(x >> 16); d1[3] = (uint8_t)(x >> 24);
++                d1 += 4;
++            }
++        }
++        if (c & 3) {
++            uint32_t x = *s4;
++            d1[0] = (uint8_t)x;
++            if ((c & 3) > 1) d1[1] = (uint8_t)(x >> 8);
++            if ((c & 3) > 2) d1[2] = (uint8_t)(x >> 16);
++        }
++    }
+ }
+ void nor_hw(uint32_t phys, void *dst, uint32_t n)
+ {
+@@ -137,6 +177,8 @@
+ static uint32_t pad_until;
+ static unsigned pad_bits;
+ uint32_t q_keys, q_dump_req;
++static uint32_t key_seen;
++void q_input_init(void) { key_seen = Q_INMB[0]; }
+ static uint32_t q_hold; /* scripted buttons (mode 2): held every tic until changed */
+ void q_btn_hold(unsigned mask) { q_hold = mask; }
+ 
+@@ -145,7 +187,11 @@
+ void dji_rx(const uint8_t *p, uint32_t n) { (void)p; (void)n; }
+ void dji_tic(void)
+ {
+-    uint32_t k = qapi->syscall(QOS_SYS_KEY_POLL, 0, 0, 0);
++    uint32_t k = 0;
++    { /* key mailbox read directly (seq is written last by the device driver) */
++        uint32_t seq = Q_INMB[0];
++        if (seq != key_seen) { key_seen = seq; k = Q_INMB[1]; }
++    }
+     if (k) {
+         q_keys++;
+         switch (k) {
+diff -ruN -x build wt-perf/repo2/ports/doomdmc/qplat.h wt-sys/repo2/ports/doomdmc/qplat.h
+--- wt-perf/repo2/ports/doomdmc/qplat.h	2026-11-03 18:55:16
++++ wt-sys/repo2/ports/doomdmc/qplat.h	2026-11-03 19:19:56
+@@ -2,8 +2,19 @@
+ #include <stdint.h>
+ #include "qos.h"
+ extern const qos_api *qapi;
+-void q_putc(int c);
++/* /bin/doomd owns RAM and runs on the trusted takeover path: console bytes go straight to the host
++   ecall (same ecall the kernel's PUTC issues), the mailboxes and framebuffer are accessed directly. */
++static inline __attribute__((always_inline)) void q_putc(int c)
++{
++    register uint32_t a0 __asm__("a0") = (uint8_t)c, a7 __asm__("a7") = 1;
++    __asm__ volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
++}
++typedef struct { uint32_t request_seq, offset, length, ready_seq, status; uint8_t bytes[QOS_DISK_WINDOW]; } q_diskmb_t;
++#define Q_DISKMB ((volatile q_diskmb_t *)QOS_DISK_MB)
++#define Q_INMB ((volatile uint32_t *)QOS_IN_MB) /* [0]=seq [1]=key */
++#define Q_FB ((volatile uint8_t *)QOS_FB_ADDR)
+ void q_puts(const char *s);
+ void q_putu(uint32_t v);
+ void q_puthex(uint32_t v);
+ extern uint32_t q_dump_req, q_keys;
++void q_input_init(void);
+diff -ruN -x build wt-perf/repo2/tools/rv32_fast.c wt-sys/repo2/tools/rv32_fast.c
+--- wt-perf/repo2/tools/rv32_fast.c	2026-11-03 18:58:58
++++ wt-sys/repo2/tools/rv32_fast.c	2026-11-03 19:23:40
+@@ -9,7 +9,10 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <stdint.h>
+-static uint8_t mem[0x80000];
++static uint8_t mem[0x80000];static uint32_t syspc,sys_ra,sys_n;static uint64_t sys_st,sys_cnt[64],sys_ins[64];
++#define NSR 256
++static uint32_t sr_ra[NSR],sr_n[NSR];static uint64_t sr_c[NSR],sr_i[NSR];static int nsr;
++static uint32_t disklat,pend_seq;static uint64_t pend_due;static FILE*fblog;static uint32_t fbaddr;
+ static uint32_t reg[32], pc;
+ static uint32_t tr_pc[64],tr_sp[64],tr_to[64];static unsigned trn;
+ static int ps,pskip,plen,pn;/* dump-packet parser state so pixel bytes are never taken for markers */
+@@ -75,6 +78,9 @@
+     uint32_t shoff=*(uint32_t*)(el2+32);uint16_t shes=*(uint16_t*)(el2+46),shn=*(uint16_t*)(el2+48);
+     for(int i=0;i<shn;i++){const uint32_t*sh=(const uint32_t*)(el2+shoff+i*shes);if(sh[1]!=2)continue;const uint32_t*strh=(const uint32_t*)(el2+shoff+sh[6]*shes);const char*str=(const char*)el2+strh[4];
+       for(uint32_t j=0;j<sh[5]/16;j++){const uint8_t*e=el2+sh[4]+j*16;if(!strcmp(str+*(uint32_t*)e,ts))ticpc=*(uint32_t*)(e+4);if(!strcmp(str+*(uint32_t*)e,"P_SetupLevel"))lvlpc=*(uint32_t*)(e+4);}}}}}
++  if(getenv("FBLOG")){fblog=fopen(getenv("FBLOG"),"w");fbaddr=strtoul(getenv("FBADDR")?getenv("FBADDR"):"21c",0,16);}
++  if(getenv("DISKLAT"))disklat=atoi(getenv("DISKLAT"));
++  if(getenv("SYSPC"))syspc=strtoul(getenv("SYSPC"),0,16);
+   reqprof=getenv("REQPROF")!=0;if(getenv("REQLOG"))reqlog=fopen(getenv("REQLOG"),"wb");
+   uint32_t last_req=0,kseq=100;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
+   uint64_t last_frame_step=0;
+@@ -82,6 +88,9 @@
+     if(pc<0x40000||pc>0x7fffc||(pc&3))die("fetch",pc,steps);
+     if(pc==lvlpc&&!lvlseen){lvlseen=1;lvlstep=steps;lvlticidx=nticks;}
+     if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticstep[nticks++]=steps;while(phase<nph&&nticks>phb[phase])phase++;}
++    if(syspc){if(pc==syspc&&!sys_ra){sys_ra=reg[1];sys_n=reg[10]&63;sys_st=steps;}
++      else if(sys_ra&&pc==sys_ra){uint64_t d=steps-sys_st;sys_cnt[sys_n]++;sys_ins[sys_n]+=d;int q;for(q=0;q<nsr;q++)if(sr_ra[q]==sys_ra&&sr_n[q]==sys_n)break;
++        if(q==nsr&&nsr<NSR){sr_ra[q]=sys_ra;sr_n[q]=sys_n;nsr++;}if(q<NSR){sr_c[q]++;sr_i[q]+=d;}sys_ra=0;}}
+     if(prof)hist[phase][(pc-0x40000)>>2]++;
+     uint32_t w=rd32(pc);
+     if((w&3)!=3)die("rvc",pc,steps);
+@@ -128,7 +137,7 @@
+   else if(ps==0){if(c==1)ps=1;else if(c==2)mark=1;}
+   else if(ps==1){ps=0;if(c=='D'){ps=2;pn=0;plen=0;}else if(c=='W')pskip=10;else if(c=='P')pskip=1;else if(c=='E')pskip=2;}
+   else if(ps==2){plen|=c<<(8*pn);if(++pn==2){ps=0;pskip=plen;}}
+-  if(mark){fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;if(lvlseen&&!lvlframe)lvlframe=steps;
++  if(mark){if(fblog){uint32_t h=2166136261u;for(int q=0;q<768;q++)h=(h^mem[fbaddr+q])*16777619u;fprintf(fblog,"%08x\n",h);}fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;if(lvlseen&&!lvlframe)lvlframe=steps;
+             for(int i=0;i<nkeys;i++)if(!keys[i].done&&frames>=keys[i].fr){keys[i].done=1;wr32(kbox+4,keys[i].c);wr32(kbox,kseq++);break;}}}}
+       else if(reg[17]==93){exitcode=reg[10];goto done;}
+       else die("ecall",reg[17],steps);
+@@ -138,14 +147,20 @@
+     if(rd&&op!=0x63&&op!=0x23&&op!=0x0f&&op!=0x73)reg[rd]=v;
+     reg[0]=0;pc=np;steps++;
+     uint32_t seq=rd32(dbox);
++    if(disklat){if(seq&&seq!=last_req&&seq!=pend_seq){pend_seq=seq;pend_due=steps+disklat;}
++      if(!(pend_seq&&steps>=pend_due)){goto nodisk;} seq=pend_seq;pend_seq=0;if(rd32(dbox)!=seq){goto nodisk;}}
+     if(seq&&seq!=last_req){uint32_t off=rd32(dbox+4),len=rd32(dbox+8);
+       if(!len||len>256)die("bad disk request",len,steps);
+       nreq++;nbytes+=len;if(reqlog){uint32_t rec[4]={off,len,reg[1],(uint32_t)nticks};fwrite(rec,4,4,reqlog);}if(reqprof){uint32_t r=reg[1];int f=0;for(int q=0;q<nrq;q++)if(rqpc[q]==r){rqn[q]++;rqb[q]+=len;f=1;break;}if(!f&&nrq<512){rqpc[nrq]=r;rqn[nrq]=1;rqb[nrq]=len;nrq++;}}last_req=seq;int good=off<=(uint32_t)dn&&len<=(uint32_t)dn-off;
+       if(good)memcpy(mem+dbox+20,disk+off,len);
+       wr32(dbox+16,good?1:2);wr32(dbox+12,seq);}
++    nodisk:;
+   }
+ done:
+-  fclose(out);if(reqlog)fclose(reqlog);if(reqprof){qsort(syms,nsyms,sizeof *syms,symcmp);for(int q=0;q<nrq;q++){uint32_t a=rqpc[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"REQ %8llu req %9llu B  ra=%x %s+%x\n",(unsigned long long)rqn[q],(unsigned long long)rqb[q],a,k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
++  fclose(out);if(fblog)fclose(fblog);if(reqlog)fclose(reqlog);if(reqprof){qsort(syms,nsyms,sizeof *syms,symcmp);for(int q=0;q<nrq;q++){uint32_t a=rqpc[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"REQ %8llu req %9llu B  ra=%x %s+%x\n",(unsigned long long)rqn[q],(unsigned long long)rqb[q],a,k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
++  if(syspc){qsort(syms,nsyms,sizeof *syms,symcmp);uint64_t T=0;for(int n=0;n<64;n++)if(sys_cnt[n]){T+=sys_ins[n];fprintf(stderr,"SYS n=%2d calls=%9llu instr=%11llu avg=%.1f\n",n,(unsigned long long)sys_cnt[n],(unsigned long long)sys_ins[n],(double)sys_ins[n]/sys_cnt[n]);}
++    fprintf(stderr,"SYS total instr in syscalls=%llu of %llu\n",(unsigned long long)T,(unsigned long long)steps);
++    for(int q=0;q<nsr;q++){uint32_t a=sr_ra[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"SYSSITE n=%2u calls=%9llu instr=%11llu %s+%x\n",sr_n[q],(unsigned long long)sr_c[q],(unsigned long long)sr_i[q],k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
+   if(prof)prof_report();tic_report();
+   fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);
+   for(int i=0;i<frames&&i<100000;i++)fprintf(stderr,"frame %d at %llu delta %llu\n",i,(unsigned long long)fstep[i],(unsigned long long)(fstep[i]-(i?fstep[i-1]:0)));

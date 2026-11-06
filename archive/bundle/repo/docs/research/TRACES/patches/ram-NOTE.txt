@@ -1,0 +1,15 @@
+ram.patch: RAM squeeze for /bin/doomd (apply: cd repo && patch -p1 < patches/ram.patch). make check green (35 tests).
+Artifacts: ram-E1.img (NOR image repacked for this layout, REQUIRED with the new ELF), ram-qwenos-doomdmc.elf,
+ram-frames/*.png (verified rv32_fast frames incl. the streamed 32x24 fb).
+
+Touched files
+  kernel/main.c kernel/start.S linker/kernel.ld include/qos.h   core 0..0x97: tiny takeover stack at RAM bottom, disk window 64 B while doomd runs,
+                                                                fb + normal kstack moved to the overlay, FB_COL syscall, fb streams to console in takeover
+  linker/doomd.ld tools/check_layout.py tools/merge_elf.py tests/test_doomd.py   app RAM base 0x98 (was 0x5c0), RAM from 0
+  ports/doomdmc/qplat.c qlcd.c          disk chunk = 64 B, fb via FB_COL packets (after the D payload)
+  ports/doomdmc/doomd_main.c            prints real frame-region sizes (report_ram was never called)
+  ports/doomdmc/build.sh                stack 0x480, patched DMC copies (dmc-ram.patch), flat ROM, RC_DEFS
+  ports/doomdmc/dmc-ram.patch (new)     cache.h geometry macros, fetch.c ROM flats, r_frame.c always textured, level.c ARENA_MAX 24000
+  ports/doomdmc/mkflatrom.py (new)      bakes 88 flats (90 KB) into data ROM, 100 % of animated cycles
+  ports/doomdmc/mklayout.py mkimage.sh (new)  layout JSON from the ELF, repack E1 + NOR image (make doomdmc-image DMCWORK=<writable DMC copy>)
+  ports/doomdmc/RAM_BUDGET.txt README.txt, README.md, Makefile, tools/doomd_frames.py (decodes fb packets), tools/rv32_fast.c (fb packets, LT_ADDR, request stats)

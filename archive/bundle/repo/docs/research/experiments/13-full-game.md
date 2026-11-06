@@ -1,0 +1,12 @@
+# 13 Full-game work (full.patch, full-engine.patch)
+
+Goal: more than the E1M1 demo: menus, keyboard, all maps, saves, sound events.
+
+Changes: keyboard fix (agent report: a bug in key handling; patch hunks in `qplat.c` `dji_tic`); input map in `ports/doomdmc/README.txt` (w/s, a/d, space or f, e, q/r strafe, z run, Esc/m menu); test-only debug keys (x exit level, X secret exit, g god, i give all, t/T teleport, backtick STATE; drop with `-DQ_NODEBUGKEYS`); sound = console bytes `0x03, 0x80|sfx_id` for a host to play, no audio device; save/load via new kernel syscall `QOS_SYS_DISK_WRITE` (21: offset, src, len<=256) plus NOR erase/program emulation in `qplat.c`, image needs `SAVE.DAT` (`mknor.py --save`, 64 KB 0xFF), survives restart only when the host writes the bytes back (`rv32_fast -W`); episodes: up to four 8 MB NOR images, slot k = episode k+1 (`tools/mkdisk.py`), menu episode page; `full-engine.patch` edits finale, game, menu, enemy (boss logic), inter, map, pspr, spec, intermission and the converter (`tools/conv/*`).
+
+Feature checks (`TRACES/full/results.txt`, 15 PASS lines): menu/title/skill/options/load/quit; move forward; turn; fire (ammo 50 -> 48, pistol sfx); health bonus (hp 101); door open and walk through; monster damage (hp 101 -> 92); sound events; E1M1..E1M8 chain; intermission after each exit; finale after E1M8; secret exit E1M3 -> E1M9; E1M9 returns to E1M4; save writes to block device (801,121,425 steps, 420 frames, 103 disk writes); load after restart; quit prompt y.
+Episodes (`TRACES/full/episodes.txt`): E1 chain E1M1-8 plus E1M9 secret earlier; E2 E2M1-8 (E2M9 not in pack: more than 8191 segments); E3 E3M1-8 (E3M9 packed, not visited); E4 E4M1,3,4,5,8 (E4M2/M6/M9 no RAM plan fits; E4M7 more than 8191 segments). Monster spawns checked in view: baron, lost soul, cacodemon, cyberdemon, spider mastermind.
+Scoreboard: E1 9/9, E2 8/9, E3 9/9 packed (8 visited), E4 5/9.
+Limits: keys are scripted by the host; saves need host write-back; no real sound; intermission animations not implemented (see 99); a "9/9" count means packed and loadable, not that every map was played to completion by a human.
+Patches: TRACES/patches/full.patch (6e362310...), full-engine.patch (30de1384...); the latter has absolute `/Users/jhome/qwenos-work/wt-engine/` paths. Kernel DISK_WRITE hunk was applied in `wt-video` but the kernel ELF was not rebuilt there.
+Frames: TRACES/frames/10-15.

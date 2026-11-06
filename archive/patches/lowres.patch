@@ -1,0 +1,471 @@
+--- a/engine/DMC100-Doom/engine/d_main.c	2026-11-03 18:33:18
++++ b/engine/DMC100-Doom/engine/d_main.c	2026-11-03 19:16:34
+@@ -239,7 +239,11 @@
+     }
+ 
+     // the dirty parts of the status band
++#ifdef Q_NOBAR
++    R_BandFlush (inlevel, 0);       // lowres: no status bar (the band below the view stays black)
++#else
+     R_BandFlush (inlevel, inlevel);
++#endif
+ 
+     // the compose buffers are in the tic scratch: sent before the next tic
+     if (!view)
+--- a/engine/DMC100-Doom/engine/r_main.c	2026-11-03 18:33:18
++++ b/engine/DMC100-Doom/engine/r_main.c	2026-11-03 19:15:41
+@@ -514,7 +514,11 @@
+ 
+     colfunc = R_DrawColumn;
+ 
++    #if Q_XTVASH
++    r_xtva = dmc_xtva_high;
++#else
+     r_xtva = detailshift ? dmc_xtva_low : dmc_xtva_high;
++#endif
+     clipangle = R_XToViewAngle(0);
+     
+     // psprite scales
+@@ -619,6 +623,11 @@
+ 	fixedcolormap = colormaps + player->fixedcolormap*256;
+     else
+ 	fixedcolormap = 0;
++#ifdef Q_FIXEDLIGHT
++    /* lowres build: no light diminishing, every sector / distance uses colormap row Q_FIXEDLIGHT */
++    if (!fixedcolormap)
++	fixedcolormap = colormaps + Q_FIXEDLIGHT*256;
++#endif
+ 		
+     framecount++;
+ }
+--- a/engine/DMC100-Doom/engine/r_main.h	2026-11-03 18:33:18
++++ b/engine/DMC100-Doom/engine/r_main.h	2026-11-03 19:15:41
+@@ -201,11 +201,24 @@
+ // fine angle (vanilla viewangletox), from the tables in flash.
+ extern const unsigned short*	r_xtva;
+ 
++#ifndef Q_XTVASH
++#define Q_XTVASH 0   /* lowres detail 2: xtoviewangle[x] = high[4x] */
++#endif
+ static inline angle_t R_XToViewAngle (int x)
+ {
+-    return ((angle_t)r_xtva[x] << 19) - ANG90;
++    return ((angle_t)r_xtva[x << Q_XTVASH] << 19) - ANG90;
+ }
+ 
+ int R_ViewAngleToX (unsigned angle);
+ 
++// Clip bounds of the 3D view: the whole viewheight, or the rows Q_VTOP..Q_VBOT-1 of a lowres
++// "letterbox" view (rows outside are never drawn nor sent).
++#ifdef Q_VTOP
++#define R_CLIPTOP (Q_VTOP - 1)
++#define R_CLIPBOT (Q_VBOT)
++#else
++#define R_CLIPTOP (-1)
++#define R_CLIPBOT (viewheight)
+ #endif
++
++#endif
+--- a/engine/DMC100-Doom/engine/r_plane.c	2026-11-03 18:33:18
++++ b/engine/DMC100-Doom/engine/r_plane.c	2026-11-03 19:15:41
+@@ -185,8 +185,8 @@
+     // opening / clipping determination
+     for (i=r_s0 ; i<r_s1 ; i++)
+     {
+-	floorclip[i] = viewheight;
+-	ceilingclip[i] = -1;
++	floorclip[i] = R_CLIPBOT;
++	ceilingclip[i] = R_CLIPTOP;
+     }
+ 
+     r_numplanes = 0;
+--- a/engine/DMC100-Doom/engine/r_things.c	2026-11-03 18:33:18
++++ b/engine/DMC100-Doom/engine/r_things.c	2026-11-03 19:15:41
+@@ -704,9 +704,9 @@
+     
+     // clip to screen bounds
+     mfloorclip = NULL;
+-    mfloorconst = viewheight;
++    mfloorconst = R_CLIPBOT;
+     mceilingclip = NULL;
+-    mceilconst = -1;
++    mceilconst = R_CLIPTOP;
+     
+     // add all active psprites
+     for (i=0, psp=viewplayer->psprites;
+@@ -854,10 +854,10 @@
+     for (x = x1 ; x<=x2 ; x++)
+     {
+ 	if (clipbot[x] == -2)		
+-	    clipbot[x] = viewheight;
++	    clipbot[x] = R_CLIPBOT;
+ 
+ 	if (cliptop[x] == -2)
+-	    cliptop[x] = -1;
++	    cliptop[x] = R_CLIPTOP;
+     }
+ 		
+     mfloorclip = clipbot;
+--- a/engine/DMC100-Doom/platform/lcd.h	2026-11-03 18:33:17
++++ b/engine/DMC100-Doom/platform/lcd.h	2026-11-03 19:24:17
+@@ -71,6 +71,8 @@
+ extern uint16_t pump_lut[256];
+ 
+ #define PUMP_DOUBLE 1  // low detail: every submitted column is sent twice
++#define PUMP_ROW2 4    // lowres dump only: every second row of a column is sent (host doubles rows)
++#define PUMP_QUAD 2    // lowres detail 2: every submitted column is sent four times
+ 
+ // Opens the window x0..x1, y0..y1 (one RAMWR). Column height h = y1 - y0 + 1 must be a
+ // multiple of 4 and at most 200, other windows go to plat_panic. The 3D view is
+--- a/engine/DMC100-Doom/port/game/fe_glue.c	2026-11-03 18:33:17
++++ b/engine/DMC100-Doom/port/game/fe_glue.c	2026-11-03 19:15:41
+@@ -33,7 +33,10 @@
+ boolean messageNeedsInput;
+ int showMessages = 1;
+ #ifdef DMC_FW
+-int detailLevel = 1;  // low detail, the meter's view
++#ifndef Q_DETAIL
++#define Q_DETAIL 1   /* 0: 320 columns, 1: 160 (doubled), 2: 80 (x4, lowres build) */
++#endif
++int detailLevel = Q_DETAIL;  // low detail, the meter's view
+ #else
+ int detailLevel;
+ #endif
+--- a/engine/DMC100-Doom/port/math/trig.c	2026-11-03 18:33:17
++++ b/engine/DMC100-Doom/port/math/trig.c	2026-11-03 19:15:41
+@@ -87,6 +87,8 @@
+     unsigned lo, hi, width;
+     const uint32_t *words;
+     const uint16_t *prefix;
++    if (detail >= 2)   /* lowres: 80 columns, the 320 column boundary rounded up to a quarter */
++        return (dmc_viewangletox(0, i) + 3) >> 2;
+     if (detail) {
+         lo = DMC_VATX_LO_LOW, hi = DMC_VATX_HI_LOW, width = 160;
+         words = dmc_vatx_words_low, prefix = dmc_vatx_prefix_low;
+@@ -105,7 +107,7 @@
+ 
+ uint32_t dmc_xtoviewangle(int detail, unsigned x)
+ {
+-    unsigned fine = detail ? dmc_xtva_low[x] : dmc_xtva_high[x];
++    unsigned fine = detail >= 2 ? dmc_xtva_high[x << 2] : detail ? dmc_xtva_low[x] : dmc_xtva_high[x];
+     return ((uint32_t)fine << 19) - ANG90;
+ }
+ 
+--- a/engine/DMC100-Doom/port/render/r_frame.c	2026-11-03 18:33:17
++++ b/engine/DMC100-Doom/port/render/r_frame.c	2026-11-03 19:24:17
+@@ -379,8 +379,23 @@
+     R_PlanesFrame();
+     R_RenderBSPPass();
+ 
++#ifdef Q_VTOP
++    /* lowres letterbox: strip buffers keep their 200 row stride, rows Q_VTOP..Q_VBOT-1 are sent */
++    extern int q_pump_stride;
++    q_pump_stride = R_VIEWH;
++#define PUMP_ROW0 Q_VTOP
++#define PUMP_ROW1 (Q_VBOT - 1)
++#else
++#define PUMP_ROW0 0
++#define PUMP_ROW1 (R_VIEWH - 1)
++#endif
+     if (!tempscreen)
+-        R_PumpWindow(0, SCREENWIDTH - 1, 0, R_VIEWH - 1, detailshift ? PUMP_DOUBLE : 0);
++        R_PumpWindow(0, SCREENWIDTH - 1, PUMP_ROW0, PUMP_ROW1,
++                     (detailshift >= 2 ? PUMP_QUAD : detailshift ? PUMP_DOUBLE : 0)
++#ifdef Q_DUMP_ROW2
++                     | PUMP_ROW2
++#endif
++                     );
+     for (int s0 = 0; s0 < viewwidth; s0 += lay.w) {
+         int s1 = s0 + lay.w < viewwidth ? s0 + lay.w : viewwidth;
+         cur ^= 1;
+@@ -398,8 +413,11 @@
+         if (tempscreen)
+             R_StripToScreen(r_stripbuf, s0, s1 - s0);
+         else
+-            pump_submit(r_stripbuf, s1 - s0);
++            pump_submit(r_stripbuf + PUMP_ROW0, s1 - s0);
+     }
++#ifdef Q_VTOP
++    q_pump_stride = 0;
++#endif
+ #ifdef DMC_ATTR
+     R_AttrViewEnd();
+ #endif
+--- a/repo2/ports/doomdmc/doomd_main.c	2026-11-03 19:02:30
++++ b/repo2/ports/doomdmc/doomd_main.c	2026-11-03 19:16:34
+@@ -63,6 +63,21 @@
+ #ifndef DOOMD_DUMP
+ #define DOOMD_DUMP 0
+ #endif
++/* Lowres / frame-skip knobs (compile time, ports/doomdmc/lowres.sh):
++ *   Q_RN / Q_RD   render a game tic t only when floor(t*RN/RD) != floor((t-1)*RN/RD): RN rendered frames
++ *                 per RD game tics, evenly spread (15/35: gaps 2,2,3,2,2,3,...). Un-rendered tics run the
++ *                 full game logic but skip D_Display (view, HUD, band, pump) and S_UpdateSounds.
++ *   DOOMD_TICS=n  mode 2: leave after game tic n (marker DOOMD_TICS_DONE) with the long scripted run
++ *   Q_STRIPW=w    strip width (columns per strip) instead of the map plan's   Q_SOLID=1 solid floors */
++#ifndef Q_RN
++#define Q_RN 1
++#endif
++#ifndef Q_RD
++#define Q_RD 1
++#endif
++#ifndef DOOMD_TICS
++#define DOOMD_TICS 0
++#endif
+ 
+ /* mode 2 script: {first tic, last tic, buttons} hold the meter's buttons (V-A fwd, HOLD back,
+  * MODE turn left, SAVE turn right, LIGHT fire) for those game tics */
+@@ -73,6 +88,16 @@
+     { 41,  50, BTN_BIT(BTN_SAVE) },   /* turn right */
+     { 51,  70, BTN_BIT(BTN_VA) },     /* forward */
+     { 71,  80, BTN_BIT(BTN_LIGHT) },  /* fire */
++#if DOOMD_TICS
++    { 81, 125, BTN_BIT(BTN_VA) },     /* long run (350 tics): on, turn, on, fire, turn, on */
++    {126, 140, BTN_BIT(BTN_SAVE) },
++    {141, 200, BTN_BIT(BTN_VA) },
++    {201, 210, BTN_BIT(BTN_LIGHT) },
++    {211, 225, BTN_BIT(BTN_MODE) },
++    {226, 300, BTN_BIT(BTN_VA) },
++    {301, 315, BTN_BIT(BTN_SAVE) },
++    {316, 350, BTN_BIT(BTN_VA) },
++#endif
+ };
+ 
+ int doomd_main(const qos_api *api)
+@@ -107,6 +132,13 @@
+     R_Init();
+     P_Init();
+     R_ExecuteSetViewSize();
++#ifdef Q_STRIPW
++    R_SetStripWidth(Q_STRIPW);
++#endif
++#ifdef Q_SOLID
++    R_SetSolidFloors(1);
++    R_SetFlatSlots(0);
++#endif
+     q_puts("doomd: R_Init/P_Init done\n");
+ 
+     // play mode (fe_play.c)
+@@ -150,6 +182,16 @@
+         if (gamestate == GS_LEVEL && !menuactive && !was_menu &&
+             (gametic == t0 || !players[consoleplayer].mo))
+             continue;
++#if Q_RN != Q_RD
++        // frame skipping: the tic ran (game logic is untouched), the picture is not drawn
++        if (gamestate == GS_LEVEL && !menuactive && !was_menu && players[consoleplayer].mo && gametic > 1 &&
++            (gametic * Q_RN) / Q_RD == ((gametic - 1) * Q_RN) / Q_RD) {
++#if DOOMD_TICS && DOOMD_MODE
++            if (gametic >= DOOMD_TICS) { q_puts("DOOMD_TICS_DONE\n"); return 0; }
++#endif
++            continue;
++        }
++#endif
+         was_menu = menuactive;
+         S_UpdateSounds(players[consoleplayer].mo);
+ #if DOOMD_FRAMES && DOOMD_MODE
+@@ -169,7 +211,11 @@
+                 report_ram();
+             }
+ #endif
++#if !DOOMD_TICS
+             q_puts("DOOMD_FRAME "); q_putu((uint32_t)gframes); q_puts(" tic "); q_putu((uint32_t)gametic); q_putc('\n');
++#else
++            if (gametic >= DOOMD_TICS) { q_puts("DOOMD_TICS_DONE frames "); q_putu((uint32_t)gframes); q_putc('\n'); return 0; }
++#endif
+ #if DOOMD_FRAMES
+             if (gframes >= DOOMD_FRAMES) {
+                 q_puts("DOOMD_FRAMES_DONE\n");
+--- a/repo2/ports/doomdmc/qlcd.c	2026-11-03 18:55:17
++++ b/repo2/ports/doomdmc/qlcd.c	2026-11-03 19:24:17
+@@ -24,6 +24,17 @@
+ static int pending;
+ uint32_t q_frames;
+ 
++/* lowres builds: column stride of the strip buffer handed to pump_submit when it is not the window
++ * height (letterbox view, r_frame.c), 0 = the window height */
++int q_pump_stride;
++#ifdef Q_DUMP_COMPACT
++/* the serial dump sends every source column once; the window flags carry bit 8 and the host decoder
++ * repeats each column 1, 2 (PUMP_DOUBLE) or 4 (PUMP_QUAD) times */
++#define DUMP_FLAGS_X 0x100
++#else
++#define DUMP_FLAGS_X 0
++#endif
++
+ static void put16(unsigned v) { q_putc(v & 255); q_putc((v >> 8) & 255); }
+ 
+ void pump_begin(int x0, int x1, int y0, int y1, int flags)
+@@ -37,22 +48,34 @@
+         q_putc(1); q_putc('P'); q_putc(q_pal);
+         q_putc(1); q_putc('W');
+         put16((unsigned)x0); put16((unsigned)x1); put16((unsigned)y0); put16((unsigned)y1);
+-        put16((unsigned)flags);
++        put16((unsigned)flags | DUMP_FLAGS_X);
+     }
+ }
+ 
+ void pump_submit(const uint8_t *cols, int ncols)
+ {
+     int h = wy1 - wy0 + 1;
+-    int rep = (wflags & PUMP_DOUBLE) ? 2 : 1;
++    int rep = (wflags & PUMP_QUAD) ? 4 : (wflags & PUMP_DOUBLE) ? 2 : 1;
++    int stride = q_pump_stride ? q_pump_stride : h;
++#ifdef Q_DUMP_COMPACT
++    int hs = (wflags & PUMP_ROW2) ? (h + 1) / 2 : h, ys = (wflags & PUMP_ROW2) ? 2 : 1;
++    if (dumping) { q_putc(1); q_putc('D'); put16((unsigned)(ncols * hs)); }
++#else
+     if (dumping) { q_putc(1); q_putc('D'); put16((unsigned)(ncols * rep * h)); }
++#endif
+     for (int c = 0; c < ncols; c++) {
+-        const uint8_t *col = cols + c * h;
++        const uint8_t *col = cols + c * stride;
++#ifdef Q_DUMP_COMPACT
++        if (dumping)
++            for (int y = 0; y < h; y += ys) q_putc(col[y]);
++#endif
+         for (int r = 0; r < rep; r++) {
+             int x = wcur;
+             if (++wcur > wx1) wcur = wx0;
++#ifndef Q_DUMP_COMPACT
+             if (dumping)
+                 for (int y = 0; y < h; y++) q_putc(col[y]);
++#endif
+             if (x % 10 == 5) {
+                 unsigned cx = (unsigned)(x / 10);
+                 // FB rows whose sample row (cy*10+5) lies in this window
+--- a/repo2/ports/doomdmc/lowres.sh	1969-12-31 19:00:00
++++ b/repo2/ports/doomdmc/lowres.sh	2026-11-03 19:29:39
+@@ -0,0 +1,26 @@
++#!/bin/bash
++# Build one lowres/frame-skip variant of /bin/doomd (mode 2, E1M1 scripted run) as its own image:
++#   ports/doomdmc/lowres.sh NAME "-DQ_... -DQ_..." [dump]   ->  build/lr-NAME[-dump].elf
++# Knobs (see doomd_main.c, doomd_main/qlcd/r_frame/r_main in the engine): Q_DETAIL (0/1/2), Q_XTVASH=2 with
++# Q_DETAIL=2, Q_VTOP/Q_VBOT (letterbox rows), Q_NOBAR, Q_FIXEDLIGHT=n, Q_SOLID, Q_STRIPW=w, Q_RN/Q_RD (frame
++# skip), Q_DUMP_COMPACT (host replicates columns in the dump). dump => Q_DUMP_ALL (every frame over PUTC).
++set -e
++HERE=$(cd "$(dirname "$0")" && pwd); REPO=$HERE/../..
++N=${1:?name}; F=${2:-}; D=${3:-}
++# named presets (second argument may be a preset name instead of flags); all: 15 rendered frames per 35 game tics
++#   full      160 columns x 200 rows, as the perf build, only frame skipping
++#   balanced  full + rows 40..199 only (ceiling letterbox) + dump sends every 2nd row
++#   max       80 columns (x4 on the host) + rows 40..199 + dump rows halved + frame skipping
++SK="-DQ_DUMP_COMPACT -DQ_RN=15 -DQ_RD=35"
++case "$F" in
++  full)     F="$SK";;
++  balanced) F="$SK -DQ_VTOP=40 -DQ_VBOT=200 -DQ_DUMP_ROW2";;
++  max)      F="$SK -DQ_DETAIL=2 -DQ_XTVASH=2 -DQ_VTOP=40 -DQ_VBOT=200 -DQ_DUMP_ROW2";;
++esac
++T=$N; [ -n "$D" ] && T=$N-dump
++OUT=$REPO/build/lr-$T
++mkdir -p $OUT
++X="-DDOOMD_TICS=${TICS:-350} $F"; [ -n "$D" ] && X="$X -DQ_DUMP_ALL"
++FORCE=1 DOOMD_MODE=2 EXTRA_CF="$X" $HERE/build.sh $OUT >/dev/null
++cd $REPO
++python3 tools/merge_elf.py build/lr-$T.elf build/kernel-doomd.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf $OUT/doomd.elf | tail -1
+--- a/repo2/tools/lowres_frames.py	1969-12-31 19:00:00
++++ b/repo2/tools/lowres_frames.py	2026-11-03 19:24:17
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python3
++"""Decode the /bin/doomd serial LCD dump of the lowres builds (qlcd.c; window flags bit0 = columns
++doubled, bit1 = columns x4, bit8 = compact dump: the host repeats every column) into PNGs.
++  lowres_frames.py out.bin freedoom1.wad prefix SCALE IDX[,IDX..]   (IDX = frame numbers, 'all' = every frame)
++Palette: PLAYPAL of the IWAD. Output is the 320x240 picture, nearest-neighbour upscaled by SCALE."""
++import struct, sys, zlib
++from pathlib import Path
++sys.path.insert(0, str(Path(__file__).parent))
++
++def playpal(wad):
++    d = Path(wad).read_bytes()
++    n, off = struct.unpack_from('<II', d, 4)
++    for i in range(n):
++        o, s, nm = struct.unpack_from('<II8s', d, off + 16 * i)
++        if nm.rstrip(b'\0') == b'PLAYPAL':
++            return [[tuple(d[o + 768 * p + 3 * i: o + 768 * p + 3 * i + 3]) for i in range(256)] for p in range(14)]
++    raise SystemExit('no PLAYPAL')
++
++def png(path, w, h, rgb):
++    raw = b''.join(b'\0' + bytes(rgb[y * w * 3:(y + 1) * w * 3]) for y in range(h))
++    def ch(t, d):
++        c = struct.pack('>I', len(d)) + t + d
++        return c + struct.pack('>I', zlib.crc32(t + d))
++    Path(path).write_bytes(b'\x89PNG\r\n\x1a\n' + ch(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + ch(b'IDAT', zlib.compress(raw)) + ch(b'IEND', b''))
++
++def main():
++    stream, wad, prefix, scale, sel = sys.argv[1:6]
++    scale = int(scale)
++    want = None if sel == 'all' else set(int(x) for x in sel.split(','))
++    pal = playpal(wad)
++    d = Path(stream).read_bytes()
++    i = 0; cur = 0; win = None; col = 0
++    canvas = bytearray(320 * 240)
++    nf = 0
++    while i < len(d):
++        if d[i] != 1:
++            i += 1; continue
++        t = chr(d[i + 1]); i += 2
++        if t == 'P':
++            cur = d[i]; i += 1
++        elif t == 'W':
++            win = struct.unpack_from('<5H', d, i); i += 10; col = win[0]
++        elif t == 'D':
++            n, = struct.unpack_from('<H', d, i); i += 2
++            x0, x1, y0, y1, fl = win; h = y1 - y0 + 1
++            rep = 1
++            if fl & 0x100:
++                rep = 4 if fl & 2 else 2 if fl & 1 else 1
++            hs = (h + 1) // 2 if fl & 4 else h
++            for c in range(n // hs):
++                column = d[i + c * hs:i + c * hs + hs]
++                if hs != h:
++                    column = bytes(column[y >> 1] for y in range(h))
++                for _ in range(rep):
++                    canvas[y0 * 320 + col:(y1 + 1) * 320 + col:320] = column
++                    col += 1
++                    if col > x1: col = x0
++            i += n
++        elif t == 'E':
++            i += 2
++            if want is None or nf in want:
++                rgb = bytearray()
++                p = pal[cur]
++                for px in canvas: rgb += bytes(p[px])
++                if scale > 1:
++                    big = bytearray()
++                    for y in range(240):
++                        row = b''.join(bytes(rgb[(y * 320 + x) * 3:(y * 320 + x) * 3 + 3]) * scale for x in range(320))
++                        big += row * scale
++                    png(f'{prefix}-{nf:03}.png', 320 * scale, 240 * scale, big)
++                else:
++                    png(f'{prefix}-{nf:03}.png', 320, 240, rgb)
++            nf += 1
++    print(nf, 'frames')
++main()
+--- a/lr_run.sh	1969-12-31 19:00:00
++++ b/lr_run.sh	2026-11-03 19:16:53
+@@ -0,0 +1,4 @@
++#!/bin/bash
++# lr_run.sh NAME [maxinstr]: run build/lr-NAME.elf; prints total steps, tics, disk
++cd /Users/jhome/qwenos-work/wt-lowres
++SYMELF=repo2/build/lr-$1/doomd.elf repo2/build/rv32_fast repo2/build/lr-$1.elf engine/DMC100-Doom/build/sw/nor/E1.img 100 108 base/lr-$1.bin ${2:-3000000000} 2>&1 | grep -aE "TICS|DISK|GAMETICS|LEVEL|steps|FAULT|DONE|PANIC"
+--- a/lr_batch2.sh	1969-12-31 19:00:00
++++ b/lr_batch2.sh	2026-11-03 19:24:31
+@@ -0,0 +1,19 @@
++#!/bin/bash
++export DMC=/Users/jhome/qwenos-work/wt-lowres/engine/DMC100-Doom
++cd /Users/jhome/qwenos-work/wt-lowres
++C="-DQ_DUMP_COMPACT"; S="-DQ_RN=15 -DQ_RD=35"; D2="-DQ_DETAIL=2 -DQ_XTVASH=2"
++for spec in \
++ "b0|" \
++ "b1|$C" \
++ "c1|$C $S" \
++ "c2|$C $S $D2" \
++ "c3|$C $S $D2 -DQ_VTOP=60 -DQ_VBOT=200" \
++ "c4|$C $S $D2 -DQ_VTOP=60 -DQ_VBOT=200 -DQ_DUMP_ROW2" \
++ "c5|$C $S -DQ_VTOP=40 -DQ_VBOT=200" \
++ "c6|$C $S -DQ_VTOP=40 -DQ_VBOT=200 -DQ_DUMP_ROW2" \
++ "c7|$C $S $D2 -DQ_VTOP=60 -DQ_VBOT=200 -DQ_DUMP_ROW2 -DQ_SOLID" \
++ ; do n=${spec%%|*}; f=${spec#*|}
++  (cd repo2 && ports/doomdmc/lowres.sh $n "$f" >/dev/null 2>&1); echo "== $n [$f]"; ./lr_run.sh $n
++  (cd repo2 && ports/doomdmc/lowres.sh $n "$f" dump >/dev/null 2>&1); echo "== $n-dump"; ./lr_run.sh $n-dump
++ done
++echo ALLDONE

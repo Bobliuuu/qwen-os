@@ -1,0 +1,1454 @@
+diff -ruN pa/engine/engine/r_data.c pb/engine/engine/r_data.c
+--- pa/engine/engine/r_data.c	2026-11-03 18:33:18
++++ pb/engine/engine/r_data.c	2026-11-03 19:19:53
+@@ -305,11 +305,27 @@
+ // on the bus at once (direct set and the bus free), else that of the
+ // queued read. The direct read of the queued column ends first, so at
+ // most one buffer holds ticket -1 and nor_col_wait ends exactly its read.
++#ifdef DMC_FW
++extern uint32_t bake_lo, bake_span;
++const uint8_t *bake_get (uint32_t loff, uint32_t *run);
++#endif
+ static int R_ColRead (const r_colwin_t* w, uint32_t rel, byte* dst, unsigned n, int direct)
+ {
+     nor_col_wait ();
+     if (cbuf[clast].ticket < 0)
+ 	cbuf[clast].ticket = 0;
++#ifdef DMC_FW
++    {
++	// data baked into the data ROM: copied, no request
++	uint32_t	run;
++	const byte*	b;
++	if (w->loff + rel - bake_lo < bake_span && (b = bake_get (w->loff + rel, &run)) && run >= n)
++	{
++	    memcpy (dst, b, n);
++	    return 0;
++	}
++    }
++#endif
+     if (direct && rel + n <= w->run && !nor_col_start (w->phys + rel, dst, n))
+     {
+ #ifdef DMC_STATS
+diff -ruN pa/engine/port/data/cache.c pb/engine/port/data/cache.c
+--- pa/engine/port/data/cache.c	2026-11-03 19:02:16
++++ pb/engine/port/data/cache.c	2026-11-03 19:19:43
+@@ -8,20 +8,18 @@
+ #include "nor.h"
+ 
+ #ifdef DMC_FW
+-// Map streams baked into the data ROM (ports/doomdmc/qbake.c, bakemap.c): reads inside them never
+-// touch the cache or the disk. bake_span is 0 unless the image's map entry matches the baked one.
+-extern uint32_t bake_lo, bake_span, bake_n;
+-extern const uint32_t bake_rng[][3], bake_data[];
++// Data baked into the data ROM (ports/doomdmc/qbake.c, bakemap.c): reads inside it never touch the
++// cache or the disk. bake_span is 0 unless the image's header CRC matches the baked image.
++extern uint32_t bake_lo, bake_span;
++const uint8_t *bake_get(uint32_t loff, uint32_t *run);
+ static inline const uint8_t *bake_ptr(uint32_t loff, uint32_t n)
+ {
++    uint32_t run;
++    const uint8_t *p;
+     if (loff - bake_lo >= bake_span)
+         return 0;
+-    for (uint32_t i = 0; i < bake_n; i++) {
+-        uint32_t rel = loff - bake_rng[i][0];
+-        if (rel < bake_rng[i][1] && n <= bake_rng[i][1] - rel)
+-            return (const uint8_t *)bake_data + bake_rng[i][2] + rel;
+-    }
+-    return 0;
++    p = bake_get(loff, &run);
++    return p && run >= n ? p : 0;
+ }
+ #else
+ #define bake_span 0u
+@@ -159,8 +157,11 @@
+     if (!rc2_mem || !rc2_swap(ln, set, w, old))
+ #endif
+     {
++        const uint8_t *bp = bake_ptr(loff, n);
+         const uint32_t *pw = img_pw[loff >= img.split];
+-        if (loff - pw[0] < pw[1] - pw[0] && pw[1] - loff >= n)
++        if (bp)
++            memcpy(rc_data[base + w], bp, n);
++        else if (loff - pw[0] < pw[1] - pw[0] && pw[1] - loff >= n)
+             nor_read(pw[2] + loff, rc_data[base + w], n);
+         else
+             img_read(loff, rc_data[base + w], n);
+diff -ruN pa/engine/port/data/fat12.c pb/engine/port/data/fat12.c
+--- pa/engine/port/data/fat12.c	2026-11-03 18:33:17
++++ pb/engine/port/data/fat12.c	2026-11-03 19:37:35
+@@ -61,10 +61,11 @@
+     return FAT_OK;
+ }
+ 
+-// FAT12 entry of cluster c through a small window on the stack.
++// FAT12 entry of cluster c through a small window on the stack. 240 B (was 48): the chain walk of a
++// 4 MB file is 6 NOR requests instead of 31, and boot is the shallowest point of the stack.
+ typedef struct {
+     uint32_t off;
+-    uint8_t b[48];
++    uint8_t b[240];
+ } fat_win_t;
+ 
+ static unsigned fat_next(const fat_vol_t *v, fat_win_t *w, unsigned c)
+diff -ruN pa/repo/ports/doomdmc/README.txt pb/repo/ports/doomdmc/README.txt
+--- pa/repo/ports/doomdmc/README.txt	2026-11-03 18:55:16
++++ pb/repo/ports/doomdmc/README.txt	2026-11-03 19:55:15
+@@ -17,3 +17,11 @@
+ Cost work: -O2 (was -Oz), fastfix.c (FixedDiv via divu, bit-exact), qimg.c (extent run cache, no stats on the
+   line-fill path), qsolid.c (repeat plan-D floor/ceiling columns copied), and the main loop skips the redraw of
+   a frame that follows no tic (virtual time makes every other TryRunTics call tic-less).
++Baked E1M1 hot set (disk-request cut, data ROM): ports/doomdmc/bake_e1m1.txt lists 4-byte units of the logical image
++  (E1 pack) that build.sh cuts out of the NOR image (tools/bake_map.py -> bakemap.c, qbake.c looks them up). Reads of
++  them (record cache fills and rec_* reads, img_read / img_read_async, the direct column read) are copied from ROM, no
++  disk request; the bake is enabled only if the image's header CRC matches (else everything goes to the disk as before).
++  Block list = tools/bake_select.py over REQLOG files of unbaked runs of several E1M1 walks (tools/bake_route.sh R nb;
++  routes in doomd_main.c Q_ROUTE), sized to fill the data ROM (BUDGET 91700 for the current rodata; the link fails with
++  "will not fit in region DROM" when rodata grows, lower the budget). tools/bake_eval.py scores a list on other logs.
++  NOBAKE=1 builds without; BAKE_IMG / BAKE_RANGES override the image / list.
+diff -ruN pa/repo/ports/doomdmc/bake_e1m1.txt pb/repo/ports/doomdmc/bake_e1m1.txt
+--- pa/repo/ports/doomdmc/bake_e1m1.txt	1969-12-31 19:00:00
++++ pb/repo/ports/doomdmc/bake_e1m1.txt	2026-11-03 19:51:55
+@@ -0,0 +1,845 @@
++# unit(4B) count; 21164 units, 844 runs, from base.req,r1nb.req,r2nb.req,r3nb.req,r10nb.req,r11nb.req,r12nb.req
++3112 8
++3240 16
++3272 8
++3680 8
++3720 16
++3792 16
++3856 8
++3880 8
++3912 8
++3968 8
++3984 16
++4008 8
++4272 16
++4296 8
++4320 24
++4360 16
++4496 8
++4784 8
++4824 24
++4872 8
++4952 8
++5264 40
++5320 16
++5344 8
++5464 24
++5504 16
++7880 24
++8000 64
++8136 24
++8192 8
++8288 8
++8416 16
++8440 8
++8456 16
++8496 8
++8512 8
++8528 8
++8544 8
++8568 48
++9576 1024
++24680 256
++41576 256
++42344 256
++43624 256
++45928 256
++47976 256
++110336 13
++111008 9
++111856 4
++130528 2
++130544 2
++130560 2
++130576 2
++130592 2
++130608 2
++130624 2
++130640 2
++130656 2
++130672 2
++130688 2
++130704 2
++130720 2
++130736 2
++130752 2
++130768 2
++130784 2
++130800 2
++130816 2
++130832 2
++130848 2
++130864 2
++130880 2
++130896 2
++130912 2
++130928 2
++130944 2
++130960 2
++130976 2
++130992 2
++131008 2
++131024 2
++131040 2
++131056 2
++131072 2
++131088 2
++131104 2
++131120 2
++131136 2
++131152 2
++131168 2
++131184 2
++131200 2
++131216 2
++131232 2
++131248 2
++131264 2
++131280 2
++131296 2
++131312 2
++131328 2
++131344 2
++131360 2
++131376 2
++131392 2
++131408 2
++131424 2
++131440 2
++131456 2
++131472 2
++131488 2
++131504 2
++131520 2
++131536 2
++144920 512
++228190 3
++228203 6
++228219 6
++228235 5
++228256 1
++228267 6
++228283 5
++228304 1
++228315 6
++228331 6
++228347 5
++228368 1
++228379 6
++228395 5
++228416 1
++228427 6
++228443 6
++228459 5
++228480 1
++228491 6
++228507 5
++228528 1
++228539 6
++228555 6
++228571 5
++228592 1
++228603 6
++228619 5
++228640 1
++228651 6
++228667 6
++228683 5
++228704 1
++228715 6
++228731 5
++228752 1
++228763 6
++228779 6
++228795 5
++228816 1
++228827 6
++228843 5
++228864 1
++228875 6
++228891 6
++228907 5
++228928 1
++228939 6
++228955 5
++228976 1
++228987 6
++229003 6
++229019 5
++229040 1
++229051 6
++229067 5
++229088 1
++229099 6
++229115 6
++229131 5
++229152 1
++229163 6
++229179 5
++229241 4
++229257 4
++229273 4
++229289 4
++229305 4
++229321 4
++229337 4
++229353 3
++229369 3
++230224 512
++239260 720
++240284 64
++241052 48
++241116 16
++241148 32
++241244 652
++247944 12
++253368 512
++257992 16
++258017 4
++258033 23
++258065 4
++258081 23
++258113 3
++258136 16
++258161 3
++258177 23
++258225 23
++258257 3
++258280 16
++258328 16
++258376 16
++258424 16
++258472 16
++263936 1
++263952 1
++263968 1
++263984 1
++264000 1
++264016 1
++264032 1
++264048 1
++264064 1
++264080 1
++264096 1
++264112 1
++264128 1
++264144 1
++264160 1
++264176 1
++264192 1
++264208 1
++264224 1
++264240 1
++264256 1
++264272 1
++264288 1
++264304 1
++264320 1
++264336 1
++264352 1
++264368 1
++264384 1
++264400 1
++264416 1
++264432 1
++264448 1
++264464 1
++264480 1
++264496 1
++264512 1
++264528 1
++264544 1
++264560 1
++264576 1
++264592 1
++264608 1
++264624 1
++264640 1
++264656 1
++264672 1
++264688 1
++264704 1
++264720 1
++264736 1
++264752 1
++264768 1
++264784 1
++264800 1
++264816 1
++264832 1
++264848 1
++264864 1
++264880 1
++264896 1
++264912 1
++264928 1
++264944 1
++266704 21
++266734 39
++266784 6
++266800 24
++266832 22
++266864 86
++266960 21
++266992 38
++267040 688
++267840 13
++268096 13
++268416 13
++268592 12
++269440 13
++272848 1023
++332184 1024
++333272 128
++359576 27
++359620 1
++359629 1
++360688 16
++360710 3
++360755 1
++360768 1
++360832 27
++361888 16
++361914 2
++368872 122
++387288 115
++387410 1
++410824 148
++411000 20
++411029 11
++411048 20
++411082 1
++411096 20
++413808 88
++418648 576
++420440 241
++434120 43
++435984 8
++436288 8
++436536 604
++439392 24
++439440 1
++439451 44
++439502 10
++439518 1
++444104 24
++444153 1
++444167 1
++444193 1
++444210 1
++444227 1
++444238 1
++444272 23
++444301 1
++444313 1
++444326 1
++444341 1
++444373 1
++444390 11
++444432 37
++444479 48
++447800 8
++447848 8
++447952 24
++448124 9
++448141 1
++448150 1
++448167 1
++448176 1
++448185 1
++448202 1
++448211 1
++448220 1
++448237 1
++448246 1
++448255 1
++448272 1
++448281 1
++448290 1
++448307 1
++448316 1
++448325 1
++448342 1
++448351 1
++448360 1
++448377 1
++448386 1
++448395 1
++448412 1
++448421 1
++448430 1
++448447 1
++448456 1
++448465 1
++448482 1
++448491 1
++448500 1
++448517 1
++448526 1
++448535 1
++448552 1
++448561 1
++448570 1
++448587 1
++448596 1
++448605 1
++448622 1
++448631 1
++448640 1
++448657 1
++448666 1
++448675 1
++448692 1
++448701 1
++448710 1
++448727 1
++448736 1
++448745 1
++448762 1
++448771 1
++448780 1
++448797 1
++448806 1
++448815 1
++448832 1
++448841 1
++448850 1
++448867 1
++448876 1
++448885 1
++448902 1
++448911 1
++448920 1
++448937 1
++448946 1
++448955 1
++448972 1
++448981 1
++448990 1
++449007 1
++449016 1
++449025 1
++449042 1
++449051 1
++449060 1
++449077 1
++449086 1
++449095 1
++449112 1
++449121 1
++449130 1
++449147 1
++449156 1
++449165 1
++449182 1
++449191 1
++449200 1
++449217 1
++449226 1
++449235 1
++449252 1
++449261 1
++449270 1
++449287 1
++449296 1
++449305 1
++449322 1
++449331 1
++449340 1
++449357 1
++449366 1
++449375 1
++449392 1
++449401 1
++449410 1
++449419 210
++449637 1
++449646 1
++449655 1
++449672 1
++449681 1
++449690 1
++449707 1
++449716 1
++449725 1
++449742 1
++449751 1
++449760 1
++449777 1
++449786 1
++449795 1
++449812 1
++449821 1
++449830 1
++449847 1
++449856 1
++449865 1
++449882 1
++449891 1
++449900 1
++449917 1
++449926 1
++449935 1
++449952 1
++449961 1
++449970 1
++449987 1
++449996 1
++450005 1
++450022 1
++450031 1
++450040 1
++450057 1
++450066 1
++450075 1
++450092 1
++450101 1
++450110 1
++450127 1
++450136 1
++450145 1
++450162 1
++450171 1
++450180 1
++450197 1
++450206 1
++450215 1
++450232 1
++450241 1
++450250 1
++450267 1
++450276 1
++450285 1
++450302 1
++450311 1
++450320 1
++450337 1
++450346 1
++450355 1
++450372 1
++450381 1
++450390 1
++450407 1
++450416 1
++450425 1
++450442 1
++450451 1
++450460 1
++450477 1
++450486 1
++450495 1
++450512 1
++450521 1
++450530 1
++450547 1
++450556 1
++450565 1
++450582 1
++450591 1
++450600 1
++450617 1
++450626 1
++450635 1
++450652 1
++450661 1
++450670 1
++450687 1
++450696 1
++450705 1
++450722 1
++450731 1
++450740 1
++450757 1
++450766 1
++450775 1
++450792 1
++450801 1
++450810 1
++450827 1
++450836 1
++450845 1
++450862 1
++450871 1
++450880 1
++450897 1
++450906 1
++450915 13
++450966 2
++450974 1
++450983 1
++450992 1
++451009 1
++451018 1
++451027 1
++451044 1
++451053 1
++451062 1
++451079 1
++451088 1
++451097 1
++451114 1
++451123 1
++451132 1
++451149 1
++451158 1
++451167 1
++451184 1
++451193 1
++451202 1
++451219 1
++451228 1
++451237 1
++451254 1
++451263 1
++451272 1
++451289 1
++451296 80
++451385 8
++451401 11
++451420 1
++451640 8
++451657 15
++451680 11
++451699 1
++451708 5
++452000 8
++452017 49
++452104 21
++452144 35
++452200 17
++452304 90
++452952 8
++452992 7
++453012 1
++453019 1
++453027 1
++453035 1
++453043 1
++453051 1
++453059 1
++453067 1
++453075 1
++453083 1
++453091 1
++453106 1
++453114 1
++453121 1
++453128 13
++516674 1
++516864 16
++516888 8
++516944 24
++516976 8
++517064 48
++517184 376
++517760 24
++517792 32
++517928 24
++517976 8
++518304 8
++518400 32
++518440 48
++518528 8
++518560 48
++518672 16
++518768 8
++518984 64
++519144 8
++519504 8
++519912 352
++520272 16
++521136 24
++521168 48
++521248 8
++521288 40
++521728 48
++521872 8
++522224 16
++522272 24
++522320 8
++522376 24
++522440 192
++522728 16
++522752 8
++522816 8
++523048 40
++523128 24
++523184 8
++523344 24
++523928 48
++523992 56
++524064 8
++524112 8
++524336 40
++524808 56
++524880 96
++525264 416
++525696 304
++526024 304
++526336 52
++526400 120
++526536 56
++527016 80
++527152 32
++527476 4
++528600 80
++528724 12
++528744 32
++529048 72
++529384 16
++530256 56
++530328 24
++530376 32
++531824 8
++531848 8
++531936 8
++531976 16
++532016 80
++532104 8
++532120 56
++532192 8
++532232 32
++532272 56
++532480 64
++532560 8
++532592 8
++533000 8
++533024 8
++533240 128
++533536 8
++533560 8
++533584 8
++533856 16
++534000 224
++534328 8
++534352 8
++534384 8
++534456 8
++534552 8
++535016 8
++535048 8
++535064 8
++535128 88
++535232 8
++535256 8
++535272 80
++535360 184
++535560 16
++535584 96
++535720 8
++535776 8
++535832 8
++535872 16
++535944 8
++535960 16
++536000 40
++536160 8
++536464 8
++536488 8
++536576 16
++536616 8
++536632 8
++537064 64
++537160 8
++537352 144
++537512 8
++537552 32
++537608 8
++537680 16
++537704 8
++537816 16
++537864 8
++538408 16
++538456 8
++538480 8
++538536 80
++538664 8
++538680 8
++538744 8
++538912 136
++539080 8
++539176 24
++539224 8
++539296 8
++539320 736
++541456 8
++541472 8
++541488 8
++541504 8
++541520 8
++542080 8
++542112 16
++542192 16
++542216 16
++542256 8
++542272 16
++542344 8
++543352 8
++543368 8
++543384 8
++543400 8
++543688 8
++543744 24
++543856 16
++543960 8
++543976 16
++544032 8
++544152 8
++544240 8
++544296 8
++544336 8
++544352 16
++544408 16
++545144 8
++545160 40
++545208 16
++545232 16
++545280 32
++545336 64
++545408 8
++545424 8
++545496 8
++545512 8
++545544 88
++545640 16
++545672 32
++545720 40
++545784 80
++545872 24
++546008 8
++546024 8
++546040 8
++546056 8
++546072 8
++546088 8
++546360 16
++546464 8
++546496 48
++546568 24
++546624 8
++546656 40
++546728 80
++1013756 1
++1013768 1
++1013780 1
++1013792 1
++1013804 1
++1013816 1
++1013828 1
++1013840 1
++1013852 1
++1013864 1
++1013876 1
++1013888 1
++1013900 1
++1013912 1
++1013924 1
++1013936 1
++1013948 1
++1013960 1
++1013972 1
++1013984 1
++1013996 1
++1014008 1
++1014020 1
++1015792 32
+diff -ruN pa/repo/ports/doomdmc/bakemap_stub.c pb/repo/ports/doomdmc/bakemap_stub.c
+--- pa/repo/ports/doomdmc/bakemap_stub.c	2026-11-03 19:02:30
++++ pb/repo/ports/doomdmc/bakemap_stub.c	2026-11-03 19:47:26
+@@ -1,3 +1,4 @@
+-// no baked map (build.sh could not read the NOR image): bake_init() does nothing
++// no baked data (NOBAKE, or build.sh could not read the NOR image / block list): bake_init() does nothing
+ #include <stdint.h>
+-const uint32_t bake_key[5]; const uint32_t bake_n; const uint32_t bake_rng[1][3]; const uint32_t bake_data[1];
++const uint32_t bake_hcrc, bake_nruns, bake_lo0, bake_span0, bake_st[2], bake_data[1];
++const uint16_t bake_ps[2], bake_bk[2];
+diff -ruN pa/repo/ports/doomdmc/build.sh pb/repo/ports/doomdmc/build.sh
+--- pa/repo/ports/doomdmc/build.sh	2026-11-03 19:02:30
++++ pb/repo/ports/doomdmc/build.sh	2026-11-03 19:20:55
+@@ -14,11 +14,13 @@
+ INC="-I$HERE/stub -I$DMC/engine/stub/include -I$DMC/engine -I$DMC/port/data -I$DMC/port/render -I$DMC/port/obj -I$DMC/port/math -I$DMC/platform -I$DMC/port/game -I$DMC/port/ovl -I$HERE -I$GEN -I$DMC/controller/rc-n1 -I$REPO/include -I$REPO/ports/doom"
+ DEFS="-DDOOMD_MODE=${DOOMD_MODE:-0} -DDOOMD_DUMP=${DOOMD_DUMP:-0} -DDMC_FW -DDMC_HASHORDER -DDMC_SINE_L1 -DPLAT_HOST"
+ CF="$ARCH ${OPT:--O2} -ffunction-sections -fdata-sections -ffreestanding -fno-builtin -fno-common -fwrapv -fsigned-char -std=gnu11 -w $DEFS $INC ${EXTRA_CF}"
+-# map streams in the data ROM (disk-request cut): BAKE_IMG = NOR image to read E1M6 from (default: the E1 pack)
++# E1M1 hot set in the data ROM (disk-request cut): BAKE_IMG = NOR image the blocks are cut from
++# (default: the E1 pack), BAKE_RANGES = block list from tools/bake_select.py. NOBAKE=1: no bake.
+ BAKE_IMG=${BAKE_IMG:-$DMC/build/sw/nor/E1.img}
++BAKE_RANGES=${BAKE_RANGES:-$HERE/bake_e1m1.txt}
+ BAKE=$HERE/bakemap_stub.c
+-if [ -z "$NOBAKE" ] && [ -f "$BAKE_IMG" ]; then
+-  python3 $REPO/tools/bake_map.py "$BAKE_IMG" $OUT/bakemap.c ${BAKE_BUDGET:-82000} ${BAKE_EP:-1} ${BAKE_MAP:-6} >/dev/null && BAKE=$OUT/bakemap.c
++if [ -z "$NOBAKE" ] && [ -f "$BAKE_IMG" ] && [ -f "$BAKE_RANGES" ]; then
++  python3 $REPO/tools/bake_map.py "$BAKE_IMG" "$BAKE_RANGES" $OUT/bakemap.c >/dev/null && BAKE=$OUT/bakemap.c
+ fi
+ SRCS=""
+ for f in $DMC/engine/*.c; do
+diff -ruN pa/repo/ports/doomdmc/doomd_main.c pb/repo/ports/doomdmc/doomd_main.c
+--- pa/repo/ports/doomdmc/doomd_main.c	2026-11-03 19:02:30
++++ pb/repo/ports/doomdmc/doomd_main.c	2026-11-03 19:27:00
+@@ -68,11 +68,24 @@
+  * MODE turn left, SAVE turn right, LIGHT fire) for those game tics */
+ void q_btn_hold(unsigned mask);
+ struct q_step { uint16_t t0, t1; uint8_t btn; };
++#ifndef Q_ROUTE
++#define Q_ROUTE 0
++#endif
+ static const struct q_step q_script[] = {
++#if Q_ROUTE == 0
+     {  4,  40, BTN_BIT(BTN_VA) },     /* forward */
+     { 41,  50, BTN_BIT(BTN_SAVE) },   /* turn right */
+     { 51,  70, BTN_BIT(BTN_VA) },     /* forward */
+     { 71,  80, BTN_BIT(BTN_LIGHT) },  /* fire */
++#elif Q_ROUTE == 1                    /* profiling routes (bake training / hold-out) */
++    {  4,  90, BTN_BIT(BTN_VA) }, { 91, 110, BTN_BIT(BTN_MODE) }, { 111, 200, BTN_BIT(BTN_VA) },
++#elif Q_ROUTE == 2
++    {  4,  20, BTN_BIT(BTN_MODE) }, { 21, 120, BTN_BIT(BTN_VA) }, { 121, 140, BTN_BIT(BTN_SAVE) }, { 141, 220, BTN_BIT(BTN_VA) },
++#elif Q_ROUTE >= 10
++    { 0, 0, 0 },
++#else
++    {  4,  12, BTN_BIT(BTN_SAVE) }, { 13, 100, BTN_BIT(BTN_VA) }, { 101, 130, BTN_BIT(BTN_MODE) }, { 131, 230, BTN_BIT(BTN_VA) },
++#endif
+ };
+ 
+ int doomd_main(const qos_api *api)
+@@ -136,6 +149,14 @@
+ #if DOOMD_MODE == 2
+         {
+             uint8_t b = 0;
++#if Q_ROUTE >= 10   /* pseudo-random walk (bake training): a new button every 12 tics */
++            if (gametic >= 4) {
++                uint32_t h = ((uint32_t)gametic / 12u + Q_ROUTE) * 2654435761u;
++                h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
++                unsigned r = h % 10u;
++                b = r < 6 ? BTN_BIT(BTN_VA) : r < 8 ? BTN_BIT(BTN_MODE) : BTN_BIT(BTN_SAVE);
++            }
++#endif
+             for (unsigned i = 0; i < sizeof q_script / sizeof q_script[0]; i++)
+                 if (gametic >= q_script[i].t0 && gametic <= q_script[i].t1) b |= q_script[i].btn;
+             q_btn_hold(b);
+diff -ruN pa/repo/ports/doomdmc/qbake.c pb/repo/ports/doomdmc/qbake.c
+--- pa/repo/ports/doomdmc/qbake.c	2026-11-03 19:02:30
++++ pb/repo/ports/doomdmc/qbake.c	2026-11-03 19:33:37
+@@ -1,27 +1,44 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+-// /bin/doomd: switch for the map streams baked into the data ROM (bakemap.c, made by
+-// tools/bake_map.py). Only enabled when the image's map entry matches the baked offset, size and
+-// CRC; otherwise every read goes through the record cache and the disk as before.
++// /bin/doomd: data baked into the data ROM (bakemap.c, made by tools/bake_map.py from a block list
++// chosen by tools/bake_select.py). Any logical-image byte range of the E1M1 hot set (map streams,
++// texture / patch / flat / sprite data) is served from ROM instead of the disk. Enabled only when
++// the image's header CRC matches the one the data was cut from; otherwise nothing is baked and
++// every read goes through the record cache and the disk as before.
++//
++// Layout: the baked blocks are 4-byte units sorted by logical offset and merged into runs. Run i
++// starts at logical unit bake_st[i] and its data begins at data unit bake_ps[i]; its length is
++// bake_ps[i + 1] - bake_ps[i] units (both tables have a closing entry). bake_bk[b] is the index of
++// the first run starting at or after 4 KB bucket b (bucket 0 begins at bake_lo0).
+ #include <stdint.h>
+ #include "img.h"
+-#include "rec.h"
+ 
+-extern const uint32_t bake_key[5], bake_rng[][3];
++extern const uint32_t bake_hcrc, bake_nruns, bake_lo0, bake_span0, bake_st[], bake_data[];
++extern const uint16_t bake_ps[], bake_bk[];
+ uint32_t bake_lo, bake_span;
+-extern uint32_t bake_n;
+ 
+ void bake_init(void)
+ {
+-    if (!bake_n) return;
+-    int k = map_find((int)bake_key[0], (int)bake_key[1]);
+-    if (k < 0) return;
+-    dmc_mapent_t e;
+-    img_mapent(k, &e);
+-    if (e.off != bake_key[2] || e.size != bake_key[3] || e.crc != bake_key[4]) return;
+-    uint32_t lo = ~0u, hi = 0;
+-    for (uint32_t i = 0; i < bake_n; i++) {
+-        if (bake_rng[i][0] < lo) lo = bake_rng[i][0];
+-        if (bake_rng[i][0] + bake_rng[i][1] > hi) hi = bake_rng[i][0] + bake_rng[i][1];
++    if (!bake_nruns || img.header_crc != bake_hcrc) return;
++    bake_lo = bake_lo0; bake_span = bake_span0;
++}
++
++// Pointer to logical byte loff in ROM and the bytes readable from there in one piece, or 0.
++const uint8_t *bake_get(uint32_t loff, uint32_t *run)
++{
++    uint32_t rel = loff - bake_lo;
++    if (rel >= bake_span) return 0;
++    uint32_t hi = bake_bk[(rel >> 12) + 1], i = bake_bk[rel >> 12];
++    uint32_t u = loff >> 2;
++    if (i) i--;                      // the run that began in an earlier bucket
++    // last run starting at or before unit u within [i, hi)
++    while (hi - i > 1) {
++        uint32_t m = (i + hi) >> 1;
++        if (bake_st[m] <= u) i = m; else hi = m;
+     }
+-    bake_lo = lo; bake_span = hi - lo;
++    uint32_t s = bake_st[i];
++    uint32_t len = (uint32_t)(bake_ps[i + 1] - bake_ps[i]) << 2;
++    uint32_t d = loff - (s << 2);
++    if (u < s || d >= len) return 0;
++    *run = len - d;
++    return (const uint8_t *)bake_data + ((uint32_t)bake_ps[i] << 2) + d;
+ }
+diff -ruN pa/repo/ports/doomdmc/qimg.c pb/repo/ports/doomdmc/qimg.c
+--- pa/repo/ports/doomdmc/qimg.c	2026-11-03 18:55:16
++++ pb/repo/ports/doomdmc/qimg.c	2026-11-03 19:20:05
+@@ -8,6 +8,8 @@
+ #include "nor.h"
+ 
+ void nor_hw(uint32_t phys, void *dst, uint32_t n); /* qplat.c: no statistics */
++extern uint32_t bake_lo, bake_span;
++const uint8_t *bake_get(uint32_t loff, uint32_t *run); /* qbake.c: data baked into the data ROM */
+ void dmc_fatal(const char *msg);
+ uint32_t img_phys_run(uint32_t loff, uint32_t *run);
+ 
+@@ -37,6 +39,15 @@
+         dmc_fatal("image read out of range");
+     while (n) {
+         uint32_t run;
++        if (loff - bake_lo < bake_span) {
++            const uint8_t *b = bake_get(loff, &run);
++            if (b) {
++                if (run > n) run = n;
++                __builtin_memcpy(d, b, run);
++                d += run; loff += run; n -= run;
++                continue;
++            }
++        }
+         uint32_t phys = phys_of(loff, &run);
+         if (run > n) run = n;
+         nor_hw(phys, d, run);
+@@ -52,6 +63,16 @@
+         dmc_fatal("image read out of range");
+     while (n) {
+         uint32_t run;
++        if (loff - bake_lo < bake_span) {
++            const uint8_t *b = bake_get(loff, &run);
++            if (b) {
++                if (run > n) run = n;
++                __builtin_memcpy(d, b, run);
++                t = 1;
++                d += run; loff += run; n -= run;
++                continue;
++            }
++        }
+         uint32_t phys = phys_of(loff, &run);
+         if (run > n) run = n;
+         nor_hw(phys, d, run);
+diff -ruN pa/repo/tools/bake_eval.py pb/repo/tools/bake_eval.py
+--- pa/repo/tools/bake_eval.py	1969-12-31 19:00:00
++++ pb/repo/tools/bake_eval.py	2026-11-03 19:55:06
+@@ -0,0 +1,25 @@
++"""bake_eval.py NOR.img RANGES.txt TEST.req[,..]: share of the logged disk requests that a block list covers
++(REQLOG files of unbaked runs; hold-out check of tools/bake_select.py)."""
++import sys,struct,os
++U=int(os.environ.get('BAKE_UNIT',4))
++img=open(sys.argv[1],'rb').read()
++def vol(base,name):
++    bps,spc,res,nf,nroot,tot,_,fsz=struct.unpack_from('<HBHBHHBH',img,base+11)
++    root=base+(res+nf*fsz)*bps
++    for i in range(nroot):
++        e=img[root+i*32:root+i*32+32]
++        if e[:11]==name: return root+nroot*32,struct.unpack_from('<I',e,28)[0]
++    return None,0
++d0,split=vol(0x100000,b'DOOM    DAT'); d1,_=vol(0,b'DOOMX   DAT')
++def l_of(p): return p-d0 if d0<=p<d0+split else p-d1-64+split
++sel=set()
++for l in open(sys.argv[2]):
++    if l[0]=='#': continue
++    s,c=map(int,l.split()); sel.update(range(s,s+c))
++for p in sys.argv[3].split(','):
++    d=open(p,'rb').read(); n=len(d)//16; ok=0; okb=0; tb=0
++    for i in range(n):
++        o,l,ra,t=struct.unpack_from('<IIII',d,i*16); lo=l_of(o)
++        if lo<4096: ok+=1; continue
++        if all(u in sel for u in range(lo//U,(lo+l-1)//U+1)): ok+=1
++    print('%s: %.1f%% covered (%d residual of %d)'%(p.split('/')[-1],100*ok/n,n-ok,n))
+diff -ruN pa/repo/tools/bake_map.py pb/repo/tools/bake_map.py
+--- pa/repo/tools/bake_map.py	2026-11-03 19:01:40
++++ pb/repo/tools/bake_map.py	2026-11-03 19:33:37
+@@ -1,14 +1,11 @@
+ #!/usr/bin/env python3
+-"""bake_map.py NOR.img OUT.c [BUDGET] [EPISODE MAP]
+-Writes the hottest streams of one map block of DOOM.DAT as const data (data ROM, the ~90 KB that
+-/bin/doomd leaves unused) so their record reads never go to the disk: bakemap.c is linked into
+-/bin/doomd, bake_init() enables it only when the image's map entry has the same offset/size/CRC.
+-Streams are chosen by measured disk requests per byte (E1M1 attract demo)."""
+-import struct, sys
++"""bake_map.py NOR.img RANGES.txt OUT.c
++Writes the blocks listed in RANGES.txt ("first_unit count" per line, 4-byte units of the logical
++image) as const data (data ROM) so reads of them never go to the disk (see ports/doomdmc/qbake.c
++for the table layout). The image's header CRC is stored; bake_init() enables the bake only for an
++image with the same CRC. RANGES.txt comes from tools/bake_select.py."""
++import struct, sys, zlib
+ img = open(sys.argv[1], 'rb').read()
+-out = sys.argv[2]
+-budget = int(sys.argv[3]) if len(sys.argv) > 3 else 82000
+-ep, mp = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (1, 1)
+ 
+ def vol(base, name):
+     bps, spc, res, nf, nroot, tot, _, fsz = struct.unpack_from('<HBHBHHBH', img, base + 11)
+@@ -18,7 +15,7 @@
+         if e[:11] == name:
+             assert struct.unpack_from('<H', e, 26)[0] == 2, 'file not at cluster 2'
+             return root + nroot * 32, struct.unpack_from('<I', e, 28)[0]
+-    raise SystemExit('no ' + name.decode())
++    return None, 0
+ d0, split = vol(0x100000, b'DOOM    DAT')
+ d1, _ = vol(0, b'DOOMX   DAT')
+ def logical(off, n):
+@@ -30,37 +27,41 @@
+             k = n; out += img[d1 + 64 + off - split:d1 + 64 + off - split + k]
+         off += k; n -= k
+     return out
+-k = 0
+-while True:
+-    e = logical(1792 + 32 * k, 32)
+-    off, size, crc, e_, m_ = struct.unpack_from('<IIIBB', e, 8)
+-    if e_ == ep and m_ == mp: break
+-    k += 1
+-hdr = logical(off, 512)
+-so = struct.unpack_from('<24I', hdr, 64); ss = struct.unpack_from('<24I', hdr, 160)
+-N = "NODES NODEBB SSECT SEGS LINES LINESIDES SIDES SECTORS SECEXTRA SECLINES TAGS BLOCKMAP GRID REJECT SNDADJ THINGS CELLTHINGS SECTHINGS ZCLIP TELEDEST SPECIALS MONSTERS TEXXLAT FLATXLAT".split()
+-def st(n): i = N.index(n); return off + so[i], ss[i]
+-ranges = []
+-lo = st('LINESIDES')[0]; hi = st('SECTORS')[0] + st('SECTORS')[1]   # LINESIDES, SIDES, SECTORS are contiguous
+-ranges.append((lo, hi - lo))
+-for n in ('NODES', 'SSECT', 'THINGS', 'SECTHINGS', 'ZCLIP'):
+-    ranges.append(st(n))
+-used = sum(l for _, l in ranges)
+-rest = (budget - used) & ~15
+-if rest > 0:
+-    lo, ln = st('LINES'); ranges.append((lo, min(rest, ln)))
+-ranges.sort()
+-data = b''.join(logical(lo, ln) + b'\0' * (-ln & 3) for lo, ln in ranges)
+-with open(out, 'w') as f:
+-    f.write('// generated by tools/bake_map.py from %s: map E%dM%d, %d ranges, %d bytes\n#include <stdint.h>\n' % (sys.argv[1], ep, mp, len(ranges), len(data)))
+-    f.write('const uint32_t bake_key[5] = {%d,%d,%d,%d,%d};\n' % (ep, mp, off, size, crc))
+-    f.write('const uint32_t bake_n = %d;\n' % len(ranges))
+-    pos = 0; rows = []
+-    for lo, ln in ranges:
+-        rows.append('{%d,%d,%d}' % (lo, ln, pos)); pos += (ln + 3) & ~3
+-    f.write('const uint32_t bake_rng[%d][3] = {%s};\n' % (len(ranges), ','.join(rows)))
++hdr = logical(0, 4096)
++# header CRC as the engine computes it: crc32 of the header with the crc field zeroed (see img.c)
++hcrc_off = None
++runs = []
++for l in open(sys.argv[2]):
++    p = l.split()
++    if len(p) == 2 and not l.startswith('#'): runs.append((int(p[0]), int(p[1])))
++runs.sort()
++m = []
++for s, n in runs:                      # merge touching runs
++    if m and m[-1][0] + m[-1][1] >= s: m[-1][1] = max(m[-1][1], s + n - m[-1][0])
++    else: m.append([s, n])
++tot = sum(n for s, n in m)
++assert tot < (1 << 16), 'bake too large for the 16-bit data unit field: %d units' % tot
++data = bytearray(); st = []; ps = []; pos = 0
++for s0, n in m:
++    st.append(s0); ps.append(pos)
++    data += logical(s0 * 4, n * 4); pos += n
++st.append(m[-1][0] + m[-1][1]); ps.append(pos)    # closing entries
++lo = m[0][0] * 4; hi = (m[-1][0] + m[-1][1]) * 4
++nb = ((hi - lo) >> 12) + 2
++bk = []; j = 0
++for b in range(nb):
++    start = (lo + b * 4096) // 4
++    while j < len(m) and m[j][0] < start: j += 1
++    bk.append(j)
++hcrc = struct.unpack_from('<I', hdr, 100)[0]       # dmc_header_t.header_crc
++with open(sys.argv[3], 'w') as f:
++    f.write('// generated by tools/bake_map.py from %s: %d runs, %d bytes\n#include <stdint.h>\n' % (sys.argv[1], len(m), len(data)))
++    f.write('const uint32_t bake_hcrc = %du, bake_nruns = %d, bake_lo0 = %d, bake_span0 = %d;\n' % (hcrc, len(m), lo, hi - lo))
++    f.write('const uint16_t bake_bk[%d] = {%s};\n' % (nb, ','.join(map(str, bk))))
++    f.write('const uint32_t bake_st[%d] = {%s};\n' % (len(st), ','.join(map(str, st))))
++    f.write('const uint16_t bake_ps[%d] = {%s};\n' % (len(ps), ','.join(map(str, ps))))
+     f.write('const uint32_t bake_data[%d] __attribute__((aligned(4))) = {\n' % (len(data) // 4))
+-    w = struct.unpack('<%dI' % (len(data) // 4), data)
++    w = struct.unpack('<%dI' % (len(data) // 4), bytes(data))
+     for i in range(0, len(w), 12): f.write(','.join('0x%x' % x for x in w[i:i + 12]) + ',\n')
+     f.write('};\n')
+-print('baked', len(data), 'bytes in', len(ranges), 'ranges; map crc', hex(crc))
++print('baked %d bytes in %d runs (tables %d B), header crc %#x' % (len(data), len(m), 6 * len(st) + 2 * nb, hcrc))
+diff -ruN pa/repo/tools/bake_reqan.py pb/repo/tools/bake_reqan.py
+--- pa/repo/tools/bake_reqan.py	1969-12-31 19:00:00
++++ pb/repo/tools/bake_reqan.py	2026-11-03 19:55:06
+@@ -0,0 +1,76 @@
++"""bake_reqan.py NOR.img REQLOG [steady_from_tic]: classifies the logged disk requests (rv32_fast REQLOG) by image
++section / map stream, with unique bytes per class."""
++import struct,sys,collections
++img=open(sys.argv[1],'rb').read(); log=open(sys.argv[2],'rb').read()
++ep,mp=1,1
++def vol(base,name):
++    bps,spc,res,nf,nroot,tot,_,fsz=struct.unpack_from('<HBHBHHBH',img,base+11)
++    root=base+(res+nf*fsz)*bps
++    for i in range(nroot):
++        e=img[root+i*32:root+i*32+32]
++        if e[:11]==name: return root+nroot*32,struct.unpack_from('<I',e,28)[0]
++d0,split=vol(0x100000,b'DOOM    DAT'); d1,_=vol(0,b'DOOMX   DAT')
++def logical(off,n):
++    out=b''
++    while n:
++        if off<split: k=min(n,split-off); out+=img[d0+off:d0+off+k]
++        else: k=n; out+=img[d1+64+off-split:d1+64+off-split+k]
++        off+=k;n-=k
++    return out
++def phys2log(p):
++    if d0<=p<d0+split: return p-d0
++    return p-d1-64+split
++SN="0 PAL TEXDIR TEXDATA FLATS PATCHDIR PATCHDATA SPRDEF SOUNDS STRINGS UIDIR ANIMS DEMOS".split()
++secs=[]
++for i in range(13):
++    id_,fl,o,s,c=struct.unpack_from('<HHIII',logical(256+i*16,16)); 
++    if s: secs.append((o,s,'S:'+(SN[id_] if id_<13 else str(id_))))
++k=0
++while True:
++    nm,off,size,crc,e_,m_=struct.unpack_from('<8sIIIBB',logical(1792+32*k,32))
++    if e_==ep and m_==mp: break
++    k+=1
++hdr=logical(off,512)
++so=struct.unpack_from('<24I',hdr,64); ss=struct.unpack_from('<24I',hdr,160)
++N="NODES NODEBB SSECT SEGS LINES LINESIDES SIDES SECTORS SECEXTRA SECLINES TAGS BLOCKMAP GRID REJECT SNDADJ THINGS CELLTHINGS SECTHINGS ZCLIP TELEDEST SPECIALS MONSTERS TEXXLAT FLATXLAT".split()
++for i in range(24):
++    if ss[i]: secs.append((off+so[i],ss[i],'M:'+N[i]))
++secs.append((0,4096,'hdr'))
++def cls(l):
++    best=None
++    for o,s,n in secs:
++        if o<=l<o+s and (best is None or n.startswith('M:')): best=n
++    return best or 'other@%x'%l
++n=len(log)//16
++cnt=collections.Counter(); byt=collections.Counter(); tic_cnt=collections.Counter()
++rows=[struct.unpack_from('<IIII',log,i*16) for i in range(n)]
++for o,l,ra,t in rows:
++    c=cls(phys2log(o)); cnt[c]+=1; byt[c]+=l; tic_cnt[t]+=1
++print('total',n)
++for c,v in cnt.most_common(): print('%-14s %7d req %9d B'%(c,v,byt[c]))
++ts=sorted(tic_cnt)
++print('tic counts first 12:',[(t,tic_cnt[t]) for t in ts[:12]])
++if len(sys.argv)>3:
++    a=int(sys.argv[3]); print('reqs by tic>=%d per tic mean'%a, sum(v for t,v in tic_cnt.items() if t>=a)/max(1,len([t for t in ts if t>=a])))
++    # per-class steady
++    cc=collections.Counter(); 
++    for o,l,ra,t in rows:
++        if t>=a: cc[cls(phys2log(o))]+=1
++    print('steady classes',cc.most_common())
++# unique touched bytes per class
++if len(sys.argv)>4:
++    pass
++U=collections.defaultdict(set)
++for o,l,ra,t in rows:
++    lo=phys2log(o); U[cls(lo)].add((lo,l))
++print('--- unique requests / bytes per class (union), section sizes')
++sz={n:s for o,s,n in secs}
++tot=0
++for c,v in sorted(U.items(),key=lambda kv:-len(kv[1])):
++    if c.startswith('other'): continue
++    # union bytes
++    iv=sorted((a,a+b) for a,b in v); u=0; cur=-1
++    for a,b in iv:
++        a=max(a,cur); 
++        if b>a: u+=b-a; cur=b
++    print('%-14s uniq_req %6d union %8d  of %8d'%(c,len(v),u,sz.get(c,0)))
+diff -ruN pa/repo/tools/bake_route.sh pb/repo/tools/bake_route.sh
+--- pa/repo/tools/bake_route.sh	1969-12-31 19:00:00
++++ pb/repo/tools/bake_route.sh	2026-11-03 19:55:06
+@@ -0,0 +1,19 @@
++#!/bin/bash
++# bake_route.sh ROUTE TAG: build the E1M1 mode-2 image for scripted route ROUTE (-DQ_ROUTE, see
++# doomd_main.c: 0 = the default script, 1-3 scripted walks, >=10 pseudo-random walks), run it on the E1 pack
++# and print tic / request statistics. TAG ending in "nb" builds without the bake (and writes the REQLOG a
++# training run needs); any other TAG builds with it (BAKE_RANGES=file to try another block list).
++# env: DMC (engine checkout), IMG (pack name, default E1), INSTR (instruction budget), XCF (extra cflags,
++# -DQ_DUMP_ALL to dump every frame for hash compares), OUTDIR (default /tmp).
++# After a bake_route.sh R nb run: tools/bake_select.py IMG BUDGET ports/doomdmc/bake_e1m1.txt $OUTDIR/rRnb.req,...
++R=$1; TAG=${2:-nb}; INSTR=${INSTR:-420000000}
++REPO=$(cd "$(dirname "$0")/.." && pwd); S=${OUTDIR:-/tmp}
++export DMC=${DMC:?set DMC to the DMC100-Doom checkout}
++cd $REPO
++OUT=build/doomdmc-r$R$TAG
++mkdir -p $OUT/o
++case $TAG in *nb) export NOBAKE=1;; esac
++FORCE=1 DOOMD_MODE=2 EXTRA_CF="-DQ_ROUTE=$R $XCF" ports/doomdmc/build.sh $OUT >/dev/null
++python3 tools/merge_elf.py $S/r$R$TAG.elf build/kernel-doomd.elf build/shell.elf build/paint.elf build/raycast.elf build/asset.elf build/doom.elf $OUT/doomd.elf >/dev/null
++cp $OUT/doomd.elf $S/r$R$TAG.sym.elf
++SYMELF=$S/r$R$TAG.sym.elf REQPROF=1 REQLOG=$S/r$R$TAG.req build/rv32_fast $S/r$R$TAG.elf $DMC/build/sw/nor/${IMG:-E1}.img 100 108 $S/r$R$TAG.bin $INSTR 2>&1 | grep -E "LEVEL|GAMETICS|DISK|steps|FAULT|^TICS"
+diff -ruN pa/repo/tools/bake_select.py pb/repo/tools/bake_select.py
+--- pa/repo/tools/bake_select.py	1969-12-31 19:00:00
++++ pb/repo/tools/bake_select.py	2026-11-03 19:44:51
+@@ -0,0 +1,72 @@
++#!/usr/bin/env python3
++"""bake_select.py NOR.img BUDGET_BYTES OUT.txt TRAIN.req[,TRAIN2.req...] [--first W] [--grow G]
++Chooses the 4-byte units of the logical image to bake from REQLOG files of unbaked runs
++(tools/rv32_fast REQLOG; records off,len,ra,tic with off = NOR address): units are ranked by
++the number of disk requests touching them (requests of the load + first frame, tic <= FIRST,
++count W times), the best fill the budget (the 4-byte run table entries are charged too).
++--grow G adds G units of neighbours on each side of every chosen run when budget remains."""
++import struct, sys, collections, os
++U = int(os.environ.get('BAKE_UNIT', 4))   # the ROM format is 4-byte units
++img = open(sys.argv[1], 'rb').read()
++budget = int(sys.argv[2]); out = sys.argv[3]; logs = sys.argv[4].split(',')
++W = int(sys.argv[sys.argv.index('--first') + 1]) if '--first' in sys.argv else 5
++def vol(base, name):
++    bps, spc, res, nf, nroot, tot, _, fsz = struct.unpack_from('<HBHBHHBH', img, base + 11)
++    root = base + (res + nf * fsz) * bps
++    for i in range(nroot):
++        e = img[root + i * 32:root + i * 32 + 32]
++        if e[:11] == name: return root + nroot * 32, struct.unpack_from('<I', e, 28)[0]
++    return None, 0
++d0, split = vol(0x100000, b'DOOM    DAT'); d1, _ = vol(0, b'DOOMX   DAT')
++def l_of(p): return p - d0 if d0 <= p < d0 + split else (p - d1 - 64 + split if d1 and p >= d1 + 64 else None)
++cnt = collections.Counter()
++for p in logs:
++    d = open(p, 'rb').read()
++    for i in range(len(d) // 16):
++        o, l, ra, t = struct.unpack_from('<IIII', d, i * 16)
++        lo = l_of(o)
++        if lo is None or lo < 4096: continue          # header / FAT / boot reads stay on the disk
++        w = W if t <= 1 else 5
++        for u in range(lo // U, (lo + l - 1) // U + 1): cnt[u] += w
++units = sorted(cnt, key=lambda u: (-cnt[u], u))
++n = 0; sel = []
++# run table cost: one u32 per run; estimate 4 B per selected unit's run start conservatively by
++# charging after merging, so iterate: take units until merged size + table exceeds the budget
++GAP = int(sys.argv[sys.argv.index('--gap') + 1]) if '--gap' in sys.argv else 5
++def fill(s):                              # bridge gaps of up to GAP units: cheaper than a run entry
++    s = sorted(set(s)); out = set(s)
++    for a, b in zip(s, s[1:]):
++        if 1 < b - a <= GAP + 1: out.update(range(a + 1, b))
++    return out
++def cost(s):
++    s = sorted(fill(s)); runs = 0; prev = -2
++    for u in s:
++        if u != prev + 1: runs += 1
++        prev = u
++    return len(s) * U + runs * 6 + 2 * (((max(s) - min(s)) * U >> 12) + 2)
++lo_n, hi_n = 0, len(units)
++while lo_n < hi_n:                       # largest prefix that fits
++    mid = (lo_n + hi_n + 1) // 2
++    if cost(units[:mid]) <= budget: lo_n = mid
++    else: hi_n = mid - 1
++sel = fill(units[:lo_n])
++rest = budget - cost(sel)
++if '--grow' in sys.argv:
++    G = int(sys.argv[sys.argv.index('--grow') + 1])
++    cand = []
++    for u in sorted(sel):
++        for k in range(1, G + 1):
++            for v in (u - k, u + k):
++                if v not in sel and v * U >= 4096: cand.append((k, -cnt.get(u, 0), v))
++    for k, _, v in sorted(cand):
++        if v in sel: continue
++        if rest < 20: break
++        sel.add(v); rest -= U
++sel = sorted(sel); runs = []
++for u in sel:
++    if runs and runs[-1][0] + runs[-1][1] == u: runs[-1][1] += 1
++    else: runs.append([u, 1])
++with open(out, 'w') as f:
++    f.write('# unit(4B) count; %d units, %d runs, from %s\n' % (len(sel), len(runs), ','.join(os.path.basename(x) for x in logs)))
++    for s, c in runs: f.write('%d %d\n' % (s, c))
++print('selected', len(sel), 'units =', len(sel) * U, 'B in', len(runs), 'runs; cost', cost(sel))

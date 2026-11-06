@@ -1,0 +1,751 @@
+diff -ruN pa/engine/port/data/cache.c pb/engine/port/data/cache.c
+--- pa/engine/port/data/cache.c	2026-11-03 19:05:34
++++ pb/engine/port/data/cache.c	2026-11-03 19:05:34
+@@ -5,7 +5,30 @@
+ 
+ #include "cache.h"
+ #include "img.h"
++#include "nor.h"
+ 
++#ifdef DMC_FW
++// Map streams baked into the data ROM (ports/doomdmc/qbake.c, bakemap.c): reads inside them never
++// touch the cache or the disk. bake_span is 0 unless the image's map entry matches the baked one.
++extern uint32_t bake_lo, bake_span, bake_n;
++extern const uint32_t bake_rng[][3], bake_data[];
++static inline const uint8_t *bake_ptr(uint32_t loff, uint32_t n)
++{
++    if (loff - bake_lo >= bake_span)
++        return 0;
++    for (uint32_t i = 0; i < bake_n; i++) {
++        uint32_t rel = loff - bake_rng[i][0];
++        if (rel < bake_rng[i][1] && n <= bake_rng[i][1] - rel)
++            return (const uint8_t *)bake_data + bake_rng[i][2] + rel;
++    }
++    return 0;
++}
++#else
++#define bake_span 0u
++#define bake_lo 0u
++#define bake_ptr(l, n) ((const uint8_t *)0)
++#endif
++
+ #define RC_NOTAG 0xFFFFu
+ // MRU way in bits 0-1 up to the LRU way in bits 6-7
+ #define RC_LRU_INIT 0xE4u
+@@ -97,15 +120,17 @@
+ }
+ #endif
+ 
+-// Moves way w to the MRU position.
+-static uint8_t lru_touch(uint8_t l, unsigned w)
++// Moves way w to the MRU position (table lookup, generated from the shift loop of the original).
++static const uint8_t lru_tab[4][256] = {
++    {0,4,8,12,4,20,24,28,8,36,40,44,12,52,56,60,16,20,24,28,20,84,88,92,24,100,104,108,28,116,120,124,32,36,40,44,36,148,152,156,40,164,168,172,44,180,184,188,48,52,56,60,52,212,216,220,56,228,232,236,60,244,248,252,64,68,72,76,68,84,88,92,72,100,104,108,76,116,120,124,80,84,88,92,84,0,0,0,88,0,0,0,92,0,0,0,96,100,104,108,100,0,0,0,104,0,0,0,108,0,0,0,112,116,120,124,116,0,0,0,120,0,0,0,124,0,0,0,128,132,136,140,132,148,152,156,136,164,168,172,140,180,184,188,144,148,152,156,148,0,0,0,152,0,0,0,156,0,0,0,160,164,168,172,164,0,0,0,168,0,0,0,172,0,0,0,176,180,184,188,180,0,0,0,184,0,0,0,188,0,0,0,192,196,200,204,196,212,216,220,200,228,232,236,204,244,248,252,208,212,216,220,212,0,0,0,216,0,0,0,220,0,0,0,224,228,232,236,228,0,0,0,232,0,0,0,236,0,0,0,240,244,248,252,244,0,0,0,248,0,0,0,252,0,0,0},
++    {0,1,0,0,1,5,9,13,0,9,0,0,0,13,0,0,1,17,9,13,17,21,25,29,33,25,41,45,49,29,57,61,0,33,0,0,33,37,41,45,0,41,0,0,0,45,0,0,0,49,0,0,49,53,57,61,0,57,0,0,0,61,0,0,1,65,9,13,65,69,73,77,33,73,41,45,49,77,57,61,65,81,73,77,81,85,89,93,97,89,105,109,113,93,121,125,129,97,137,141,97,101,105,109,161,105,169,173,177,109,185,189,193,113,201,205,113,117,121,125,225,121,233,237,241,125,249,253,0,129,0,0,129,133,137,141,0,137,0,0,0,141,0,0,129,145,137,141,145,149,153,157,161,153,169,173,177,157,185,189,0,161,0,0,161,165,169,173,0,169,0,0,0,173,0,0,0,177,0,0,177,181,185,189,0,185,0,0,0,189,0,0,0,193,0,0,193,197,201,205,0,201,0,0,0,205,0,0,193,209,201,205,209,213,217,221,225,217,233,237,241,221,249,253,0,225,0,0,225,229,233,237,0,233,0,0,0,237,0,0,0,241,0,0,241,245,249,253,0,249,0,0,0,253,0,0},
++    {0,0,2,0,0,0,6,0,2,6,10,14,0,0,14,0,0,0,18,0,0,0,22,0,18,22,26,30,0,0,30,0,2,6,34,14,18,22,38,30,34,38,42,46,50,54,46,62,0,0,50,0,0,0,54,0,50,54,58,62,0,0,62,0,0,0,66,0,0,0,70,0,66,70,74,78,0,0,78,0,0,0,82,0,0,0,86,0,82,86,90,94,0,0,94,0,66,70,98,78,82,86,102,94,98,102,106,110,114,118,110,126,0,0,114,0,0,0,118,0,114,118,122,126,0,0,126,0,2,6,130,14,18,22,134,30,130,134,138,142,50,54,142,62,66,70,146,78,82,86,150,94,146,150,154,158,114,118,158,126,130,134,162,142,146,150,166,158,162,166,170,174,178,182,174,190,194,198,178,206,210,214,182,222,178,182,186,190,242,246,190,254,0,0,194,0,0,0,198,0,194,198,202,206,0,0,206,0,0,0,210,0,0,0,214,0,210,214,218,222,0,0,222,0,194,198,226,206,210,214,230,222,226,230,234,238,242,246,238,254,0,0,242,0,0,0,246,0,242,246,250,254,0,0,254,0},
++    {0,0,0,3,0,0,0,7,0,0,0,11,3,7,11,15,0,0,0,19,0,0,0,23,0,0,0,27,19,23,27,31,0,0,0,35,0,0,0,39,0,0,0,43,35,39,43,47,3,7,11,51,19,23,27,55,35,39,43,59,51,55,59,63,0,0,0,67,0,0,0,71,0,0,0,75,67,71,75,79,0,0,0,83,0,0,0,87,0,0,0,91,83,87,91,95,0,0,0,99,0,0,0,103,0,0,0,107,99,103,107,111,67,71,75,115,83,87,91,119,99,103,107,123,115,119,123,127,0,0,0,131,0,0,0,135,0,0,0,139,131,135,139,143,0,0,0,147,0,0,0,151,0,0,0,155,147,151,155,159,0,0,0,163,0,0,0,167,0,0,0,171,163,167,171,175,131,135,139,179,147,151,155,183,163,167,171,187,179,183,187,191,3,7,11,195,19,23,27,199,35,39,43,203,195,199,203,207,67,71,75,211,83,87,91,215,99,103,107,219,211,215,219,223,131,135,139,227,147,151,155,231,163,167,171,235,227,231,235,239,195,199,203,243,211,215,219,247,227,231,235,251,243,247,251,255}
++};
++
++static inline uint8_t lru_touch(uint8_t l, unsigned w)
+ {
+-    unsigned k = 0;
+-    while (((l >> (2 * k)) & 3u) != w)
+-        k++;
+-    unsigned below = l & ((1u << (2 * k)) - 1u);
+-    unsigned above = l & ~((1u << (2 * k + 2)) - 1u) & 0xFFu;
+-    return (uint8_t)(above | below << 2 | w);
++    return lru_tab[w][l];
+ }
+ 
+ // Miss of logical line number ln: the LRU way of its set gets the line. Out
+@@ -133,7 +158,13 @@
+ #ifdef DMC_HOST
+     if (!rc2_mem || !rc2_swap(ln, set, w, old))
+ #endif
+-        img_read(loff, rc_data[base + w], n);
++    {
++        const uint32_t *pw = img_pw[loff >= img.split];
++        if (loff - pw[0] < pw[1] - pw[0] && pw[1] - loff >= n)
++            nor_read(pw[2] + loff, rc_data[base + w], n);
++        else
++            img_read(loff, rc_data[base + w], n);
++    }
+     rc_tag[base + w] = tag;
+     rc_lru[set] = lru_touch(rc_lru[set], w);
+     return rc_data[base + w];
+@@ -177,8 +208,15 @@
+ // built freestanding, where memcpy is an ordinary call. Up to 8 B it becomes
+ // single loads and stores. Lines and destinations need not be word aligned,
+ // and the M4 does those unaligned (never LDRD, STRD, LDM or STM, which fault).
+-void rec_get(uint32_t loff, void *out, uint32_t n)
++__attribute__((noinline)) static void rec_get_slow(uint32_t loff, void *out, uint32_t n)
+ {
++    {
++        const uint8_t *b = bake_ptr(loff, n);
++        if (b) {
++            memcpy(out, b, n);
++            return;
++        }
++    }
+     uint8_t *o = out;
+     unsigned in = loff & (RC_LINE - 1);
+ 
+@@ -211,7 +249,7 @@
+         unsigned k = RC_LINE - in;
+         if (k > n)
+             k = n;
+-        rec_get(loff, o, k);
++        rec_get_slow(loff, o, k);
+         o += k;
+         loff += k;
+         n -= k;
+@@ -219,16 +257,94 @@
+     }
+ }
+ 
++// Hit lookup without a fill: NULL on a miss (the hit path of rec_get stays a leaf function).
++static inline __attribute__((always_inline)) const uint8_t *rc_hit(uint32_t loff)
++{
++    uint32_t ln = loff / RC_LINE;
++    unsigned set = ln & (RC_SETS - 1);
++    uint16_t tag = (uint16_t)(ln / RC_SETS);
++    const uint16_t *t = &rc_tag[set * RC_WAYS];
++    unsigned w;
++
++    if (t[0] == tag)
++        w = 0;
++    else if (t[1] == tag)
++        w = 1;
++    else if (t[2] == tag)
++        w = 2;
++    else if (t[3] == tag)
++        w = 3;
++    else
++        return 0;
++    uint8_t *lru = &rc_lru[set];
++    uint8_t l = *lru;
++    if ((l & 3u) != w)
++        *lru = lru_tab[w][l];
++    return rc_data[set * RC_WAYS + w] + (loff & (RC_LINE - 1));
++}
++
++void rec_get(uint32_t loff, void *out, uint32_t n)
++{
++    const uint8_t *p = 0;
++    if (loff - bake_lo < bake_span)
++        p = bake_ptr(loff, n);
++    if (!p && n - 1u < RC_LINE - (loff & (RC_LINE - 1)))
++        p = rc_hit(loff);
++    if (!p) {
++        rec_get_slow(loff, out, n);
++        return;
++    }
++    if (!(((uintptr_t)p | (uintptr_t)out) & 3u)) {
++        const uint32_t *s = (const uint32_t *)(const void *)p;
++        uint32_t *d = (uint32_t *)out;
++        switch (n) {
++        case 16: {
++            uint32_t a = s[0], b = s[1], c = s[2], e = s[3];
++            d[0] = a; d[1] = b; d[2] = c; d[3] = e;
++            return;
++        }
++        case 8: {
++            uint32_t a = s[0], b = s[1];
++            d[0] = a; d[1] = b;
++            return;
++        }
++        case 4:
++            d[0] = s[0];
++            return;
++        case 12: {
++            uint32_t a = s[0], b = s[1], c = s[2];
++            d[0] = a; d[1] = b; d[2] = c;
++            return;
++        }
++        }
++    }
++    memcpy(out, p, n);
++}
++
+ uint16_t rec_u16(uint32_t loff)
+ {
++    if (!(loff & 1u) && ((loff & (RC_LINE - 1)) <= RC_LINE - 2 || loff - bake_lo < bake_span)) {
++        const uint8_t *p = loff - bake_lo < bake_span ? bake_ptr(loff, 2) : 0;
++        if (!p && (loff & (RC_LINE - 1)) <= RC_LINE - 2)
++            p = rc_hit(loff);
++        if (p)
++            return *(const uint16_t *)(const void *)p;
++    }
+     uint16_t v;
+-    rec_get(loff, &v, 2);
++    rec_get_slow(loff, &v, 2);
+     return v;
+ }
+ 
+ uint32_t rec_u32(uint32_t loff)
+ {
++    if (!(loff & 3u)) {
++        const uint8_t *p = loff - bake_lo < bake_span ? bake_ptr(loff, 4) : 0;
++        if (!p)
++            p = rc_hit(loff);
++        if (p)
++            return *(const uint32_t *)(const void *)p;
++    }
+     uint32_t v;
+-    rec_get(loff, &v, 4);
++    rec_get_slow(loff, &v, 4);
+     return v;
+ }
+diff -ruN pa/engine/port/data/cache.h pb/engine/port/data/cache.h
+--- pa/engine/port/data/cache.h	2026-11-03 19:05:34
++++ pb/engine/port/data/cache.h	2026-11-03 19:05:34
+@@ -10,9 +10,11 @@
+ 
+ #include <stdint.h>
+ 
+-#define RC_LINE 16
++#ifndef RC_LINE
++#define RC_LINE 32
+ #define RC_WAYS 4
+-#define RC_SETS 32
++#define RC_SETS 16
++#endif
+ #define RC_LINES (RC_WAYS * RC_SETS)
+ // RAM of the cache: line data, u16 tags and the LRU bytes
+ #define RC_BYTES (RC_LINES * RC_LINE + RC_LINES * 2 + RC_SETS)
+diff -ruN pa/engine/port/data/extents.c pb/engine/port/data/extents.c
+--- pa/engine/port/data/extents.c	2026-11-03 19:05:34
++++ pb/engine/port/data/extents.c	2026-11-03 19:05:34
+@@ -9,8 +9,10 @@
+ 
+ static const uint8_t ext_cap[DMC_NFILES] = { 16, 8, 8, 4, 4, 1 };
+ 
++extern uint32_t img_pw[2][3];
+ void ext_reset(void)
+ {
++    img_pw[0][1] = img_pw[0][0] = img_pw[1][1] = img_pw[1][0] = 0;
+     unsigned first = 0;
+     for (int i = 0; i < DMC_NFILES; i++) {
+         dmc_file_t *f = &dmc_files[i];
+@@ -26,6 +28,7 @@
+ 
+ int ext_add(dmc_file_t *f, uint16_t lcl, uint16_t pcl)
+ {
++    img_pw[0][1] = img_pw[0][0] = img_pw[1][1] = img_pw[1][0] = 0;
+     dmc_extent_t *e = &dmc_extents[f->first];
+     if (f->next) {
+         dmc_extent_t *last = &e[f->next - 1];
+diff -ruN pa/engine/port/data/img.c pb/engine/port/data/img.c
+--- pa/engine/port/data/img.c	2026-11-03 19:05:34
++++ pb/engine/port/data/img.c	2026-11-03 19:05:34
+@@ -19,8 +19,18 @@
+     img_read(DMC_MAP_TABLE_OFF + 32u * (unsigned)k, e, sizeof(*e));
+ }
+ 
++// One cached run per file part (DOOM.DAT / DOOMX.DAT) of the logical image with a constant
++// offset to the NOR address: every translation after the first in the same extent is a
++// subtract, a compare and an add.
++uint32_t img_pw[2][3];  // lo, hi, delta
++
+ uint32_t img_phys_run(uint32_t loff, uint32_t *run)
+ {
++    uint32_t *w = img_pw[loff >= img.split];
++    if (loff - w[0] < w[1] - w[0]) {
++        *run = w[1] - loff;
++        return loff + w[2];
++    }
+     uint32_t phys;
+     if (loff < img.split) {
+         phys = ext_phys(&dmc_files[DMC_F_DOOM], loff, run);
+@@ -29,6 +39,9 @@
+     } else {
+         phys = ext_phys(&dmc_files[DMC_F_DOOMX], loff - img.split + DMC_DOOMX_HDR, run);
+     }
++    w[0] = loff;
++    w[1] = loff + *run;
++    w[2] = phys - loff;
+     return phys;
+ }
+ 
+diff -ruN pa/engine/port/data/img.h pb/engine/port/data/img.h
+--- pa/engine/port/data/img.h	2026-11-03 19:05:34
++++ pb/engine/port/data/img.h	2026-11-03 19:05:34
+@@ -38,6 +38,8 @@
+ } img_dir_t;
+ 
+ extern img_dir_t img;
++// cached translation runs (lo, hi, phys - logical) of the DOOM.DAT and DOOMX.DAT parts, see img.c
++extern uint32_t img_pw[2][3];
+ 
+ // Locates the files (DOOMCODE.DMC on the firmware drive first, then on the
+ // data drive), checks both headers and the header CRC, loads the section
+diff -ruN pa/engine/port/game/i_dmc.c pb/engine/port/game/i_dmc.c
+--- pa/engine/port/game/i_dmc.c	2026-11-03 19:05:34
++++ pb/engine/port/game/i_dmc.c	2026-11-03 19:05:34
+@@ -93,6 +93,18 @@
+ 
+ void I_Sleep(int ms)
+ {
++#ifdef DMC_FW
++    // Virtual clock (no timer): TryRunTics sleeps 1 ms at a time until the next tic. Jump straight to the
++    // first ms whose I_GetTime is one more than now: every observable state is the same, 28 loops fewer.
++    if (ms == 1)
++    {
++        uint32_t t = (uint32_t)I_GetTime() + 1u, sec = t / TICRATE, k = t % TICRATE;
++        uint32_t target = sec * 1000u + (k * 1000u + (TICRATE - 1u)) / TICRATE;
++        uint32_t now = plat_ms();
++        plat_delay_ms(target > now ? target - now : 1u);
++        return;
++    }
++#endif
+     plat_delay_ms(ms > 0 ? (uint32_t)ms : 1u);
+ }
+ 
+@@ -238,4 +250,9 @@
+                 (unsigned)(c + need - arena));
+     rc_place(c);
+     flat_place(k ? c + RC_BYTES : NULL);
++#ifdef Q_DBG_RAM
++    { extern void q_puts(const char*); extern void q_puthex(uint32_t); extern void q_putc(int);
++      q_puts("RAMDBG c+need="); q_puthex((uint32_t)(uintptr_t)(c + need)); q_puts(" arena="); q_puthex((uint32_t)(uintptr_t)arena);
++      q_puts(" k="); q_puthex(k); q_puts(" plan="); q_puthex((uint32_t)M.plan.plan); q_putc(10); }
++#endif
+ }
+diff -ruN pa/repo/include/qos.h pb/repo/include/qos.h
+--- pa/repo/include/qos.h	2026-11-03 19:05:33
++++ pb/repo/include/qos.h	2026-11-03 19:05:33
+@@ -45,6 +45,7 @@
+ #define QOS_SYS_DISK_REQUEST 18u /* byte offset, destination RAM pointer, length<=256; 0 accepted */
+ #define QOS_SYS_DISK_POLL 19u /* 0=pending, len=completed, negative=failure */
+ #define QOS_SYS_DISK_CANCEL 20u /* abort pending request */
++#define QOS_SYS_DISK_READ 21u /* offset, dest RAM ptr, len<=256: request+wait+copy in one call; returns len, 0 = still pending (continue with DISK_POLL), <0 error */
+ #define QOS_DISK_WINDOW 256u
+ #define QOS_O_READ 0u
+ #define QOS_O_WRITE 1u
+diff -ruN pa/repo/kernel/main.c pb/repo/kernel/main.c
+--- pa/repo/kernel/main.c	2026-11-03 19:05:33
++++ pb/repo/kernel/main.c	2026-11-03 19:05:33
+@@ -48,7 +48,8 @@
+ static int file_number(const char *name){if(!name_ok(name))return -1;for(int i=0;i<FILES;i++)if(streq(name,file_names[i]))return i;return -1;}
+ static int getfd(unsigned f){return f<QOS_MAX_FD&&fds[f].used&&fds[f].owner==current_pid;}
+ static unsigned sys(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c);
+-static const qos_api api={1,sys};
++static unsigned sys_entry(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c);
++static const qos_api api={1,sys_entry};
+ typedef int (*app_entry)(const qos_api*);
+ static int spawn(const char *name){
+  int which=file_number(name);uintptr_t addr;
+@@ -71,6 +72,11 @@
+  current_pid=old;proc_top--;
+  return result;
+ }
++static void disk_copy(void){unsigned n=disk_length;const uint8_t*sp=(const uint8_t*)qos_disk_mailbox.bytes;uint8_t*dp=(uint8_t*)(uintptr_t)disk_dest;
++  if(!(((uintptr_t)dp)&3)){const uint32_t*s4=(const uint32_t*)(const void*)sp;uint32_t*d4=(uint32_t*)(void*)dp;
++   for(;n>=16;n-=16){uint32_t a=s4[0],b=s4[1],c2=s4[2],d=s4[3];d4[0]=a;d4[1]=b;d4[2]=c2;d4[3]=d;s4+=4;d4+=4;}
++   for(;n>=4;n-=4)*d4++=*s4++;sp=(const uint8_t*)s4;dp=(uint8_t*)d4;}
++  while(n--)*dp++=*sp++;}
+ static unsigned sys(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
+  /* While /bin/doomd owns RAM, the RAMFS/fd/proc tables are gone: only the
+     core syscalls (console, fb, keys, disk, pid, yield) are available. */
+@@ -136,7 +142,7 @@
+   if(!disk_active)return (unsigned)-1;
+   if(qos_disk_mailbox.ready_seq!=disk_seq)return 0;
+   if(qos_disk_mailbox.status!=1){disk_active=0;return (unsigned)-2;}
+-  for(unsigned i=0;i<disk_length;i++)((uint8_t*)(uintptr_t)disk_dest)[i]=qos_disk_mailbox.bytes[i];
++  disk_copy();
+   disk_active=0;
+   return disk_length;
+  case QOS_SYS_KEY_POLL:
+@@ -146,6 +152,28 @@
+ 
+  default:return (unsigned)-1;
+  }
++}
++/* API entry. DISK_READ = request + bounded wait + copy in one call (the hot path of DOOM's NOR reads);
++   everything else is sys(). The host services the mailbox exactly as for DISK_REQUEST/DISK_POLL. */
++static unsigned sys_entry(uint32_t n,uintptr_t a,uintptr_t b,uintptr_t c){
++ if(n!=QOS_SYS_DISK_READ)return sys(n,a,b,c);
++ if(disk_active||c-1u>=QOS_DISK_WINDOW||b<QOS_RAM_BEGIN||b>QOS_RAM_END-c||a>0xffffffffu-c)return (unsigned)-1;
++ uint32_t seq=++disk_seq;
++ qos_disk_mailbox.offset=(uint32_t)a;qos_disk_mailbox.length=(uint32_t)c;qos_disk_mailbox.status=0;
++ qos_disk_mailbox.request_seq=seq;
++ if(qos_disk_mailbox.ready_seq!=seq){
++  disk_dest=(uint32_t)b;disk_length=(uint32_t)c;disk_active=1;
++  for(unsigned i=0;i<4096;i++)if(qos_disk_mailbox.ready_seq==seq)goto ready;
++  return 0; /* still pending: caller continues with DISK_POLL */
++ }
++ ready:
++ if(qos_disk_mailbox.status!=1){disk_active=0;return (unsigned)-2;}
++ {const uint32_t*sp=(const uint32_t*)(const void*)qos_disk_mailbox.bytes;uint32_t*dp=(uint32_t*)b;unsigned w=(unsigned)c>>2;
++  if((b|c)&3){const uint8_t*s1=(const uint8_t*)sp;uint8_t*d1=(uint8_t*)b;for(unsigned i=0;i<c;i++)d1[i]=s1[i];}
++  else{for(;w>=4;w-=4){uint32_t x0=sp[0],x1=sp[1],x2=sp[2],x3=sp[3];dp[0]=x0;dp[1]=x1;dp[2]=x2;dp[3]=x3;sp+=4;dp+=4;}
++   while(w--)*dp++=*sp++;}}
++ disk_active=0;
++ return (unsigned)c;
+ }
+ /* Takeover entry (kernel stack, reached via qos_takeover_enter in start.S).
+  * The shell/RAMFS overlay is abandoned, doomd runs on a stack at the very top
+diff -ruN pa/repo/ports/doomdmc/bakemap_stub.c pb/repo/ports/doomdmc/bakemap_stub.c
+--- pa/repo/ports/doomdmc/bakemap_stub.c	1969-12-31 19:00:00
++++ pb/repo/ports/doomdmc/bakemap_stub.c	2026-11-03 19:05:33
+@@ -0,0 +1,3 @@
++// no baked map (build.sh could not read the NOR image): bake_init() does nothing
++#include <stdint.h>
++const uint32_t bake_key[5]; const uint32_t bake_n; const uint32_t bake_rng[1][3]; const uint32_t bake_data[1];
+diff -ruN pa/repo/ports/doomdmc/build.sh pb/repo/ports/doomdmc/build.sh
+--- pa/repo/ports/doomdmc/build.sh	2026-11-03 19:05:33
++++ pb/repo/ports/doomdmc/build.sh	2026-11-03 19:05:33
+@@ -14,6 +14,12 @@
+ INC="-I$HERE/stub -I$DMC/engine/stub/include -I$DMC/engine -I$DMC/port/data -I$DMC/port/render -I$DMC/port/obj -I$DMC/port/math -I$DMC/platform -I$DMC/port/game -I$DMC/port/ovl -I$HERE -I$GEN -I$DMC/controller/rc-n1 -I$REPO/include -I$REPO/ports/doom"
+ DEFS="-DDOOMD_MODE=${DOOMD_MODE:-0} -DDOOMD_DUMP=${DOOMD_DUMP:-0} -DDMC_FW -DDMC_HASHORDER -DDMC_SINE_L1 -DPLAT_HOST"
+ CF="$ARCH ${OPT:--O2} -ffunction-sections -fdata-sections -ffreestanding -fno-builtin -fno-common -fwrapv -fsigned-char -std=gnu11 -w $DEFS $INC ${EXTRA_CF}"
++# map streams in the data ROM (disk-request cut): BAKE_IMG = NOR image to read E1M6 from (default: the E1 pack)
++BAKE_IMG=${BAKE_IMG:-$DMC/build/sw/nor/E1.img}
++BAKE=$HERE/bakemap_stub.c
++if [ -z "$NOBAKE" ] && [ -f "$BAKE_IMG" ]; then
++  python3 $REPO/tools/bake_map.py "$BAKE_IMG" $OUT/bakemap.c ${BAKE_BUDGET:-82000} ${BAKE_EP:-1} ${BAKE_MAP:-6} >/dev/null && BAKE=$OUT/bakemap.c
++fi
+ SRCS=""
+ for f in $DMC/engine/*.c; do
+   b=$(basename $f .c); case $b in am_map|z_zone|m_argv|w_wad|w_file|i_endoom|m_fixed) continue;; esac; SRCS="$SRCS $f"
+@@ -23,7 +29,7 @@
+ done
+ for b in i_dmc libc_dmc fe_glue i_input s_pcspk l_level l_lines l_menu l_wi l_finale g_save l_save; do SRCS="$SRCS $DMC/port/game/$b.c"; done
+ SRCS="$SRCS $GEN/info.c $GEN/colormap.c $GEN/trig_tables.c $GEN/view.c"
+-SRCS="$SRCS $DMC/platform/rt.c $DMC/platform/text.c $HERE/qplat.c $REPO/ports/doom/hal.c $HERE/doomd_main.c $HERE/ovl_rv.c $HERE/fastfix.c $HERE/rtlib.c $HERE/qimg.c $HERE/qsolid.c $HERE/qnor.c $HERE/qlcd.c"
++SRCS="$SRCS $DMC/platform/rt.c $DMC/platform/text.c $HERE/qplat.c $REPO/ports/doom/hal.c $HERE/doomd_main.c $HERE/ovl_rv.c $HERE/fastfix.c $HERE/rtlib.c $HERE/qimg.c $HERE/qsolid.c $HERE/qbake.c $BAKE $HERE/qnor.c $HERE/qlcd.c"
+ objs=""
+ $CC $ARCH -c $REPO/apps/doomd_crt0.S -o $OUT/o/crt0.o
+ objs="$OUT/o/crt0.o"
+diff -ruN pa/repo/ports/doomdmc/doomd_main.c pb/repo/ports/doomdmc/doomd_main.c
+--- pa/repo/ports/doomdmc/doomd_main.c	2026-11-03 19:05:33
++++ pb/repo/ports/doomdmc/doomd_main.c	2026-11-03 19:05:33
+@@ -32,6 +32,7 @@
+ #include "rec.h"
+ 
+ void D_Display(void);
++void bake_init(void);
+ extern int demosequence;
+ extern boolean sendpause;
+ void q_frame_end(void);
+@@ -90,6 +91,7 @@
+     if (e) plat_panic("DOOM.DAT not usable");
+     q_puts("doomd: image bytes "); q_putu(img.size); q_putc('\n');
+ 
++    bake_init();
+     // start-up of the engine as BOOT_E_ENGINE does it (dmc_boot.c)
+     rc_place(DMC_FRAME_BASE + PLAT_FRAME_MIN);
+     flat_place(NULL);
+diff -ruN pa/repo/ports/doomdmc/qbake.c pb/repo/ports/doomdmc/qbake.c
+--- pa/repo/ports/doomdmc/qbake.c	1969-12-31 19:00:00
++++ pb/repo/ports/doomdmc/qbake.c	2026-11-03 19:05:33
+@@ -0,0 +1,27 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// /bin/doomd: switch for the map streams baked into the data ROM (bakemap.c, made by
++// tools/bake_map.py). Only enabled when the image's map entry matches the baked offset, size and
++// CRC; otherwise every read goes through the record cache and the disk as before.
++#include <stdint.h>
++#include "img.h"
++#include "rec.h"
++
++extern const uint32_t bake_key[5], bake_rng[][3];
++uint32_t bake_lo, bake_span;
++extern uint32_t bake_n;
++
++void bake_init(void)
++{
++    if (!bake_n) return;
++    int k = map_find((int)bake_key[0], (int)bake_key[1]);
++    if (k < 0) return;
++    dmc_mapent_t e;
++    img_mapent(k, &e);
++    if (e.off != bake_key[2] || e.size != bake_key[3] || e.crc != bake_key[4]) return;
++    uint32_t lo = ~0u, hi = 0;
++    for (uint32_t i = 0; i < bake_n; i++) {
++        if (bake_rng[i][0] < lo) lo = bake_rng[i][0];
++        if (bake_rng[i][0] + bake_rng[i][1] > hi) hi = bake_rng[i][0] + bake_rng[i][1];
++    }
++    bake_lo = lo; bake_span = hi - lo;
++}
+diff -ruN pa/repo/ports/doomdmc/qlcd.c pb/repo/ports/doomdmc/qlcd.c
+--- pa/repo/ports/doomdmc/qlcd.c	2026-11-03 19:05:33
++++ pb/repo/ports/doomdmc/qlcd.c	2026-11-03 19:05:33
+@@ -30,6 +30,9 @@
+ {
+     wx0 = x0; wx1 = x1; wy0 = y0; wy1 = y1; wflags = flags; wcur = x0;
+     if (q_dump_req) { dumping = 1; q_dump_req = 0; }
++#ifdef Q_DUMP_ALL
++    dumping = 1; /* verification build: stream every pump window (see tools/fh.py) */
++#endif
+     if (dumping) {
+         q_putc(1); q_putc('P'); q_putc(q_pal);
+         q_putc(1); q_putc('W');
+diff -ruN pa/repo/ports/doomdmc/qplat.c pb/repo/ports/doomdmc/qplat.c
+--- pa/repo/ports/doomdmc/qplat.c	2026-11-03 19:05:33
++++ pb/repo/ports/doomdmc/qplat.c	2026-11-03 19:05:33
+@@ -54,22 +54,28 @@
+ volatile struct nor_stats nor_stats;
+ static uint32_t nor_ticket;
+ 
++// slow tail of a read the host has not completed within the kernel's wait: old poll protocol
++__attribute__((noinline)) static void nor_wait_slow(uint32_t r, uint32_t c)
++{
++    if ((int32_t)r < 0) plat_panic("disk req");
++    for (unsigned j = 0; j < 64 && !r; j++)
++        r = qapi->syscall(QOS_SYS_DISK_POLL, 0, 0, 0);
++    if (r != c) {
++        qapi->syscall(QOS_SYS_DISK_CANCEL, 0, 0, 0);
++        plat_panic("disk read");
++    }
++}
++static inline __attribute__((always_inline)) void nor_chunk(uint32_t phys, void *out, uint32_t c)
++{
++    uint32_t r = qapi->syscall(QOS_SYS_DISK_READ, phys, (uintptr_t)out, c);
++    if (r != c) nor_wait_slow(r, c);
++}
+ void nor_hw(uint32_t phys, void *dst, uint32_t n)
+ {
+     uint8_t *out = dst;
+     while (n) {
+         uint32_t c = n > QOS_DISK_WINDOW ? QOS_DISK_WINDOW : n;
+-        if (qapi->syscall(QOS_SYS_DISK_REQUEST, phys, (uintptr_t)out, c))
+-            plat_panic("disk req");
+-        uint32_t r = 0;
+-        for (unsigned j = 0; j < 64; j++) {
+-            r = qapi->syscall(QOS_SYS_DISK_POLL, 0, 0, 0);
+-            if (r) break;
+-        }
+-        if (r != c) {
+-            qapi->syscall(QOS_SYS_DISK_CANCEL, 0, 0, 0);
+-            plat_panic("disk read");
+-        }
++        nor_chunk(phys, out, c);
+         phys += c; out += c; n -= c;
+     }
+ }
+@@ -78,13 +84,12 @@
+ uint8_t nor_status(uint8_t cmd) { (void)cmd; return 0; }
+ void nor_read(uint32_t phys, void *dst, uint32_t n)
+ {
+-    nor_stats.sync++; nor_stats.bytes += n;
++    if (n <= QOS_DISK_WINDOW) { nor_chunk(phys, dst, n); return; }
+     nor_hw(phys, dst, n);
+ }
+ int nor_read_async(uint32_t phys, void *dst, uint32_t n, int prio)
+ {
+     (void)prio;
+-    nor_stats.async++; nor_stats.bytes += n;
+     nor_hw(phys, dst, n);
+     return (int)++nor_ticket;
+ }
+@@ -94,8 +99,7 @@
+ int nor_col_start(uint32_t phys, void *dst, uint32_t n)
+ {
+     if (!n || n > 256) return -1;
+-    nor_stats.async++; nor_stats.bytes += n;
+-    nor_hw(phys, dst, n);
++    nor_chunk(phys, dst, n);
+     return 0;
+ }
+ void nor_col_wait(void) {}
+diff -ruN pa/repo/tools/bake_map.py pb/repo/tools/bake_map.py
+--- pa/repo/tools/bake_map.py	1969-12-31 19:00:00
++++ pb/repo/tools/bake_map.py	2026-11-03 19:05:33
+@@ -0,0 +1,66 @@
++#!/usr/bin/env python3
++"""bake_map.py NOR.img OUT.c [BUDGET] [EPISODE MAP]
++Writes the hottest streams of one map block of DOOM.DAT as const data (data ROM, the ~90 KB that
++/bin/doomd leaves unused) so their record reads never go to the disk: bakemap.c is linked into
++/bin/doomd, bake_init() enables it only when the image's map entry has the same offset/size/CRC.
++Streams are chosen by measured disk requests per byte (E1M1 attract demo)."""
++import struct, sys
++img = open(sys.argv[1], 'rb').read()
++out = sys.argv[2]
++budget = int(sys.argv[3]) if len(sys.argv) > 3 else 82000
++ep, mp = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (1, 1)
++
++def vol(base, name):
++    bps, spc, res, nf, nroot, tot, _, fsz = struct.unpack_from('<HBHBHHBH', img, base + 11)
++    root = base + (res + nf * fsz) * bps
++    for i in range(nroot):
++        e = img[root + i * 32:root + i * 32 + 32]
++        if e[:11] == name:
++            assert struct.unpack_from('<H', e, 26)[0] == 2, 'file not at cluster 2'
++            return root + nroot * 32, struct.unpack_from('<I', e, 28)[0]
++    raise SystemExit('no ' + name.decode())
++d0, split = vol(0x100000, b'DOOM    DAT')
++d1, _ = vol(0, b'DOOMX   DAT')
++def logical(off, n):
++    out = b''
++    while n:
++        if off < split:
++            k = min(n, split - off); out += img[d0 + off:d0 + off + k]
++        else:
++            k = n; out += img[d1 + 64 + off - split:d1 + 64 + off - split + k]
++        off += k; n -= k
++    return out
++k = 0
++while True:
++    e = logical(1792 + 32 * k, 32)
++    off, size, crc, e_, m_ = struct.unpack_from('<IIIBB', e, 8)
++    if e_ == ep and m_ == mp: break
++    k += 1
++hdr = logical(off, 512)
++so = struct.unpack_from('<24I', hdr, 64); ss = struct.unpack_from('<24I', hdr, 160)
++N = "NODES NODEBB SSECT SEGS LINES LINESIDES SIDES SECTORS SECEXTRA SECLINES TAGS BLOCKMAP GRID REJECT SNDADJ THINGS CELLTHINGS SECTHINGS ZCLIP TELEDEST SPECIALS MONSTERS TEXXLAT FLATXLAT".split()
++def st(n): i = N.index(n); return off + so[i], ss[i]
++ranges = []
++lo = st('LINESIDES')[0]; hi = st('SECTORS')[0] + st('SECTORS')[1]   # LINESIDES, SIDES, SECTORS are contiguous
++ranges.append((lo, hi - lo))
++for n in ('NODES', 'SSECT', 'THINGS', 'SECTHINGS', 'ZCLIP'):
++    ranges.append(st(n))
++used = sum(l for _, l in ranges)
++rest = (budget - used) & ~15
++if rest > 0:
++    lo, ln = st('LINES'); ranges.append((lo, min(rest, ln)))
++ranges.sort()
++data = b''.join(logical(lo, ln) + b'\0' * (-ln & 3) for lo, ln in ranges)
++with open(out, 'w') as f:
++    f.write('// generated by tools/bake_map.py from %s: map E%dM%d, %d ranges, %d bytes\n#include <stdint.h>\n' % (sys.argv[1], ep, mp, len(ranges), len(data)))
++    f.write('const uint32_t bake_key[5] = {%d,%d,%d,%d,%d};\n' % (ep, mp, off, size, crc))
++    f.write('const uint32_t bake_n = %d;\n' % len(ranges))
++    pos = 0; rows = []
++    for lo, ln in ranges:
++        rows.append('{%d,%d,%d}' % (lo, ln, pos)); pos += (ln + 3) & ~3
++    f.write('const uint32_t bake_rng[%d][3] = {%s};\n' % (len(ranges), ','.join(rows)))
++    f.write('const uint32_t bake_data[%d] __attribute__((aligned(4))) = {\n' % (len(data) // 4))
++    w = struct.unpack('<%dI' % (len(data) // 4), data)
++    for i in range(0, len(w), 12): f.write(','.join('0x%x' % x for x in w[i:i + 12]) + ',\n')
++    f.write('};\n')
++print('baked', len(data), 'bytes in', len(ranges), 'ranges; map crc', hex(crc))
+diff -ruN pa/repo/tools/fh.py pb/repo/tools/fh.py
+--- pa/repo/tools/fh.py	1969-12-31 19:00:00
++++ pb/repo/tools/fh.py	2026-11-03 19:05:33
+@@ -0,0 +1,31 @@
++#!/usr/bin/env python3
++"""fh.py out.bin -> prints md5 per 'E' (canvas+palette); optional prefix saves PNGs of unique frames"""
++import sys,hashlib
++d=open(sys.argv[1],'rb').read()
++i=0;cur=0;win=None;col=0;canvas=bytearray(320*240);n=0;res=[]
++L=len(d)
++while i<L:
++    if d[i]!=1: i+=1; continue
++    t=d[i+1]; i+=2
++    if t==80: cur=d[i]; i+=1            # P
++    elif t==87:                          # W
++        win=(d[i]|d[i+1]<<8,d[i+2]|d[i+3]<<8,d[i+4]|d[i+5]<<8,d[i+6]|d[i+7]<<8,d[i+8]|d[i+9]<<8); i+=10; col=win[0]
++    elif t==68:                          # D
++        nb=d[i]|d[i+1]<<8; i+=2
++        if i+nb>L: break
++        x0,x1,y0,y1,fl=win;h=y1-y0+1
++        for c in range(nb//h):
++            canvas[(y0)*320+col:(y1+1)*320+col:320]=d[i+c*h:i+c*h+h]
++            col+=1
++            if col>x1: col=x0
++        i+=nb
++    elif t==69:                          # E
++        i+=2
++        res.append(hashlib.md5(bytes([cur])+bytes(canvas)).hexdigest()[:12])
++print(len(res))
++# dedupe consecutive
++out=[]
++for h in res:
++    if not out or out[-1]!=h: out.append(h)
++open(sys.argv[2],'w').write('\n'.join(out)+'\n')
++print(len(out),'unique-consecutive')
+diff -ruN pa/repo/tools/rv32_fast.c pb/repo/tools/rv32_fast.c
+--- pa/repo/tools/rv32_fast.c	2026-11-03 19:05:33
++++ pb/repo/tools/rv32_fast.c	2026-11-03 19:05:33
+@@ -13,6 +13,46 @@
+ static uint32_t reg[32], pc;
+ static uint32_t tr_pc[64],tr_sp[64],tr_to[64];static unsigned trn;
+ static int ps,pskip,plen,pn;/* dump-packet parser state so pixel bytes are never taken for markers */
++/* profiler: PROF=1 PHASES=f1,f2,.. (frame-marker boundaries); self-instruction count per symbol per phase */
++#define NPH 8
++static uint32_t *hist[NPH];static int prof,phase,nph,phb[NPH];
++struct sym{uint32_t a,sz;char n[56];};static struct sym*syms;static int nsyms;
++static int symcmp(const void*x,const void*y){uint32_t a=((struct sym*)x)->a,b=((struct sym*)y)->a;return a<b?-1:a>b;}
++static void load_syms(const uint8_t*elf){
++  uint32_t shoff=*(uint32_t*)(elf+32);uint16_t shes=*(uint16_t*)(elf+46),shn=*(uint16_t*)(elf+48);
++  for(int i=0;i<shn;i++){const uint32_t*sh=(const uint32_t*)(elf+shoff+i*shes);if(sh[1]!=2)continue;
++    const uint32_t*strh=(const uint32_t*)(elf+shoff+sh[6]*shes);const char*str=(const char*)elf+strh[4];
++    int n=sh[5]/16;syms=realloc(syms,sizeof(struct sym)*(nsyms+n));
++    for(int j=0;j<n;j++){const uint8_t*e=elf+sh[4]+j*16;uint32_t nm=*(uint32_t*)e,val=*(uint32_t*)(e+4),sz=*(uint32_t*)(e+8);uint8_t info=e[12];
++      if((info&15)!=2&&(info&15)!=0)continue;if(val<0x40000||val>=0x80000)continue;if(!nm||str[nm]=='$'||(str[nm]=='.'&&str[nm+1]=='L'))continue;
++      syms[nsyms].a=val;syms[nsyms].sz=sz;snprintf(syms[nsyms].n,56,"%s",str+nm);nsyms++;}
++    }}
++static void prof_report(void){qsort(syms,nsyms,sizeof *syms,symcmp);
++  for(int ph=0;ph<=nph;ph++){uint64_t tot=0;uint64_t*acc=calloc(nsyms+1,8);
++    for(uint32_t w=0;w<0x10000;w++){uint32_t c=hist[ph][w];if(!c)continue;uint32_t a=0x40000+w*4;int lo=0,hi=nsyms-1,k=nsyms;
++      while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}
++      acc[k]+=c;tot+=c;}
++    if(getenv("PCTOP")){uint32_t*h=hist[ph];fprintf(stderr,"-- top PCs\n");for(int t=0;t<atoi(getenv("PCTOP"));t++){int b=-1;for(int w=0;w<0x10000;w++)if(h[w]&&(b<0||h[w]>h[b]))b=w;if(b<0)break;
++      fprintf(stderr,"  %08x %u\n",0x40000+b*4,h[b]);h[b]=0;}}
++    fprintf(stderr,"== phase %d total %llu\n",ph,(unsigned long long)tot);
++    for(int t=0;t<(getenv("PTOP")?atoi(getenv("PTOP")):30);t++){int b=-1;for(int i=0;i<=nsyms;i++)if(acc[i]&&(b<0||acc[i]>acc[b]))b=i;if(b<0)break;
++      unsigned long long ent=b<nsyms?hist[ph][(syms[b].a-0x40000)>>2]:0;
++      fprintf(stderr,"%10llu %5.1f%% %-28s calls=%llu avg=%.1f\n",(unsigned long long)acc[b],100.0*acc[b]/tot,b<nsyms?syms[b].n:"?",ent,ent?(double)acc[b]/ent:0.0);acc[b]=0;}}}
++/* tic stats: TICSYM (default G_Ticker) entry = one game tic; reports per-tic instruction deltas */
++static FILE*reqlog;static int reqprof,nrq;static uint32_t rqpc[512];static uint64_t rqn[512],rqb[512];static uint64_t nreq,nbytes,ticreq[1<<20],ticbytes[1<<20];static uint32_t ticpc,lvlpc;static uint64_t lvlstep,lvlframe;static int lvlseen,lvlticidx=-1;static uint64_t ticstep[1<<20];static int nticks;
++static int u64cmp(const void*a,const void*b){uint64_t x=*(uint64_t*)a,y=*(uint64_t*)b;return x<y?-1:x>y;}
++static void tic_report(void){
++  if(lvlseen)fprintf(stderr,"LEVEL boot_to_level_start=%llu load_to_first_frame=%llu first_game_frame_at=%llu\n",(unsigned long long)lvlstep,(unsigned long long)(lvlframe-lvlstep),(unsigned long long)lvlframe);
++  if(lvlseen&&lvlticidx>=0&&nticks-lvlticidx>3){int a=lvlticidx+1;int n=nticks-1-a;static uint64_t g[1<<20];uint64_t sum=0,mx=0;
++    for(int i=0;i<n;i++){g[i]=ticstep[a+i+1]-ticstep[a+i];sum+=g[i];if(g[i]>mx)mx=g[i];}
++    qsort(g,n,8,u64cmp);fprintf(stderr,"GAMETICS n=%d mean=%llu median=%llu p90=%llu max=%llu total=%llu\n",n,(unsigned long long)(sum/n),(unsigned long long)g[n/2],(unsigned long long)g[n*9/10],(unsigned long long)mx,(unsigned long long)sum);
++    fprintf(stderr,"DISK total_req=%llu req_per_tic=%llu bytes_per_tic=%llu\n",(unsigned long long)nreq,(unsigned long long)((ticreq[a+n]-ticreq[a])/n),(unsigned long long)((ticbytes[a+n]-ticbytes[a])/n));}
++  if(nticks<2)return;static uint64_t d[1<<20];int n=nticks-1;uint64_t sum=0,mx=0;
++  for(int i=0;i<n;i++){d[i]=ticstep[i+1]-ticstep[i];sum+=d[i];if(d[i]>mx)mx=d[i];}
++  uint64_t tot=ticstep[n]-ticstep[0];
++  if(getenv("TICLIST"))for(int i=0;i<n;i++)fprintf(stderr,"tic %d at %llu cost %llu\n",i,(unsigned long long)ticstep[i],(unsigned long long)d[i]);
++  qsort(d,n,8,u64cmp);
++  fprintf(stderr,"TICS n=%d first_tic_at=%llu mean=%llu median=%llu p90=%llu max=%llu\n",n,(unsigned long long)ticstep[0],(unsigned long long)(tot/n),(unsigned long long)d[n/2],(unsigned long long)d[n*9/10],(unsigned long long)mx);}
+ static int32_t S(uint32_t v){return (int32_t)v;}
+ static uint32_t rd32(uint32_t a){uint32_t v;memcpy(&v,mem+a,4);return v;}
+ static void wr32(uint32_t a,uint32_t v){memcpy(mem+a,&v,4);}
+@@ -29,10 +69,20 @@
+   FILE*out=fopen(argv[5],"wb");uint64_t maxi=strtoull(argv[6],0,10);
+   int nkeys=argc-7;struct{int c;int fr;int done;}keys[256];
+   for(int i=0;i<nkeys&&i<256;i++){keys[i].c=argv[7+i][0];keys[i].fr=atoi(argv[7+i]+2);keys[i].done=0;}
++  if(getenv("PROF")||getenv("REQPROF")){prof=getenv("PROF")!=0;{char*se=getenv("SYMELF");if(se){char*t=strtok(strdup(se),",");while(t){uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);load_syms(el2);}t=strtok(0,",");}}else load_syms(elf);}for(int i=0;i<NPH;i++)hist[i]=calloc(0x10000,4);
++    char*ph=getenv("PHASES");if(ph){char*t=strtok(strdup(ph),",");while(t&&nph<NPH-1){phb[nph++]=atoi(t);t=strtok(0,",");}}}
++  {const char*ts=getenv("TICSYM");if(!ts)ts="G_Ticker";const char*se=getenv("SYMELF");if(se){char*t=strtok(strdup(se),",");uint8_t*el2=calloc(1,1<<21);FILE*g=fopen(t,"rb");if(g){fread(el2,1,1<<21,g);fclose(g);
++    uint32_t shoff=*(uint32_t*)(el2+32);uint16_t shes=*(uint16_t*)(el2+46),shn=*(uint16_t*)(el2+48);
++    for(int i=0;i<shn;i++){const uint32_t*sh=(const uint32_t*)(el2+shoff+i*shes);if(sh[1]!=2)continue;const uint32_t*strh=(const uint32_t*)(el2+shoff+sh[6]*shes);const char*str=(const char*)el2+strh[4];
++      for(uint32_t j=0;j<sh[5]/16;j++){const uint8_t*e=el2+sh[4]+j*16;if(!strcmp(str+*(uint32_t*)e,ts))ticpc=*(uint32_t*)(e+4);if(!strcmp(str+*(uint32_t*)e,"P_SetupLevel"))lvlpc=*(uint32_t*)(e+4);}}}}}
++  reqprof=getenv("REQPROF")!=0;if(getenv("REQLOG"))reqlog=fopen(getenv("REQLOG"),"wb");
+   uint32_t last_req=0,kseq=100;int frames=0;uint64_t steps=0,fstep[100000];int exitcode=-1;
+   uint64_t last_frame_step=0;
+   while(steps<maxi){
+     if(pc<0x40000||pc>0x7fffc||(pc&3))die("fetch",pc,steps);
++    if(pc==lvlpc&&!lvlseen){lvlseen=1;lvlstep=steps;lvlticidx=nticks;}
++    if(pc==ticpc&&nticks<(1<<20)){ticreq[nticks]=nreq;ticbytes[nticks]=nbytes;ticstep[nticks++]=steps;while(phase<nph&&nticks>phb[phase])phase++;}
++    if(prof)hist[phase][(pc-0x40000)>>2]++;
+     uint32_t w=rd32(pc);
+     if((w&3)!=3)die("rvc",pc,steps);
+     uint32_t op=w&127,rd=(w>>7)&31,f3=(w>>12)&7,rs1=(w>>15)&31,rs2=(w>>20)&31,f7=w>>25;
+@@ -78,7 +128,7 @@
+   else if(ps==0){if(c==1)ps=1;else if(c==2)mark=1;}
+   else if(ps==1){ps=0;if(c=='D'){ps=2;pn=0;plen=0;}else if(c=='W')pskip=10;else if(c=='P')pskip=1;else if(c=='E')pskip=2;}
+   else if(ps==2){plen|=c<<(8*pn);if(++pn==2){ps=0;pskip=plen;}}
+-  if(mark){fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;
++  if(mark){fstep[frames<100000?frames:99999]=steps;frames++;last_frame_step=steps;if(lvlseen&&!lvlframe)lvlframe=steps;
+             for(int i=0;i<nkeys;i++)if(!keys[i].done&&frames>=keys[i].fr){keys[i].done=1;wr32(kbox+4,keys[i].c);wr32(kbox,kseq++);break;}}}}
+       else if(reg[17]==93){exitcode=reg[10];goto done;}
+       else die("ecall",reg[17],steps);
+@@ -90,12 +140,13 @@
+     uint32_t seq=rd32(dbox);
+     if(seq&&seq!=last_req){uint32_t off=rd32(dbox+4),len=rd32(dbox+8);
+       if(!len||len>256)die("bad disk request",len,steps);
+-      last_req=seq;int good=off<=(uint32_t)dn&&len<=(uint32_t)dn-off;
++      nreq++;nbytes+=len;if(reqlog){uint32_t rec[4]={off,len,reg[1],(uint32_t)nticks};fwrite(rec,4,4,reqlog);}if(reqprof){uint32_t r=reg[1];int f=0;for(int q=0;q<nrq;q++)if(rqpc[q]==r){rqn[q]++;rqb[q]+=len;f=1;break;}if(!f&&nrq<512){rqpc[nrq]=r;rqn[nrq]=1;rqb[nrq]=len;nrq++;}}last_req=seq;int good=off<=(uint32_t)dn&&len<=(uint32_t)dn-off;
+       if(good)memcpy(mem+dbox+20,disk+off,len);
+       wr32(dbox+16,good?1:2);wr32(dbox+12,seq);}
+   }
+ done:
+-  fclose(out);
++  fclose(out);if(reqlog)fclose(reqlog);if(reqprof){qsort(syms,nsyms,sizeof *syms,symcmp);for(int q=0;q<nrq;q++){uint32_t a=rqpc[q];int lo=0,hi=nsyms-1,k=-1;while(lo<=hi){int m=(lo+hi)/2;if(syms[m].a<=a){k=m;lo=m+1;}else hi=m-1;}fprintf(stderr,"REQ %8llu req %9llu B  ra=%x %s+%x\n",(unsigned long long)rqn[q],(unsigned long long)rqb[q],a,k>=0?syms[k].n:"?",k>=0?a-syms[k].a:0);}}
++  if(prof)prof_report();tic_report();
+   fprintf(stderr,"steps=%llu exit=%d frames=%d\n",(unsigned long long)steps,exitcode,frames);
+   for(int i=0;i<frames&&i<100000;i++)fprintf(stderr,"frame %d at %llu delta %llu\n",i,(unsigned long long)fstep[i],(unsigned long long)(fstep[i]-(i?fstep[i-1]:0)));
+   /* dump RAM for post-mortem */

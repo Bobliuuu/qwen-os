@@ -1,0 +1,22 @@
+{
+  "mode": "MODEL",
+  "target": "title-frame",
+  "segment_range": null,
+  "wall_seconds": 55.4,
+  "snapshot_marker": 100,
+  "frames": 1,
+  "segments": 1,
+  "total_segments": 1,
+  "first_segment": 1,
+  "instructions": 6563,
+  "planned_chip_tokens": 9988,
+  "tok_per_instr": 1.5219,
+  "model_chip_tokens": 9999,
+  "model_text_tokens": 30,
+  "console_bytes": 1,
+  "extra_full_text_tokens_for_echo": 1,
+  "est_chip_seconds": 3.1,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 1,
+  "out": "out/title.bin"
+}

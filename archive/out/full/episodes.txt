@@ -1,0 +1,5 @@
+PASS ep1 E1M1..E1M8 chain via exit key, intermission each, finale (gs=2); E1M9 secret via E1M3 (earlier test)
+PASS ep2 E2M1..E2M8 chain, intermission, finale text; E2M9 NOT in pack (more than 8191 segs)
+PASS ep3 E3M1..E3M8 chain, intermission, finale text (E3M9 packed, not visited by the chain)
+PASS ep4 E4M1,M3,M4,M5,M8 chain, finale; E4M2/M6/M9 NOT in pack (no RAM plan fits), E4M7 (more than 8191 segs)
+Monsters spawned in view (frames epN/epN-spawn_*.png): ep1 baron, lost soul; ep2 +cacodemon, cyberdemon; ep3/ep4 +spider mastermind

@@ -1,0 +1,1 @@
+{"frame": 20, "model_run_ok": true, "mode": "MODEL", "segs": 6, "wall": 2043.2, "instr": 2291778, "tokens": 3216208, "gpu": "NVIDIA A100-SXM4-40GB", "model_bytes": 32100, "painted_rows": 200, "bad_painted": 0, "bad_rows_0_199": 0, "rows_0_199_painted": true, "exact": true, "md5": "ad4fd5a2db95b2db91957bebc5b6733d"}

@@ -1,0 +1,1 @@
+[["base", "tritonexec_base", {}], ["split_nofuse", "chipformer.rv.tritonexec", {"SPLIT": true, "CH": 16, "GW": 4, "H2W": 4, "BLOCK": 4, "FW": 1}], ["split_fuse", "chipformer.rv.tritonexec", {"SPLIT": true, "CH": 16, "GW": 4, "H2W": 4, "BLOCK": 4, "FW": 1, "FUSE": true}]]

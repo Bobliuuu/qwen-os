@@ -1,0 +1,215 @@
+{
+  "k_graph": 64,
+  "gpu_mem_peak_mb": 18945,
+  "kgraph_stats": {
+    "pipelined": 0,
+    "blocks": 27511,
+    "block_tokens": 1760704,
+    "slow_blocks": 0,
+    "single_tokens": 5438
+  },
+  "gen_chip_seconds": 0.0,
+  "gen_text_seconds": 0.0,
+  "host": "modal",
+  "model_seconds": 555.7,
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 3178.4,
+  "instr_per_s": 2242.4,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "1:25",
+  "wall_seconds": 561.4,
+  "snapshot_marker": 0,
+  "frames": 1,
+  "segments": 24,
+  "total_segments": 24,
+  "first_segment": 1,
+  "instructions": 1246050,
+  "planned_chip_tokens": 1765878,
+  "tok_per_instr": 1.4172,
+  "model_chip_tokens": 1766142,
+  "model_text_tokens": 968,
+  "console_bytes": 272,
+  "extra_full_text_tokens_for_echo": 272,
+  "est_chip_seconds": 551.8,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 0,
+  "out": "/results/typed1/t0/console.bin",
+  "segments_by_reason": {
+    "park": 23,
+    "isplit": 1
+  },
+  "rom_plan": "build/live-crx-plan.json",
+  "segment_detail": [
+    [
+      1,
+      true,
+      0,
+      186,
+      226
+    ],
+    [
+      2,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      3,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      4,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      5,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      6,
+      true,
+      0,
+      254,
+      291
+    ],
+    [
+      7,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      8,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      9,
+      true,
+      0,
+      2005,
+      2305
+    ],
+    [
+      10,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      11,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      12,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      13,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      14,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      15,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      16,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      17,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      18,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      19,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      20,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      21,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      22,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      23,
+      true,
+      0,
+      74,
+      83
+    ],
+    [
+      24,
+      true,
+      0,
+      1242125,
+      1761396
+    ]
+  ]
+}

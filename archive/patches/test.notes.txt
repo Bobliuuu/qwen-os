@@ -1,0 +1,9 @@
+test.patch = diff -ruN wt-perf/repo2 wt-test/repo2 (apply inside repo2 with: patch -p2 < test.patch)
+Tree with everything applied and built: /Users/jhome/qwenos-work/wt-test/repo2 (run: tools/doomd_regress.sh).
+
+ROOT CAUSE of the DEMO1 divergence at unique frame 202 (tic 206): ports/doomdmc/qsolid.c (R_SolidColumn column reuse)
+copied the repeat column from the previous DESTINATION column in the strip buffer. That column had been overdrawn
+(row 199 x=190,191 = colour 1) before the next plane column, so the overdraw was replicated over the next 8 columns.
+The original build is correct (it equals the build with only qsolid disabled; game state hashes identical in every build).
+Fix: keep the last computed column privately as <=24 runs (48 B), copy from that. Cost ~ +1.2% instr/tic.
+Bisect: noskip/nofix/noqimg/nobake/-Oz/orig-engine: no effect; nosolid: identical to original.

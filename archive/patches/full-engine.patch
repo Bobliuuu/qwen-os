@@ -1,0 +1,815 @@
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/f_finale.c /Users/jhome/qwenos-work/wt-engine/engine/f_finale.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/f_finale.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/f_finale.c	2026-11-03 19:01:15
+@@ -54,9 +54,8 @@
+     viewactive = false;
+     automapactive = false;
+ 
+-    // The image has the text of episode 1 and its 64x64 background flat.
++    // The image has the text of its episode (the E1TEXT slot) and its 64x64 background flat.
+     len = 0;
+-    if (gameepisode == 1)
+     {
+ 	do
+ 	{
+@@ -126,7 +125,7 @@
+ 
+     // draw some of the text onto the screen
+     count = ((signed int) F.count - 10) / TEXTSPEED;
+-    if (count > 0 && gameepisode == 1)
++    if (count > 0)
+ 	scr_text(DMC_STR_E1TEXT, 0, 10, 10, 11, count, F_Glyph);
+ }
+ 
+@@ -141,7 +140,8 @@
+     V_DrawPatch(0, 0, p);
+ }
+ 
+-// Ultimate Doom ends episode 1 on CREDIT
++// The CREDIT slot holds the picture that ends the episode of the pack (CREDIT, VICTORY2,
++// the first bunny picture, ENDPIC)
+ static void F_ArtScreen (void)
+ {
+     F_DrawPicture(DMC_UI_CREDIT);
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/g_game.c /Users/jhome/qwenos-work/wt-engine/engine/g_game.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/g_game.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/g_game.c	2026-11-03 19:24:23
+@@ -830,7 +830,11 @@
+ 	return;
+     }
+     gamestate = GS_LEVEL; 
+-    gamemap = wminfo.next+1; 
++    // the table names the next map (a map left out of the pack is skipped in it)
++    {
++	int nx = secretexit ? M.secret_next : M.next;
++	gamemap = nx >= 1 && nx <= 9 ? nx : wminfo.next+1;
++    }
+     G_DoLoadLevel (); 
+     gameaction = ga_nothing; 
+     viewactive = true; 
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/m_menu.c /Users/jhome/qwenos-work/wt-engine/engine/m_menu.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/m_menu.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/m_menu.c	2026-11-03 18:59:45
+@@ -120,8 +120,16 @@
+     short		y;		// x,y of menu
+ } menu_t;
+ 
+-enum { MENU_MAIN, MENU_NEW, MENU_OPTIONS, MENU_LOAD, MENU_SAVE };
++enum { MENU_MAIN, MENU_NEW, MENU_OPTIONS, MENU_LOAD, MENU_SAVE, MENU_EPI };
+ 
++// Episodes of the disk (platform): how many, the one in use, and the switch to another. A disk
++// of one episode never shows the episode page.
++__attribute__((weak)) int dmc_episode_count(void) { return 1; }
++__attribute__((weak)) int dmc_cur_episode(void) { return 1; }
++__attribute__((weak)) void dmc_episode_select(int ep) { (void)ep; }
++static void M_Episode(int choice);
++static void M_DrawEpisode(void);
++
+ #define currentMenu		(&menus[fe.menu])
+ #define itemOn			(fe.item)	// menu item skull is on
+ #define whichSkull		(fe.skull)	// which skull to draw
+@@ -231,6 +239,17 @@
+ };
+ 
+ 
++enum { epi1, epi2, epi3, epi4, epi_end };
++
++static const menuitem_t EpisodeMenu[]=
++{
++    {1,DMC_UI_M_EPI1, M_Episode},
++    {1,DMC_UI_M_EPI2, M_Episode},
++    {1,DMC_UI_M_EPI3, M_Episode},
++    {1,DMC_UI_M_EPI4, M_Episode}
++};
++
++
+ //
+ // OPTIONS MENU
+ //
+@@ -288,7 +307,7 @@
+ static const menu_t menus[] =
+ {
+     [MENU_MAIN] = {main_end, -1, MainMenu, M_DrawMainMenu, 97,64},
+-    // no episode page: back to the main menu
++    [MENU_EPI] = {epi_end, MENU_MAIN, EpisodeMenu, M_DrawEpisode, 48,63},
+     [MENU_NEW] = {newg_end, MENU_MAIN, NewGameMenu, M_DrawNewGame, 48,63},
+     [MENU_OPTIONS] = {opt_end, MENU_MAIN, OptionsMenu, M_DrawOptions, 60,37},
+     [MENU_LOAD] = {load_end, MENU_MAIN, LoadMenu, M_DrawLoad, 80,54},
+@@ -424,12 +443,23 @@
+     V_DrawPatchDirect(54, 38, V_UIPatch(DMC_UI_M_SKILL));
+ }
+ 
+-static void M_NewGame(int choice)
++static void M_DrawEpisode(void)
+ {
++    V_DrawPatchDirect(54, 38, V_UIPatch(DMC_UI_M_EPISOD));
++}
++
++static void M_Episode(int choice)
++{
++    dmc_episode_select(choice + 1);
+     M_SetupNextMenu(MENU_NEW);
+ }
+ 
++static void M_NewGame(int choice)
++{
++    M_SetupNextMenu(dmc_episode_count() > 1 ? MENU_EPI : MENU_NEW);
++}
+ 
++
+ // Nightmare respawns monsters, which the object store of the meter
+ // cannot do: a confirmed Nightmare gets a second message, then the skill
+ // page again. Returns 1 when the menu stays up.
+@@ -450,7 +480,7 @@
+ 	return;
+     }
+ 
+-    G_DeferedInitNew(choice,1,1);
++    G_DeferedInitNew(choice,dmc_cur_episode(),1);
+     M_ClearMenus ();
+ }
+ 
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_enemy.c /Users/jhome/qwenos-work/wt-engine/engine/p_enemy.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_enemy.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/p_enemy.c	2026-11-03 19:02:17
+@@ -250,7 +250,8 @@
+ 
+     dist >>= 16;
+ 
+-    // The cyberdemon and the spider mastermind are not in E1.
++    if (actor->type == MT_CYBORG || actor->type == MT_SPIDER)
++	dist >>= 1;
+ #ifdef DMC_HAVE_MT_SKULL
+     if (actor->type == MT_SKULL)
+     {
+@@ -260,6 +261,9 @@
+     
+     if (dist > 200)
+ 	dist = 200;
++
++    if (actor->type == MT_CYBORG && dist > 160)
++	dist = 160;
+ 		
+     if (P_Random () < dist)
+ 	return false;
+@@ -624,8 +628,10 @@
+ 	    break;
+ 	}
+ 
+-	// The bosses at full volume are not in E1.
+-	S_StartSound (actor, sound);
++	if (actor->type==MT_SPIDER || actor->type == MT_CYBORG)
++	    S_StartSound (NULL, sound);	// full volume
++	else
++	    S_StartSound (actor, sound);
+     }
+ 
+     P_SetMobjState (actor, info->seestate);
+@@ -883,8 +889,25 @@
+     }
+ }
+ 
+-// A_HeadAttack: the cacodemon is not in E1.
++void A_HeadAttack (mobj_t* actor)
++{
++    int		damage;
+ 
++    if (!actor->target)
++	return;
++
++    A_FaceTarget (actor);
++    if (P_CheckMeleeRange (actor))
++    {
++	damage = (P_Random()%6+1)*10;
++	P_DamageMobj (P_Target(actor), actor, actor, damage);
++	return;
++    }
++
++    // launch a missile
++    P_SpawnMissile (actor, P_Target(actor), MT_HEADSHOT);
++}
++
+ void A_CyberAttack (mobj_t* actor)
+ {	
+     if (!actor->target)
+@@ -972,8 +995,10 @@
+ 	break;
+     }
+ 
+-    // The bosses at full volume are not in E1.
+-    S_StartSound (actor, sound);
++    if (actor->type==MT_SPIDER || actor->type == MT_CYBORG)
++	S_StartSound (NULL, sound);	// full volume
++    else
++	S_StartSound (actor, sound);
+ }
+ 
+ 
+@@ -1013,11 +1038,18 @@
+ // This behavior changed in v1.9, the most notable effect of which
+ // was to break uac_dead.wad
+ 
+-// Logic of Ultimate Doom for episode 1, the only one of this port:
+-// the barons of E1M8.
++// Logic of Ultimate Doom (not Doom II): E1M8 barons, E2M8 cyberdemon, E3M8 spider mastermind,
++// E4M6 cyberdemon, E4M8 spider mastermind.
+ static boolean CheckBossEnd(mobjtype_t motype)
+ {
+-    return gameepisode == 1 && gamemap == 8 && motype == MT_BRUISER;
++    switch (gameepisode)
++    {
++      case 1: return gamemap == 8 && motype == MT_BRUISER;
++      case 2: return gamemap == 8 && motype == MT_CYBORG;
++      case 3: return gamemap == 8 && motype == MT_SPIDER;
++      case 4: return (gamemap == 6 && motype == MT_CYBORG) || (gamemap == 8 && motype == MT_SPIDER);
++    }
++    return false;
+ }
+ 
+ //
+@@ -1048,14 +1080,23 @@
+     if (O_OtherAlive(mo))
+ 	return;		// other boss not dead
+ 	
+-    // victory! a line with nothing but tag 666
++    // victory!
++    if (gameepisode == 2 || gameepisode == 3)
++    {
++	G_ExitLevel ();
++	return;
++    }
++    // a line with nothing but tag 666
+     junk = P_TagOnlyLine(map_tagindex(666));
+     if (P_MoverReserve(junk, 38))
+     {
+ #ifdef DMC_STATS
+ 	o_stats.boss++;
+ #endif
+-	EV_DoFloor (junk, lowerFloorToLowest);
++	if (gameepisode == 4 && gamemap == 6)
++	    EV_DoDoor (junk, vld_blazeOpen);
++	else
++	    EV_DoFloor (junk, lowerFloorToLowest);
+     }
+ }
+ 
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_inter.c /Users/jhome/qwenos-work/wt-engine/engine/p_inter.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_inter.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/p_inter.c	2026-11-03 19:01:00
+@@ -435,6 +435,30 @@
+ 	    break;
+ 	return;
+ 	
++      case SPR_BSKU:
++	if (!player->cards[it_blueskull])
++	    msg = DMC_STR_GOTBLUESKUL;
++	P_GiveCard (player, it_blueskull);
++	if (!netgame)
++	    break;
++	return;
++	
++      case SPR_YSKU:
++	if (!player->cards[it_yellowskull])
++	    msg = DMC_STR_GOTYELWSKUL;
++	P_GiveCard (player, it_yellowskull);
++	if (!netgame)
++	    break;
++	return;
++	
++      case SPR_RSKU:
++	if (!player->cards[it_redskull])
++	    msg = DMC_STR_GOTREDSKULL;
++	P_GiveCard (player, it_redskull);
++	if (!netgame)
++	    break;
++	return;
++	
+ 	// medikits, heals
+       case SPR_STIM:
+ 	if (!P_GiveBody (player, 10))
+@@ -454,6 +478,13 @@
+ 
+ 	
+ 	// power ups
++      case SPR_PINV:
++	if (!P_GivePower (player, pw_invulnerability))
++	    return;
++	msg = DMC_STR_GOTINVUL;
++	sound = sfx_getpow;
++	break;
++	
+ #ifdef DMC_HAVE_SPR_PSTR
+       case SPR_PSTR:
+ 	if (!P_GivePower (player, pw_strength))
+@@ -573,6 +604,13 @@
+ 	if (!P_GiveWeapon (player, wp_chaingun, (special->flags&MF_DROPPED) != 0) )
+ 	    return;
+ 	msg = DMC_STR_GOTCHAINGUN;
++	sound = sfx_wpnup;	
++	break;
++	
++      case SPR_BFUG:
++	if (!P_GiveWeapon (player, wp_bfg, false) )
++	    return;
++	msg = DMC_STR_GOTBFG9000;
+ 	sound = sfx_wpnup;	
+ 	break;
+ 	
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_map.c /Users/jhome/qwenos-work/wt-engine/engine/p_map.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_map.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/p_map.c	2026-11-03 19:01:00
+@@ -1233,7 +1233,8 @@
+ 
+     // Boss spider and cyborg
+     // take no damage from concussion
+-    // (they are not in E1).
++    if (thing->type == MT_CYBORG || thing->type == MT_SPIDER)
++	return true;
+ 		
+     dx = abs(thing->x - bombspot->x);
+     dy = abs(thing->y - bombspot->y);
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_mapdata.h /Users/jhome/qwenos-work/wt-engine/engine/p_mapdata.h
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_mapdata.h	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/p_mapdata.h	2026-11-03 19:17:56
+@@ -59,7 +59,7 @@
+ extern byte*		switchflip;	// 3 bits per switch slot: part shows its pair
+ 
+ // The front sides of the scrolling walls (special 48), E1M6 has 9.
+-#define MAXSCROLLSIDES	16
++#define MAXSCROLLSIDES	64
+ extern sideidx_t	scrollsides[MAXSCROLLSIDES];
+ extern byte		numscrollsides;
+ 
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_pspr.c /Users/jhome/qwenos-work/wt-engine/engine/p_pspr.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_pspr.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/p_pspr.c	2026-11-03 18:55:29
+@@ -678,8 +678,49 @@
+ }
+ 
+ 
+-// A_FireBFG, A_BFGSpray and A_BFGsound are not in E1 (the BFG
+-// states are not in the generated tables).
++void
++A_FireBFG
++( player_t*	player,
++  pspdef_t*	psp )
++{
++    DecreaseAmmo(player, weaponinfo[player->readyweapon].ammo, deh_bfg_cells_per_shot);
++    P_SpawnPlayerMissile (player->mo, MT_BFG);
++}
++
++// A_BFGSpray: a BFG explosion on every monster in view of the ball's originator
++void A_BFGSpray (mobj_t* mo)
++{
++    int		i, j, damage;
++    angle_t	an;
++    mobj_t	view;
++    mobj_t	*src;
++
++    for (i=0 ; i<40 ; i++)
++    {
++	src = P_Target(mo);
++	an = mo->angle - ANG90/2 + ANG90/40*i;
++	P_AimLineAttack (src, an, 16*64*FRACUNIT);
++	if (!linetarget)
++	    continue;
++	{
++	    mobj_t *t = O_Get(linetarget, &view);
++	    P_SpawnMobj (t->x, t->y, t->z + (P_Height(t)>>2), MT_EXTRABFG);
++	}
++	damage = 0;
++	for (j=0;j<15;j++)
++	    damage += (P_Random()&7) + 1;
++	src = P_Target(mo);
++	P_DamageMobj (O_Get(linetarget, &view), src, src, damage);
++    }
++}
++
++void
++A_BFGsound
++( player_t*	player,
++  pspdef_t*	psp )
++{
++    S_StartSound (player->mo, sfx_bfg);
++}
+ 
+ 
+ //
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_spec.c /Users/jhome/qwenos-work/wt-engine/engine/p_spec.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/p_spec.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/p_spec.c	2026-11-03 19:01:00
+@@ -494,14 +494,15 @@
+     if (!MO_PLAYER(thing))
+     {
+ 	// Things that should NOT trigger specials...
+-	// (the BFG and the cacodemon's shot are not in E1)
+ 	switch(thing->type)
+ 	{
+ 	  case MT_ROCKET:
+ #ifdef DMC_HAVE_MT_PLASMA
+ 	  case MT_PLASMA:
+ #endif
++	  case MT_BFG:
+ 	  case MT_TROOPSHOT:
++	  case MT_HEADSHOT:
+ 	  case MT_BRUISERSHOT:
+ 	    return;
+ 	    break;
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/wi_stuff.c /Users/jhome/qwenos-work/wt-engine/engine/wi_stuff.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/engine/wi_stuff.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/engine/wi_stuff.c	2026-11-03 19:01:26
+@@ -325,7 +325,7 @@
+  // Name graphics of each level (centered)
+ static int WI_levelName(int n)
+ {
+-    return wbs->epsd ? -1 : V_UIPatch(DMC_UI_WILV00 + n);
++    return V_UIPatch(DMC_UI_WILV00 + n);
+ }
+ 
+ //
+@@ -335,7 +335,7 @@
+ // slam background
+ void WI_slamBackground(void)
+ {
+-    V_DrawPatch(0, 0, wbs->epsd ? -1 : V_UIPatch(DMC_UI_WIMAP0));
++    V_DrawPatch(0, 0, V_UIPatch(DMC_UI_WIMAP0));
+ }
+ 
+ // The ticker is used to detect keys
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/platform/nor.h /Users/jhome/qwenos-work/wt-engine/platform/nor.h
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/platform/nor.h	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/platform/nor.h	2026-11-03 19:03:14
+@@ -26,6 +26,8 @@
+ #include <stdint.h>
+ 
+ #define NOR_SIZE 0x400000u
++// Largest data drive end the FAT mount accepts: the QwenOS port stores images of up to 8 MB per episode
++#define DMC_NOR_LIMIT 0x800000u
+ #define NOR_JEDEC_W25Q32 0xEF4016u
+ 
+ enum { NOR_PRIO_REC = 0, NOR_PRIO_COL = 1, NOR_PRIO_FLAT = 2 };
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/port/data/fat12.c /Users/jhome/qwenos-work/wt-engine/port/data/fat12.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/port/data/fat12.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/port/data/fat12.c	2026-11-03 19:03:14
+@@ -41,7 +41,7 @@
+         return FAT_E_BPB;
+     // the volume ends inside its NOR region: the firmware drive before the
+     // data drive, the data drive before the end of the chip
+-    uint32_t limit = base < DMC_VOL_MAIN ? DMC_VOL_MAIN : NOR_SIZE;
++    uint32_t limit = base < DMC_VOL_MAIN ? DMC_VOL_MAIN : DMC_NOR_LIMIT;
+     if (base >= limit || total > (limit - base) >> bshift)
+         return FAT_E_BPB;
+     uint32_t rootsec = rsv + nfat * fatsz;
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/port/game/fe.h /Users/jhome/qwenos-work/wt-engine/port/game/fe.h
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/port/game/fe.h	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/port/game/fe.h	2026-11-03 18:59:45
+@@ -68,7 +68,7 @@
+ typedef struct {
+     uint8_t menu, item;         // currentMenu (index), itemOn
+     uint8_t skull, skullcnt;    // whichSkull, skullAnimCounter
+-    uint8_t last[5];            // lastOn of main, skill, options, load, save
++    uint8_t last[6];            // lastOn of main, skill, options, load, save, episode
+     uint8_t msg, msgfn, msgarg; // message text id, its routine, the quit message index
+     uint8_t msglast;            // messageLastMenuActive
+     uint8_t px0, px1, py0, py1; // panel union: x0/2, x1/2, y0, y1
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/port/game/fe_glue.c /Users/jhome/qwenos-work/wt-engine/port/game/fe_glue.c
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/port/game/fe_glue.c	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/port/game/fe_glue.c	2026-11-03 18:59:45
+@@ -193,6 +193,7 @@
+ // g_game.c declares these in the file only
+ extern skill_t d_skill;
+ extern int d_episode, d_map;
++int dmc_cur_episode(void);
+ void G_DoNewGame(void);
+ 
+ void G_DoSaveGame(void)
+@@ -213,7 +214,7 @@
+         return e;
+     if (!(flags & DMC_SF_DEMO) || h.map != gamemap) {
+         d_skill = h.skill;
+-        d_episode = 1;
++        d_episode = dmc_cur_episode();
+         d_map = h.map;
+         G_DoNewGame();
+     }
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/tests/host/mknor.py /Users/jhome/qwenos-work/wt-engine/tests/host/mknor.py
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/tests/host/mknor.py	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/tests/host/mknor.py	2026-11-03 19:02:27
+@@ -243,6 +243,7 @@
+     ap.add_argument("--code")
+     ap.add_argument("--code-main")
+     ap.add_argument("--save")
++    ap.add_argument("--nor-mb", type=int, default=4, help="NOR size in MB, the data drive takes all but the first MB (QwenOS episode images use 8)")
+     ap.add_argument("--junk", action="store_true")
+     ap.add_argument("--sector", type=int, default=4096, choices=(512, 1024, 2048, 4096))
+     ap.add_argument("--spc", type=int, default=1, choices=(1, 2, 4, 8))
+@@ -251,6 +252,9 @@
+     a = ap.parse_args()
+     code = open(a.code, "rb").read() if a.code else None
+     code_main = open(a.code_main, "rb").read() if a.code_main else None
++    global MAIN_BYTES, NOR_SIZE
++    NOR_SIZE = a.nor_mb << 20
++    MAIN_BYTES = NOR_SIZE - MAIN_BASE
+     save = open(a.save, "rb").read() if a.save else None
+     data = build(a.pack, a.frag, a.xfrag, code, code_main, save, a.junk, a.sector, a.spc, a.doomx_bad,
+                  a.chain_bad)
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/format.py /Users/jhome/qwenos-work/wt-engine/tools/conv/format.py
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/format.py	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/tools/conv/format.py	2026-11-03 18:57:13
+@@ -139,6 +139,10 @@
+     ["AMSTR_FOLLOWON", "AMSTR_FOLLOWOFF", "AMSTR_GRIDON", "AMSTR_GRIDOFF", "AMSTR_MARKEDSPOT",
+      "AMSTR_MARKSCLEARED", "E1TEXT"])
+ STRING = {n: i for i, n in enumerate(STRING_IDS)}
++# Names of the other episodes, dumped from upstream so a pack of episode e can put them in the
++# E1 slots (HUSTR_E1Mn, E1TEXT): the engine only knows "the episode of the pack".
++STRING_DUMP_EXTRA = (["HUSTR_E%dM%d" % (e, m) for e in range(2, 5) for m in range(1, 10)] +
++                     ["E%dTEXT" % e for e in range(2, 5)])
+ QUITMSG_IDS = ["QUITMSG"] + ["QUITMSG%d" % i for i in range(1, 8)]
+ 
+ UI_NAMES = (
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/info.py /Users/jhome/qwenos-work/wt-engine/tools/conv/info.py
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/info.py	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/tools/conv/info.py	2026-11-03 18:54:22
+@@ -59,6 +59,7 @@
+ ACTOR_STATES = ("seestate", "painstate", "meleestate", "missilestate", "deathstate", "xdeathstate")
+ ACTOR_SOUNDS = ("seesound", "attacksound", "painsound", "deathsound", "activesound")
+ E1_MAPS = ["E1M%d" % i for i in range(1, 10)]
++ALL_MAPS = ["E%dM%d" % (e, i) for e in range(1, 5) for i in range(1, 10)]
+ 
+ 
+ class Info:
+@@ -215,7 +216,7 @@
+ 
+ def build(wad, up, deh):
+     info = Info(up, deh)
+-    types, states, weapons = closure(info, roster_types(wad, info, E1_MAPS))
++    types, states, weapons = closure(info, roster_types(wad, info, ALL_MAPS))
+     for n, f in info.deh_other.items():
+         check(n not in states, "DEHACKED changes %s of reachable state %s", sorted(f), info.snames[n])
+     return info, Dense(info, types, states, weapons)
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/maps.py /Users/jhome/qwenos-work/wt-engine/tools/conv/maps.py
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/maps.py	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/tools/conv/maps.py	2026-11-03 19:17:56
+@@ -45,13 +45,13 @@
+ SECTOR_MUTABLE_SPECIALS = {1, 2, 3, 4, 8, 9, 10, 12, 13, 14, 17}
+ SECTOR_LIGHT_SPECIALS = {1, 2, 3, 4, 8, 12, 13, 17}
+ SECTOR_KNOWN_SPECIALS = SECTOR_MUTABLE_SPECIALS | {0, 5, 7, 11, 16}
+-BOSS_TAGS = {"E1M8": 666}
++BOSS_TAGS = {"E1M8": 666, "E4M6": 666, "E4M8": 666}
+ # Every mover speed in the game code, in fixed point: all on the 1/8 unit grid.
+ MOVER_SPEEDS = (1 << 16, 2 << 16, 8 << 16, (1 << 16) // 8, (1 << 16) // 4, (1 << 16) // 2, 4 << 16,
+                 8 << 16, 16 << 16)
+ MAX_TAGS = 255
+ MAX_BSP_DEPTH = 64
+-MAXLINEANIMS = 64
++MAXLINEANIMS = 64  # engine MAXSCROLLSIDES
+ 
+ 
+ # ------------------------------------------------------------------ vanilla geometry
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/pack.py /Users/jhome/qwenos-work/wt-engine/tools/conv/pack.py
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/pack.py	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/tools/conv/pack.py	2026-11-03 19:03:50
+@@ -35,6 +35,11 @@
+             "ui_exclude": ("HELP1", "CREDIT"), "ui_half": ("TITLEPIC", "WIMAP0"), "demo": True,
+             "doomx": False},
+ }
++EPISODE_MAPS = {e: ["E%dM%d" % (e, i) for i in range(1, 10)] for e in range(1, 5)}
++for _e in (2, 3, 4):
++    PACKS["E%d" % _e] = {"maps": EPISODE_MAPS[_e], "base": 1, "mips": 1, "greedy": False, "xshift": 1, "cap": 12 << 20,
++                         "ui_exclude": ("HELP1",), "ui_half": ("TITLEPIC", "WIMAP0"), "demo": False,
++                         "doomx": False, "episode": _e}
+ # Steps that make a pack smaller, tried in order while it does not fit
+ LADDER = [
+     (1, "drop DEMO1"),
+@@ -43,6 +48,10 @@
+ ]
+ GREEDY_MARGIN = 1024
+ SKY_NAME = "SKY1"
++EPISODE_SKY = {1: "SKY1", 2: "SKY2", 3: "SKY3", 4: "SKY4"}
++FINALE_FLATS = {1: "FLOOR4_8", 2: "SFLR6_1", 3: "MFLR8_4", 4: "MFLR8_3"}
++# Next map after the exit of map n (vanilla G_DoCompleted): E?M8 ends, E?M9 returns to this map
++RETURN_FROM_9 = {1: 4, 2: 6, 3: 7, 4: 3}
+ FINALE_DEFAULT = "FLOOR4_8"
+ 
+ 
+@@ -54,6 +63,7 @@
+         self.up, self.deh, self.inf, self.dense, self.layout = up, deh, inf, dense, layout
+         self.ts = TX.TextureSet(wad)
+         self.maps = {}
++        self.skipped = {}
+         self.frames = SP.sprite_frames(wad, inf, dense)
+         last_ep = wadread.switch_episode(wad)
+         self.switches = [(a.upper(), b.upper()) for a, b, ep in up["switches"] if ep <= last_ep]
+@@ -72,6 +82,10 @@
+ 
+ # ------------------------------------------------------------------ textures and flats
+ 
++def pack_episode(cfg):
++    return cfg.get("episode", 1)
++
++
+ def texture_plan(ctx, cfg, maps):
+     """Global texture order, ANIMS entries and usage flags for a pack."""
+     ts = ctx.ts
+@@ -84,7 +98,7 @@
+             for v in m.side_tex[sd]:
+                 if v:
+                     uses[v] = uses.get(v, 0) + 1
+-    sky = ts.first[SKY_NAME]
++    sky = ts.first[EPISODE_SKY[pack_episode(cfg)]]
+     opaque.add(sky)
+     used = opaque | masked
+     # switch pairs in alphSwitchList order
+@@ -173,9 +187,14 @@
+     return struct.pack("<%dH" % len(out), *out)
+ 
+ 
+-def string_values(up, deh):
++def string_values(up, deh, episode=1):
+     vals = []
+     for n in F.STRING_IDS:
++        n0 = n
++        if episode != 1 and n.startswith("HUSTR_E1M"):
++            n = "HUSTR_E%dM%s" % (episode, n[9:])
++        elif episode != 1 and n == "E1TEXT":
++            n = "E%dTEXT" % episode
+         if n in deh["strings"]:
+             v = deh["strings"][n]
+         elif n in F.QUITMSG_IDS:
+@@ -195,14 +214,14 @@
+     return F.LIST_HDR.pack(count=len(blobs)) + struct.pack("<%dI" % len(offs), *offs) + bytes(data)
+ 
+ 
+-def strings_section(up, deh):
+-    return list_section([v.encode("latin-1", "replace") + b"\0" for v in string_values(up, deh)])
++def strings_section(up, deh, episode=1):
++    return list_section([v.encode("latin-1", "replace") + b"\0" for v in string_values(up, deh, episode)])
+ 
+ 
+ def par_seconds(up, deh, e, m):
+     if (e, m) in deh["pars"]:
+         return deh["pars"][(e, m)]
+-    return up["pars"][e * 10 + m]
++    return up["pars"][e * 10 + m] if e * 10 + m < len(up["pars"]) else 0
+ 
+ 
+ def monster_sprites(ctx):
+@@ -227,7 +246,13 @@
+ def build_image(ctx, pack_id, cfg, opts):
+     """Build one logical image. opts: drop_demo, half_monsters, upgrades (set of vanilla numbers)."""
+     wad, inf, dense = ctx.wad, ctx.inf, ctx.dense
+-    maps = [ctx.map(n) for n in cfg["maps"]]
++    maps = []
++    for n in cfg["maps"]:
++        try:
++            maps.append(ctx.map(n))
++        except ConvError as e:
++            print("pack %s: map %s skipped: %s" % (pack_id, n, e))
++            ctx.skipped.setdefault(pack_id, []).append(n)
+     order, tex_anims, opaque, masked, uses, sky = texture_plan(ctx, cfg, maps)
+     texmap = {v: i for i, v in enumerate(order)}
+     tplan = []
+@@ -246,7 +271,7 @@
+     texdir, texdata, tmeta = TX.build(ctx.ts, tplan)
+     medusa = sum(ctx.ts.multi_patch_masked_columns(ctx.ts.list[v]) for v in order if v in masked)
+ 
+-    finale = ctx.deh["strings"].get("BGFLATE1", FINALE_DEFAULT)
++    finale = ctx.deh["strings"].get("BGFLATE%d" % pack_episode(cfg), FINALE_FLATS[pack_episode(cfg)])
+     flat_names, flat_anims, flatmap = flat_plan(ctx, maps, finale)
+     flats = FL.build(wad, flat_names, finale)
+ 
+@@ -260,7 +285,7 @@
+     for sid in half_spr:
+         for fr in ctx.frames[sid]:
+             half_lumps.update(l for l, _ in fr["lumps"])
+-    uisel = UI.select(wad, cfg["ui_exclude"])
++    uisel = UI.select(wad, cfg["ui_exclude"], pack_episode(cfg))
+     patch_id, blobs = {}, []
+     for l in lumps:
+         patch_id[l] = len(blobs)
+@@ -292,7 +317,7 @@
+         ("TEXDIR", texdir, 0),
+         ("SPRDEF", sprdef, 0),
+         ("SOUNDS", sounds, 0),
+-        ("STRINGS", strings_section(ctx.up, ctx.deh), 0),
++        ("STRINGS", strings_section(ctx.up, ctx.deh, pack_episode(cfg)), 0),
+         ("UIDIR", uidir, len(F.UI_NAMES)),
+         ("ANIMS", b"".join(anims), len(anims)),
+         ("PATCHDIR", patchdir, 0),
+@@ -309,10 +334,16 @@
+     blocks = []
+     plan_rep = {}
+     for m in maps:
+-        plans, rep = P.plan_map(ctx.layout, m)
+-        block, streams = M.encode(m, texmap, flatmap, switch_tex, plans)
++        try:
++            plans, rep = P.plan_map(ctx.layout, m)
++            block, streams = M.encode(m, texmap, flatmap, switch_tex, plans)
++        except ConvError as e:
++            print("pack %s: map %s skipped: %s" % (pack_id, m.name, e))
++            ctx.skipped.setdefault(pack_id, []).append(m.name)
++            continue
+         blocks.append((m, block, streams))
+         plan_rep[m.name] = rep
++    maps = [b[0] for b in blocks]
+ 
+     # layout
+     img = bytearray(F.HEADER_SIZE)
+@@ -326,6 +357,7 @@
+     map_ents = []
+     map_rep = {}
+     sky_id = texmap[sky]
++    ep = pack_episode(cfg)
+     in_pack = {int(m.name[3]) for m in maps}
+ 
+     def next_value(n):
+@@ -336,10 +368,13 @@
+         n = int(m.name[3])
+         # G_DoCompleted for episode 1: E1M8 ends the episode, E1M9 returns to E1M4,
+         # a secret exit always leads to E1M9
+-        nxt = F.NEXT_END_EPISODE if n == 8 else 4 if n == 9 else n + 1
++        nxt = F.NEXT_END_EPISODE if n == 8 else RETURN_FROM_9[ep] if n == 9 else n + 1
++        # a map the converter had to leave out (RAM plan, seg count) is skipped in the sequence
++        while nxt not in (F.NEXT_END_EPISODE,) and nxt not in in_pack and nxt < 8:
++            nxt += 1
+         map_ents.append(F.MAPENT.pack(
+-            name=m.name.encode(), off=off, size=len(block), crc=crc32(block), episode=1, map=n,
+-            par_seconds=par_seconds(ctx.up, ctx.deh, 1, n), name_string=F.STRING["HUSTR_E1M%d" % n],
++            name=m.name.encode(), off=off, size=len(block), crc=crc32(block), episode=ep, map=n,
++            par_seconds=par_seconds(ctx.up, ctx.deh, ep, n), name_string=F.STRING["HUSTR_E1M%d" % n],
+             sky_texture=sky_id, next=next_value(nxt), secret_next=next_value(9)))
+         map_rep[m.name] = {"bytes": len(block), "streams": streams, "unique_sides": m.unique_sides,
+                            "mutable": len(m.mutable), "zclip": len(m.zclip), "lights": m.light_slots,
+@@ -390,7 +425,7 @@
+                       nsect=len(b.sect_ents), nmaps=len(b.map_ents), flags=b.flags, header_crc=0,
+                       skill_group=list(F.SKILL_GROUP))
+     cfg = PACKS[pack_id]
+-    if len(img) > F.DOOMDAT_CAP:
++    if len(img) > F.DOOMDAT_CAP and "cap" not in cfg:
+         check(cfg["doomx"], "%s: image %d B exceeds DOOM.DAT capacity", pack_id, len(img))
+         hdr_fields["split"] = F.DOOMDAT_CAP // F.SPLIT_ALIGN * F.SPLIT_ALIGN
+ 
+@@ -453,6 +488,8 @@
+ 
+ 
+ def capacity(cfg):
++    if "cap" in cfg:
++        return cfg["cap"]
+     return F.DOOMDAT_CAP + (F.DOOMX_CAP - F.DOOMX_HDR if cfg["doomx"] else 0)
+ 
+ 
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/ram_layout_default.json /Users/jhome/qwenos-work/wt-engine/tools/conv/ram_layout_default.json
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/ram_layout_default.json	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/tools/conv/ram_layout_default.json	2026-11-03 19:17:56
+@@ -2,7 +2,7 @@
+   "comment": "Default RAM layout of the firmware for the plans of tools/conv/plan.py. A build/ram_layout.json with the same keys takes its place when it exists.",
+   "ram_total": 32768,
+   "stack": 2048,
+-  "fixed_core": 5216,
++  "fixed_core": 5632,
+   "plans": {
+     "A": {"w": 16, "k": 4, "textured": true, "frame_region": 15208},
+     "B": {"w": 8, "k": 4, "textured": true, "frame_region": 9648},
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/ui.py /Users/jhome/qwenos-work/wt-engine/tools/conv/ui.py
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/ui.py	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/tools/conv/ui.py	2026-11-03 18:57:28
+@@ -7,13 +7,25 @@
+ from . import format as F
+ 
+ 
+-def select(wad, exclude=()):
++def aliases(episode):
++    """UI slot -> lump of the pack's episode: the intermission map and level names of episode e
++    (WIMAP0/WILV0n are WIMAP<e-1>/WILV<e-1>n) and the picture that ends the episode (the CREDIT slot)."""
++    a = {}
++    if episode != 1:
++        a["WIMAP0"] = "WIMAP%d" % (episode - 1)
++        for n in range(9):
++            a["WILV0%d" % n] = "WILV%d%d" % (episode - 1, n)
++    a["CREDIT"] = {1: "CREDIT", 2: "VICTORY2", 3: "PFUB1", 4: "ENDPIC"}[episode]
++    return a
++
++
++def select(wad, exclude=(), episode=1):
+     """[(enum index, name, lump)] for every UI picture present in the WAD and not excluded."""
+     out = []
+     for i, n in enumerate(F.UI_NAMES):
+         if n in exclude:
+             continue
+-        lump = wad.num(n)
++        lump = wad.num(aliases(episode).get(n, n))
+         if lump >= 0:
+             out.append((i, n, lump))
+     return out
+diff -ruN -x build -x __pycache__ -x *.pyc -x oracle -x .git /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/upstream.py /Users/jhome/qwenos-work/wt-engine/tools/conv/upstream.py
+--- /Users/jhome/qwenos-work/engine/DMC100-Doom/tools/conv/upstream.py	2026-11-03 17:56:32
++++ /Users/jhome/qwenos-work/wt-engine/tools/conv/upstream.py	2026-11-03 18:57:13
+@@ -115,7 +115,7 @@
+     strs = ["// Generated by tools/conv/upstream.py", "#include <stddef.h>", "#include \"d_englsh.h\"",
+             "struct dmc_named_ptr { const char *name; const void *ptr; };",
+             "const struct dmc_named_ptr dmc_string_values[] = {"]
+-    strs += ["    {\"%s\", %s}," % (s, s) for s in F.STRING_IDS if s not in STRINGS_FROM_ENDMSG]
++    strs += ["    {\"%s\", %s}," % (s, s) for s in list(F.STRING_IDS) + list(F.STRING_DUMP_EXTRA) if s not in STRINGS_FROM_ENDMSG]
+     strs += ["    {NULL, NULL}", "};", ""]
+     str_c = os.path.join(OUT, "strings.c")
+     write_if_changed(str_c, "\n".join(strs))

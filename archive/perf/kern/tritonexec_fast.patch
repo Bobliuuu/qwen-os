@@ -1,0 +1,377 @@
+--- tritonexec_base.py	2026-11-04 20:52:27
++++ qp/chipformer/rv/tritonexec.py	2026-11-04 21:29:16
+@@ -149,6 +149,73 @@
+ 
+ 
+ @triton.jit
++def _gather_kernel(x_ptr, h_ptr, G_ptr, D, V,
++                   qrp, qix, qw, krp, kix, kw, vrp, vix, vw, zrp, zix, zw, khead,
++                   KQ: tl.constexpr, KK: tl.constexpr, KV: tl.constexpr, KZ: tl.constexpr,
++                   CH: tl.constexpr):
++    """k, v, z, q of every value head, one program per (head, kind, CH rows), into G[bat, vh, 4, 128]."""
++    vh = tl.program_id(0)
++    which = tl.program_id(1) // (128 // CH)
++    bat = tl.program_id(2)
++    ch = (tl.program_id(1) % (128 // CH)) * CH + tl.arange(0, CH)
++    xb = x_ptr + bat * D
++    hb = h_ptr + bat * 3 * D
++    h = tl.load(khead + vh)
++    if which == 0:
++        r = _rows(xb, hb, D, krp, kix, kw, h * 128, ch, KK)
++    elif which == 1:
++        r = _rows(xb, hb, D, vrp, vix, vw, vh * 128, ch, KV)
++    elif which == 2:
++        r = _rows(xb, hb, D, zrp, zix, zw, vh * 128, ch, KZ)
++    else:
++        r = _rows(xb, hb, D, qrp, qix, qw, h * 128, ch, KQ)
++    tl.store(G_ptr + ((bat * V + vh) * 4 + which) * 128 + ch, r)
++
++
++@triton.jit
++def _head2_kernel(x_ptr, h_ptr, S_ptr, y_ptr, G_ptr, D, V,
++                  arp, aix, aw, brp, bix, bw, bconst, odim, ow, nrows,
++                  QHOT: tl.constexpr):
++    vh = tl.program_id(0)
++    bat = tl.program_id(1)
++    ch = tl.arange(0, 128)
++    xb = x_ptr + bat * D
++    hb = h_ptr + bat * 3 * D
++    Gb = G_ptr + (bat * V + vh) * 512
++    k = tl.load(Gb + ch)
++    v = tl.load(Gb + 128 + ch)
++    z = tl.load(Gb + 256 + ch)
++    q = tl.load(Gb + 384 + ch)
++    bv = _scalar(xb, hb, D, brp, bix, bw, vh) + tl.load(bconst + vh)
++    Sb = S_ptr + (bat * V + vh) * 16384
++    nr = tl.load(nrows + vh)
++    if nr > 0:
++        av = _scalar(xb, hb, D, arp, aix, aw, vh)
++        fac = tl.where(av == 0.0, 1.0, tl.where(av == 110.0, 0.5, 0.0))
++        if fac != 1.0:
++            for r in range(nr):
++                tl.store(Sb + r * 128 + ch, tl.load(Sb + r * 128 + ch) * fac)
++    kmax = tl.max(k, axis=0)
++    krow = tl.argmax(k, axis=0)
++    if (kmax > 0.0) & (bv == 1.0):
++        tl.store(Sb + krow * 128 + ch, v)
++    tl.debug_barrier()
++    o = tl.zeros([128], dtype=tl.float32)
++    for _ in range(QHOT):
++        qm = tl.max(q, axis=0)
++        qi = tl.argmax(q, axis=0)
++        if qm > 0.0:
++            o += tl.load(Sb + qi * 128 + ch)
++        q = tl.where(ch == qi, 0.0, q)
++    ref = tl.sum(tl.where(ch < 2, o * o, 0.0), axis=0)
++    norm = tl.math.sqrt_rn(ref / 128.0)
++    out = tl.where(ref > 0.0, tl.math.div_rn(o, tl.where(ref > 0.0, norm, 1.0)), 0.0)
++    wv = tl.load(ow + vh * 128 + ch)
++    dd = tl.load(odim + vh * 128 + ch)
++    tl.atomic_add(y_ptr + bat * D + dd, out * z * wv, mask=wv != 0.0)
++
++
++@triton.jit
+ def _apply_kernel(x_ptr, y_ptr, h_ptr, D, HIST: tl.constexpr, BLOCK: tl.constexpr):
+     """x += y, y = 0; with HIST, the lag history (h: [3, D] per row, h[0] = lag 1) moves on
+     first, the input x becoming lag 1."""
+@@ -168,10 +235,192 @@
+     yo = y_ptr + bat * D + i
+     tl.store(xo, x + tl.load(yo, mask=m, other=0.0), mask=m)
+     tl.store(yo, tl.zeros([BLOCK], dtype=tl.float32), mask=m)
++
++
++# ---------------------------------------------------------------------------------------------
++# fused-apply variant: no standalone apply kernel. Kernel j reads x as xin + yin (the same fp32
++# add the apply kernel did), atomically accumulates its output into yout, and a few extra
++# "commit" programs write xout = xin + yin, zero the y buffer that kernel j+1 will accumulate
++# into, and (after a head sublayer) move the lag history on. x ping-pongs over two buffers, y
++# rotates over three.
++# ---------------------------------------------------------------------------------------------
++
++@triton.jit
++def _lag_loadf(xb, yb, hb, i, m, D):
++    lo = i < D
++    xv = tl.load(xb + i, mask=m & lo, other=0.0) + tl.load(yb + i, mask=m & lo, other=0.0)
++    return tl.where(lo, xv, tl.load(hb + i - D, mask=m & (i >= D), other=0.0))
++
++
++@triton.jit
++def _rowsf(xb, yb, hb, D, rp, ix, w, base, ch, KP: tl.constexpr):
++    r0 = tl.load(rp + base + ch)
++    n = tl.load(rp + base + ch + 1) - r0
++    kk = tl.arange(0, KP)
++    mk = kk[None, :] < n[:, None]
++    i = tl.load(ix + r0[:, None] + kk[None, :], mask=mk, other=0)
++    acc = tl.sum(tl.load(w + r0[:, None] + kk[None, :], mask=mk, other=0.0)
++                 * _lag_loadf(xb, yb, hb, i, mk, D), axis=1)
++    return tl.maximum(acc, 0.0)
++
++
++@triton.jit
++def _scalarf(xb, yb, hb, D, rp, ix, w, vh):
++    lane = tl.arange(0, 32)
++    s0 = tl.load(rp + vh)
++    n = tl.load(rp + vh + 1) - s0
++    mk = lane < n
++    i = tl.load(ix + s0 + lane, mask=mk, other=0)
++    return tl.sum(tl.load(w + s0 + lane, mask=mk, other=0.0)
++                  * _lag_loadf(xb, yb, hb, i, mk, D), axis=0)
++
++
++@triton.jit
++def _commit(xin, yin, xout, ynext, h_ptr, bat, D, blk, HIST: tl.constexpr, BLOCK: tl.constexpr):
++    i = blk * BLOCK + tl.arange(0, BLOCK)
++    m = i < D
++    xi = tl.load(xin + bat * D + i, mask=m, other=0.0)
++    yi = tl.load(yin + bat * D + i, mask=m, other=0.0)
++    if HIST:
++        hb = h_ptr + bat * 3 * D + i
++        h1 = tl.load(hb + D, mask=m, other=0.0)
++        h0 = tl.load(hb, mask=m, other=0.0)
++        tl.store(hb + 2 * D, h1, mask=m)
++        tl.store(hb + D, h0, mask=m)
++        tl.store(hb, xi, mask=m)
++    tl.store(xout + bat * D + i, xi + yi, mask=m)
++    tl.store(ynext + bat * D + i, tl.zeros([BLOCK], dtype=tl.float32), mask=m)
++
++
++@triton.jit
++def _flush_kernel(xin, yin, xout, y1, y2, y3, h_ptr, D, HIST: tl.constexpr, BLOCK: tl.constexpr):
++    """End of a run of fused kernels: x = xin + yin (into xout), all y zeroed, history moved."""
++    blk = tl.program_id(0)
++    bat = tl.program_id(1)
++    _commit(xin, yin, xout, y1, h_ptr, bat, D, blk, HIST, BLOCK)
++    i = blk * BLOCK + tl.arange(0, BLOCK)
++    m = i < D
++    z = tl.zeros([BLOCK], dtype=tl.float32)
++    tl.store(y2 + bat * D + i, z, mask=m)
++    tl.store(y3 + bat * D + i, z, mask=m)
++
++
++@triton.jit
++def _ffn_f(xin, yin, xout, yout, ynext, h_ptr, D, U, nU, rpa, ixa, wa, rpb, ixb, wb, coef, outd,
++           BLOCK: tl.constexpr, KA: tl.constexpr, KB: tl.constexpr, HIST: tl.constexpr,
++           CB: tl.constexpr):
++    pid = tl.program_id(0)
++    bat = tl.program_id(1)
++    if pid < nU:
++        u = pid * BLOCK + tl.arange(0, BLOCK)
++        m = u < U
++        xb = xin + bat * D
++        yb = yin + bat * D
++        a0 = tl.load(rpa + u, mask=m, other=0)
++        na = tl.load(rpa + u + 1, mask=m, other=0) - a0
++        ka = tl.arange(0, KA)
++        ma = m[:, None] & (ka[None, :] < na[:, None])
++        ia = tl.load(ixa + a0[:, None] + ka[None, :], mask=ma, other=0)
++        av = tl.sum(tl.load(wa + a0[:, None] + ka[None, :], mask=ma, other=0.0)
++                    * (tl.load(xb + ia, mask=ma, other=0.0) + tl.load(yb + ia, mask=ma, other=0.0)),
++                    axis=1)
++        b0 = tl.load(rpb + u, mask=m, other=0)
++        nb = tl.load(rpb + u + 1, mask=m, other=0) - b0
++        kb = tl.arange(0, KB)
++        mb = m[:, None] & (kb[None, :] < nb[:, None])
++        ib = tl.load(ixb + b0[:, None] + kb[None, :], mask=mb, other=0)
++        bv = tl.sum(tl.load(wb + b0[:, None] + kb[None, :], mask=mb, other=0.0)
++                    * (tl.load(xb + ib, mask=mb, other=0.0) + tl.load(yb + ib, mask=mb, other=0.0)),
++                    axis=1)
++        val = tl.load(coef + u, mask=m, other=0.0) * av * tl.maximum(bv, 0.0)
++        od = tl.load(outd + u, mask=m, other=0)
++        tl.atomic_add(yout + bat * D + od, val, mask=m)
++    else:
++        _commit(xin, yin, xout, ynext, h_ptr, bat, D, pid - nU, HIST, CB)
++
++
++@triton.jit
++def _gather_f(xin, yin, xout, ynext, G_ptr, h_ptr, D, V,
++              qrp, qix, qw, krp, kix, kw, vrp, vix, vw, zrp, zix, zw, khead,
++              KQ: tl.constexpr, KK: tl.constexpr, KV: tl.constexpr, KZ: tl.constexpr,
++              CH: tl.constexpr, SL: tl.constexpr):
++    vh = tl.program_id(0)
++    p1 = tl.program_id(1)
++    bat = tl.program_id(2)
++    if p1 < 4 * (128 // CH):
++        which = p1 // (128 // CH)
++        ch = (p1 % (128 // CH)) * CH + tl.arange(0, CH)
++        xb = xin + bat * D
++        yb = yin + bat * D
++        hb = h_ptr + bat * 3 * D
++        h = tl.load(khead + vh)
++        if which == 0:
++            r = _rowsf(xb, yb, hb, D, krp, kix, kw, h * 128, ch, KK)
++        elif which == 1:
++            r = _rowsf(xb, yb, hb, D, vrp, vix, vw, vh * 128, ch, KV)
++        elif which == 2:
++            r = _rowsf(xb, yb, hb, D, zrp, zix, zw, vh * 128, ch, KZ)
++        else:
++            r = _rowsf(xb, yb, hb, D, qrp, qix, qw, h * 128, ch, KQ)
++        tl.store(G_ptr + ((bat * V + vh) * 4 + which) * 128 + ch, r)
++    else:
++        _commit(xin, yin, xout, ynext, h_ptr, bat, D, vh, False, SL)
+ 
+ 
++@triton.jit
++def _head2_f(xin, yin, yout, h_ptr, S_ptr, G_ptr, D, V,
++             arp, aix, aw, brp, bix, bw, bconst, odim, ow, nrows,
++             QHOT: tl.constexpr):
++    vh = tl.program_id(0)
++    bat = tl.program_id(1)
++    ch = tl.arange(0, 128)
++    xb = xin + bat * D
++    yb = yin + bat * D
++    hb = h_ptr + bat * 3 * D
++    Gb = G_ptr + (bat * V + vh) * 512
++    k = tl.load(Gb + ch)
++    v = tl.load(Gb + 128 + ch)
++    z = tl.load(Gb + 256 + ch)
++    q = tl.load(Gb + 384 + ch)
++    bv = _scalarf(xb, yb, hb, D, brp, bix, bw, vh) + tl.load(bconst + vh)
++    Sb = S_ptr + (bat * V + vh) * 16384
++    nr = tl.load(nrows + vh)
++    if nr > 0:
++        av = _scalarf(xb, yb, hb, D, arp, aix, aw, vh)
++        fac = tl.where(av == 0.0, 1.0, tl.where(av == 110.0, 0.5, 0.0))
++        if fac != 1.0:
++            for r in range(nr):
++                tl.store(Sb + r * 128 + ch, tl.load(Sb + r * 128 + ch) * fac)
++    kmax = tl.max(k, axis=0)
++    krow = tl.argmax(k, axis=0)
++    if (kmax > 0.0) & (bv == 1.0):
++        tl.store(Sb + krow * 128 + ch, v)
++    tl.debug_barrier()
++    o = tl.zeros([128], dtype=tl.float32)
++    for _ in range(QHOT):
++        qm = tl.max(q, axis=0)
++        qi = tl.argmax(q, axis=0)
++        if qm > 0.0:
++            o += tl.load(Sb + qi * 128 + ch)
++        q = tl.where(ch == qi, 0.0, q)
++    ref = tl.sum(tl.where(ch < 2, o * o, 0.0), axis=0)
++    norm = tl.math.sqrt_rn(ref / 128.0)
++    out = tl.where(ref > 0.0, tl.math.div_rn(o, tl.where(ref > 0.0, norm, 1.0)), 0.0)
++    wv = tl.load(ow + vh * 128 + ch)
++    dd = tl.load(odim + vh * 128 + ch)
++    tl.atomic_add(yout + bat * D + dd, out * z * wv, mask=wv != 0.0)
++
++
+ class Executor2:
+     BLOCK = 64
++    HW = None   # head kernel num_warps (None: triton default)
++    FW = None   # ffn kernel num_warps
++    AW = None   # apply kernel num_warps
++    SPLIT = False  # gather k/v/z/q in a separate 4x-parallel kernel
++    FUSE = False  # no apply kernels (needs SPLIT)
++    CH = 128    # rows per gather program
++    GW = None   # gather kernel num_warps
++    H2W = None  # head2 kernel num_warps
+ 
+     def __init__(self, c, batch: int = 1, device="cuda"):
+         self.c, self.B, self.dev = c, batch, device
+@@ -269,26 +518,99 @@
+             out[:, d] = [float(self.c.feature_value(d, t)) for t in toks]
+         return torch.tensor(out, dtype=torch.float32, device=self.dev)
+ 
++    @staticmethod
++    def _kw(w):
++        return {} if w is None else {"num_warps": w}
++
+     def step(self, x):
+         """x [B, D] (in place: the embedding in, the residual after every node out)."""
+         B, D = x.shape[0], self.D
++        if self.FUSE:
++            return self._step_fused(x)
+         grid_apply = (triton.cdiv(D, 1024), B)
+         for st in self.steps:
+             if st["kind"] == "ffn":
+                 _ffn_kernel[(triton.cdiv(st["U"], self.BLOCK), B)](
+                     x, self.y, D, st["U"], *st["a"], *st["b"], st["coef"], st["out"],
+-                    BLOCK=self.BLOCK, KA=st["KA"], KB=st["KB"])
+-                _apply_kernel[grid_apply](x, self.y, x, D, HIST=False, BLOCK=1024)
++                    BLOCK=self.BLOCK, KA=st["KA"], KB=st["KB"], **self._kw(self.FW))
++                _apply_kernel[grid_apply](x, self.y, x, D, HIST=False, BLOCK=1024, **self._kw(self.AW))
+                 continue
+-            _head_kernel[(st["V"], B)](
+-                x, st["hist"], st["S"], self.y, D, st["V"], *st["q"], *st["k"], *st["v"],
+-                *st["z"], *st["a"], *st["b"], st["bconst"], st["odim"], st["ow"], st["khead"],
+-                st["nrows"], KQ=st["KQ"], KK=st["KK"], KV=st["KV"], KZ=st["KZ"],
+-                QHOT=st["QHOT"])
+-            _apply_kernel[grid_apply](x, self.y, st["hist"], D, HIST=True, BLOCK=1024)
++            if self.SPLIT:
++                if "G" not in st:
++                    st["G"] = torch.zeros(B, st["V"], 4, 128, device=self.dev)
++                _gather_kernel[(st["V"], 4 * (128 // self.CH), B)](
++                    x, st["hist"], st["G"], D, st["V"], *st["q"], *st["k"], *st["v"], *st["z"],
++                    st["khead"], KQ=st["KQ"], KK=st["KK"], KV=st["KV"], KZ=st["KZ"], CH=self.CH,
++                    **self._kw(self.GW))
++                _head2_kernel[(st["V"], B)](
++                    x, st["hist"], st["S"], self.y, st["G"], D, st["V"], *st["a"], *st["b"],
++                    st["bconst"], st["odim"], st["ow"], st["nrows"], QHOT=st["QHOT"],
++                    **self._kw(self.H2W))
++            else:
++                _head_kernel[(st["V"], B)](
++                    x, st["hist"], st["S"], self.y, D, st["V"], *st["q"], *st["k"], *st["v"],
++                    *st["z"], *st["a"], *st["b"], st["bconst"], st["odim"], st["ow"], st["khead"],
++                    st["nrows"], KQ=st["KQ"], KK=st["KK"], KV=st["KV"], KZ=st["KZ"],
++                    QHOT=st["QHOT"], **self._kw(self.HW))
++            _apply_kernel[grid_apply](x, self.y, st["hist"], D, HIST=True, BLOCK=1024, **self._kw(self.AW))
+         return x
+ 
+ 
++    def _step_fused(self, x):
++        B, D = x.shape[0], self.D
++        if getattr(self, "_fx", None) is None or self._fx.shape[0] != B:
++            self._fx = torch.zeros(B, D, device=self.dev)
++            self._fy = [torch.zeros(B, D, device=self.dev) for _ in range(3)]
++        X, Y = [x, self._fx], self._fy
++        j = 0                # kernel index in the current run
++        pend = None          # head state whose history move is still owed
++        CB = 1024
++        NC = triton.cdiv(D, CB)
++
++        def flush():
++            nonlocal j, pend
++            if j == 0:
++                return
++            hist = pend["hist"] if pend is not None else x
++            _flush_kernel[(NC, B)](X[j % 2], Y[(j - 1) % 3], x, Y[0], Y[1], Y[2],
++                                   hist, D, HIST=pend is not None, BLOCK=CB)
++            j, pend = 0, None
++
++        for st in self.steps:
++            xin, yin, xout = X[j % 2], Y[(j - 1) % 3], X[(j + 1) % 2]
++            yout, ynext = Y[j % 3], Y[(j + 1) % 3]
++            if st["kind"] == "ffn":
++                _ffn_f[(triton.cdiv(st["U"], self.BLOCK) + NC, B)](
++                    xin, yin, xout, yout, ynext,
++                    pend["hist"] if pend is not None else x, D, st["U"],
++                    triton.cdiv(st["U"], self.BLOCK), *st["a"], *st["b"], st["coef"], st["out"],
++                    BLOCK=self.BLOCK, KA=st["KA"], KB=st["KB"], HIST=pend is not None, CB=CB,
++                    **self._kw(self.FW))
++                pend = None
++                j += 1
++                continue
++            if pend is not None:
++                flush()
++                xin, yin, xout = X[j % 2], Y[(j - 1) % 3], X[(j + 1) % 2]
++                yout, ynext = Y[j % 3], Y[(j + 1) % 3]
++            if "G" not in st:
++                st["G"] = torch.zeros(B, st["V"], 4, 128, device=self.dev)
++            SL = 1 << max(0, (triton.cdiv(D, st["V"]) - 1).bit_length())
++            _gather_f[(st["V"], 4 * (128 // self.CH) + 1, B)](
++                xin, yin, xout, ynext, st["G"], st["hist"], D, st["V"],
++                *st["q"], *st["k"], *st["v"], *st["z"], st["khead"],
++                KQ=st["KQ"], KK=st["KK"], KV=st["KV"], KZ=st["KZ"], CH=self.CH, SL=SL,
++                **self._kw(self.GW))
++            _head2_f[(st["V"], B)](
++                xin, yin, yout, st["hist"], st["S"], st["G"], D, st["V"], *st["a"], *st["b"],
++                st["bconst"], st["odim"], st["ow"], st["nrows"], QHOT=st["QHOT"],
++                **self._kw(self.H2W))
++            pend = st
++            j += 1
++        flush()
++        return x
++
++
+ def check(c, toks, device="cuda") -> int:
+     """Executor2 == ir.evaluate on every dim at every position."""
+     from chipformer.q35 import ir

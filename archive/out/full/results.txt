@@ -1,0 +1,16 @@
+PASS menu_title_to_menu_skill_options_load_quit_prompt 
+PASS move_forward x fe600000 -> ffbb4926
+PASS turn ang 00000000 -> e0c00000
+PASS fire_ammo_decrements bullets 50 -> 48, sfx pistol(1) in [23, 1, 1, 19, 19, 1, 18, 1, 1, 39, 37, 19, 39, 39, 32, 76, 20, 16, 2, 17, 25, 18, 32]
+PASS pickup_health_bonus hp 101 items 1
+PASS door_open_and_walk_through player x=464, door line at x=544..560 (frames door_closed/door_opening/door_open)
+PASS take_damage_from_monster hp 101 -> 92
+PASS sound_events_emitted ids [23, 1, 1, 19, 19, 1, 18, 1, 1, 39, 37, 19, 39, 39, 32, 76, 20, 16, 2, 17]
+PASS levels_e1m1_to_e1m8_load_in_sequence maps at level starts [1, 2, 3, 4, 5, 6, 7, 8]
+PASS intermission_after_each_exit gamestate after exit [1, 1, 1, 1, 1, 1, 1] (1 = intermission)
+PASS finale_after_e1m8 gamestate 2 (2 = finale)
+PASS secret_exit_e1m3_to_e1m9 maps ['3', '9', '4']
+PASS e1m9_exit_returns_to_e1m4 maps ['3', '9', '4']
+PASS savegame_writes_to_block_device steps=801121425 exit=0 frames=420 diskwrites=103
+PASS loadgame_from_saved_image_after_restart x ff69d031 -> ffe832b4
+PASS quit_prompt_y_powers_off 

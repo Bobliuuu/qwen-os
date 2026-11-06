@@ -1,0 +1,50 @@
+{
+  "host": "Jerrys-Mac-mini.local",
+  "model_seconds": 0.0,
+  "gpu": "cpu",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 0.0,
+  "instr_per_s": 72367.0,
+  "mode": "dry-run (reference stand-in, NOT the model)",
+  "target": "title-frame",
+  "segment_range": null,
+  "wall_seconds": 167.0,
+  "snapshot_marker": 3,
+  "frames": 4,
+  "segments": 2,
+  "total_segments": 2,
+  "first_segment": 1,
+  "instructions": 12082980,
+  "planned_chip_tokens": 16957065,
+  "tok_per_instr": 1.4034,
+  "model_chip_tokens": 0,
+  "model_text_tokens": 0,
+  "console_bytes": 4,
+  "extra_full_text_tokens_for_echo": 4,
+  "est_chip_seconds": 5299.1,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 4,
+  "out": "model_doom_out.bin",
+  "segments_by_reason": {
+    "rom": 1,
+    "marker": 1
+  },
+  "rom_plan": "../out/rom_plan.json",
+  "segment_detail": [
+    [
+      1,
+      true,
+      2,
+      5939196,
+      8326847
+    ],
+    [
+      2,
+      true,
+      2,
+      6143784,
+      8630218
+    ]
+  ]
+}
