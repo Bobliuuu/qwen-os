@@ -8,6 +8,9 @@ import sys
 from pathlib import Path
 
 
+DOOMD_LO, DOOMD_HI = 0x41000, 0x78000  # /bin/doomd takeover app entry range
+
+
 def parse(data):
     if data[:6] != b'\x7fELF\x01\x01':
         raise ValueError('expected little-endian ELF32')
@@ -22,6 +25,14 @@ def parse(data):
         typ, off, va, pa, fs, ms, flags, align=struct.unpack_from('<8I',data,phoff+i*entsize)
         if typ!=1 or not ms: continue
         if fs>ms or off+fs>len(data):raise ValueError('malformed load segment')
+        in_ram = 0x100 <= va < 0x8000
+        if in_ram and pa != va and 0x20000 <= pa < 0x40000:
+            # Load-image of a RAM .data section (AT> DROM): the runtime start
+            # code copies it, so ship it at its load address, read-only.
+            segments.append((pa, bytes(data[off:off+fs]), flags & ~2))
+            continue
+        if in_ram and DOOMD_LO <= entry < DOOMD_HI:
+            continue  # /bin/doomd RAM is initialised by its crt0, never preloaded
         segments.append((va, bytes(data[off:off+fs])+bytes(ms-fs), flags))
     return entry,segments
 
@@ -31,7 +42,7 @@ def merge(output, inputs):
     for f in inputs:
         ent,segs=parse(Path(f).read_bytes()); entries.append((ent,segs))
     entry=entries[0][0]
-    assert entry>=0x40000 and entry<0x60000,hex(entry)
+    assert entry>=0x40000 and entry<0x41000,hex(entry)
     collected=[]
     for ent,segs in entries:
         for va,data,flags in segs:
@@ -42,7 +53,7 @@ def merge(output, inputs):
                     raise ValueError(f'overlapping segments {va:#x} and {prev:#x}')
             collected.append((va,data,flags))
     # Independently linked applications must have executable code at their ABI addresses.
-    for expected in (0x60000,0x68000,0x70000,0x78000,0x7c000):
+    for expected in (0x41000,0x78000,0x79000,0x7a000,0x7b000,0x7c000):
         if not any(va<=expected<va+len(data) and flags&1 for va,data,flags in collected):
             raise ValueError(f'missing app ROM at {expected:#x}')
     collected.sort()

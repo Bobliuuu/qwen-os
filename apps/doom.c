@@ -1,260 +1,392 @@
 #include "qos.h"
 #include "hal.h"
-/* QwenOS's first WAD-driven renderer. This reads real DOOM-format MAP geometry
- * using the guest disk API; it is NOT yet the Chocolate-Doom game engine.
- * The fixed-capacity cache is intentional: 32KB of Qwenputer RAM total.
- */
-#define MAX_VERT 768u
-#define MAX_LINES 1024u
-#define MAX_ENTRIES 8192u /* bound corrupt WAD scans; no directory RAM allocation */
-#define FB_W QOS_FB_W
-#define FB_H QOS_FB_H
-static struct {int16_t x,y;} vertices[MAX_VERT];
-static struct {uint16_t a,b;uint16_t front,back;} lines[MAX_LINES];
-#define MAX_SIDES 1024u
-#define MAX_SECTORS 192u
-static struct {uint16_t sector;} sides[MAX_SIDES];
-static struct {int16_t floor,ceiling; uint16_t light;} sectors[MAX_SECTORS];
-static unsigned side_count,sector_count;
-static int has_sector_data;
-static unsigned vertex_count,line_count;
-static int stream_mode;
-static uint32_t vertex_offset,line_offset;
-static uint32_t directory,count;
+/* QwenOS /bin/doom: guest-side DOOM-format BSP renderer (NOT the full engine).
+ *
+ * Everything below runs as RV32IM guest instructions. The host is block
+ * storage only. Per frame the guest walks the WAD's NODES front to back,
+ * streaming each node (28 B), subsector (4 B), seg (12 B), vertex (4 B) and
+ * linedef (14 B) record from the virtual disk. Only sidedef->sector links
+ * and SECTORS heights/light are cached (RAM is ~22 KiB for this app).
+ * Walls are clipped per column with DOOM-style floor/ceiling clip arrays, so
+ * each pixel is written once. Missing: textures, sprites/things, monsters,
+ * game logic, sound, 64-bit-safe maths for oversized maps.
+ *
+ * Pixel format (8-bit): bits 7..6 surface class (0 wall, 1 floor, 2 ceiling,
+ * 3 sky), bits 5..0 brightness. Tools decode it to colour. */
+#define SIDE_CACHE 256u
+#define MAX_SECT 768u
+#define MAX_VCACHE 1280u
+#define MAX_ENTRIES 8192u
+#define W QOS_FB_W
+#define H QOS_FB_H
+#define NEAR 4
+#define EYE 41
+#define RADIUS 16
+typedef struct {int16_t fl,ce;uint8_t light,sky;} sect_t;
+static uint16_t sc_tag[SIDE_CACHE],sc_val[SIDE_CACHE];
+static uint32_t o_sides;
+static sect_t sec[MAX_SECT];
+static struct {int16_t x,y;} vcache[MAX_VCACHE];
+static int vcached;
+
+static unsigned n_sides,n_sect,n_verts,n_lines,n_nodes;
+static uint32_t dir_off,lump_count;
+static uint32_t o_things,o_lines,o_verts,o_segs,o_ssec,o_nodes,o_block;
 static uint8_t chunk[256];
-static uint8_t frame[FB_W*FB_H];
-static int32_t player_x,player_y;
+static uint8_t frame[W*H];
+static int8_t ytop[W],ybot[W];
+static int open_cols;
+static int32_t px,py,eye,cs,sn;
+static unsigned ang;
+static int io_err;
+static struct {uint16_t child;int16_t box[4];} stk[48];
+static const int16_t sintab[65]={0,6,13,19,25,31,38,44,50,56,62,68,74,80,86,92,98,104,109,115,121,126,132,137,142,147,152,157,162,167,172,177,181,185,190,194,198,202,206,209,213,216,220,223,226,229,231,234,237,239,241,243,245,247,248,250,251,252,253,254,255,255,256,256,256};
+static int32_t isin(unsigned a){
+ unsigned q=(a>>6)&3,i=a&63;
+ int32_t v=(q&1)?sintab[64-i]:sintab[i];
+ return q&2?-v:v;
+}
 static uint32_t rd32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 static uint16_t rd16(const uint8_t *p){return (uint16_t)(p[0]|p[1]<<8);}
-static int16_t signed16(const uint8_t *p){return (int16_t)rd16(p);}
-#define read_disk qos_doom_wad_read
+static int16_t s16(const uint8_t *p){return (int16_t)rd16(p);}
+static int rd(const qos_api *a,uint32_t off,void *dst,unsigned n){
+ if(!qos_doom_wad_read(a,off,dst,n)){io_err=1;return 0;}
+ return 1;
+}
 static int match8(const uint8_t *p,const char *s){
  for(unsigned i=0;i<8;i++)if(p[i]!=(uint8_t)s[i])return 0;
  return 1;
 }
-static int directory_entry(const qos_api *a,uint32_t i,uint8_t *d){
- if(i>=count||i>=MAX_ENTRIES||directory>0xffffffffu-i*16u-16u)return 0;
- return read_disk(a,directory+i*16u,d,16);
+static int get_vertex(const qos_api *a,unsigned v,int32_t *x,int32_t *y){
+ if(v>=n_verts)return 0;
+ if(vcached){*x=vcache[v].x;*y=vcache[v].y;return 1;}
+ uint8_t vb[4];
+ if(!rd(a,o_verts+4u*v,vb,4))return 0;
+ *x=s16(vb);*y=s16(vb+2);return 1;
 }
-static int load_vertices(const qos_api *a,uint32_t offset,uint32_t bytes){
- if(!bytes||bytes%4u||bytes/4u>8192u)return 0;
- vertex_count=bytes/4u;
- for(unsigned i=0;i<vertex_count;i++){
-  uint8_t d[4];if(!read_disk(a,offset+4*i,d,4))return 0;
-  vertices[i].x=signed16(d);vertices[i].y=signed16(d+2);
- }
- return 1;
+/* Sector number of a sidedef (2-byte disk read, direct-mapped cache). */
+static int side_sector(const qos_api *a,unsigned sd){
+ if(sd>=n_sides)return -1;
+ unsigned slot=sd&(SIDE_CACHE-1u);
+ if(sc_tag[slot]==sd)return sc_val[slot];
+ uint8_t b[2];
+ if(!rd(a,o_sides+30u*sd+28u,b,2))return -1;
+ unsigned v=rd16(b);
+ if(v>=n_sect)return -1;
+ sc_tag[slot]=(uint16_t)sd;sc_val[slot]=(uint16_t)v;
+ return (int)v;
 }
-static int load_lines(const qos_api *a,uint32_t offset,uint32_t bytes){
- if(!bytes||bytes%14u||bytes/14u>8192u)return 0;
- line_count=bytes/14u;
- for(unsigned i=0;i<line_count;i++){
-  uint8_t d[14];if(!read_disk(a,offset+14*i,d,14))return 0;
-  unsigned x=rd16(d),y=rd16(d+2);
-  if(x>=vertex_count||y>=vertex_count)return 0;
-  lines[i].a=(uint16_t)x;lines[i].b=(uint16_t)y;
-  lines[i].front=rd16(d+10);lines[i].back=rd16(d+12);
- }
- return 1;
+static int imin(int a,int b){return a<b?a:b;}
+static int imax(int a,int b){return a>b?a:b;}
+static int clampi(int v,int lo,int hi){return v<lo?lo:v>hi?hi:v;}
+static int32_t fdiv(int32_t a,int32_t b){ /* floor division, b>0 */
+ int32_t q=a/b;
+ if((a%b)<0)q--;
+ return q;
 }
-static int load_sides(const qos_api *a,uint32_t offset,uint32_t bytes){
- if(!bytes||bytes%30u||bytes/30u>MAX_SIDES)return 0;
- side_count=bytes/30u;
- for(unsigned i=0;i<side_count;i++){
-  uint8_t d[30];if(!read_disk(a,offset+30u*i,d,30))return 0;
-  sides[i].sector=rd16(d+28);
- }
- return 1;
-}
-static int load_sectors(const qos_api *a,uint32_t offset,uint32_t bytes){
- if(!bytes||bytes%26u||bytes/26u>MAX_SECTORS)return 0;
- sector_count=bytes/26u;
- for(unsigned i=0;i<sector_count;i++){
-  uint8_t d[26];if(!read_disk(a,offset+26u*i,d,26))return 0;
-  sectors[i].floor=signed16(d);sectors[i].ceiling=signed16(d+2);
-  sectors[i].light=rd16(d+20);
-  if(sectors[i].ceiling<=sectors[i].floor)return 0;
- }
- return 1;
-}
-static int sector_at_side(unsigned si){
- if(si==0xffffu)return -1;
- if(si>=side_count||sides[si].sector>=sector_count)return -1;
- return sides[si].sector;
-}
+/* ---- loading ---------------------------------------------------------- */
 static int load_map(const qos_api *a){
- uint8_t header[12];if(!read_disk(a,0,header,12))return 0;
- if(!(header[0]=='I'||header[0]=='P')||header[1]!='W'||header[2]!='A'||header[3]!='D')return 0;
- count=rd32(header+4);directory=rd32(header+8);
- if(count<4||count>MAX_ENTRIES||directory>0xffffffffu-count*16u)return 0;
- int map=-1;uint8_t d[16];
- for(unsigned i=0;i<count;i++){
-  if(!directory_entry(a,i,d))return 0;
+ uint8_t h[12],d[16];
+ if(!rd(a,0,h,12))return 0;
+ if(!(h[0]=='I'||h[0]=='P')||h[1]!='W'||h[2]!='A'||h[3]!='D')return 0;
+ lump_count=rd32(h+4);dir_off=rd32(h+8);
+ if(lump_count<4||lump_count>MAX_ENTRIES||dir_off>0xffffffffu-lump_count*16u)return 0;
+ int map=-1;
+ for(unsigned i=0;i<lump_count;i++){
+  if(!rd(a,dir_off+i*16u,d,16))return 0;
   if(match8(d+8,"E1M1\0\0\0\0")||match8(d+8,"MAP01\0\0\0")){map=(int)i;break;}
  }
  if(map<0)return 0;
- uint32_t vo=0,vs=0,lo=0,ls=0,so=0,ss=0,co=0,cs=0;
- /* The canonical DOOM map lump order is THINGS, LINEDEFS, SIDEDEFS,
-    VERTEXES, SEGS, SSECTORS, NODES, SECTORS, REJECT, BLOCKMAP. */
- for(unsigned i=(unsigned)map+1;i<count&&i<(unsigned)map+12;i++){
-  if(!directory_entry(a,i,d))return 0;
-  if(match8(d+8,"VERTEXES")){vo=rd32(d);vs=rd32(d+4);}
-  if(match8(d+8,"LINEDEFS")){lo=rd32(d);ls=rd32(d+4);}
-  if(match8(d+8,"SIDEDEFS")){so=rd32(d);ss=rd32(d+4);}
-  if(match8(d+8,"SECTORS\0")){co=rd32(d);cs=rd32(d+4);}
+ uint32_t sz_t=0,sz_l=0,sz_s=0,sz_v=0,sz_g=0,sz_ss=0,sz_n=0,sz_c=0,sz_b=0;
+ uint32_t o_s=0,o_c=0;
+ for(unsigned i=(unsigned)map+1;i<lump_count&&i<(unsigned)map+12;i++){
+  if(!rd(a,dir_off+i*16u,d,16))return 0;
+  uint32_t o=rd32(d),n=rd32(d+4);
+  if(match8(d+8,"THINGS\0\0")){o_things=o;sz_t=n;}
+  else if(match8(d+8,"LINEDEFS")){o_lines=o;sz_l=n;}
+  else if(match8(d+8,"SIDEDEFS")){o_s=o;sz_s=n;}
+  else if(match8(d+8,"VERTEXES")){o_verts=o;sz_v=n;}
+  else if(match8(d+8,"SEGS\0\0\0\0")){o_segs=o;sz_g=n;}
+  else if(match8(d+8,"SSECTORS")){o_ssec=o;sz_ss=n;}
+  else if(match8(d+8,"NODES\0\0\0")){o_nodes=o;sz_n=n;}
+  else if(match8(d+8,"SECTORS\0")){o_c=o;sz_c=n;}
+  else if(match8(d+8,"BLOCKMAP")){o_block=o;sz_b=n;}
  }
- if(!vs||!ls||vs%4u||ls%14u||vs/4u>8192u||ls/14u>8192u)return 0;
- vertex_count=vs/4u;line_count=ls/14u;
- stream_mode=(vertex_count>MAX_VERT||line_count>MAX_LINES);
- vertex_offset=vo;line_offset=lo;
- if(!stream_mode && (!load_vertices(a,vo,vs)||!load_lines(a,lo,ls)))return 0;
- has_sector_data=!stream_mode && ss && cs;
- if(has_sector_data){
-  if(!load_sides(a,so,ss)||!load_sectors(a,co,cs))return 0;
-  for(unsigned i=0;i<line_count;i++){
-   if(sector_at_side(lines[i].front)<0)return 0;
-   if(lines[i].back!=0xffffu&&sector_at_side(lines[i].back)<0)return 0;
+ if(!sz_v||!sz_l||!sz_s||!sz_c||!sz_g||!sz_ss)return 0;
+ if(sz_v%4u||sz_l%14u||sz_s%30u||sz_c%26u||sz_g%12u||sz_ss%4u||sz_n%28u)return 0;
+ n_verts=sz_v/4u;n_lines=sz_l/14u;n_sides=sz_s/30u;n_sect=sz_c/26u;n_nodes=sz_n/28u;
+ if(n_verts>65535u||n_lines>65535u||n_sides>65534u||n_sect>MAX_SECT)return 0;
+ if(!n_nodes&&sz_ss!=4u)return 0; /* no NODES: only a one-subsector map */
+ if(!sz_b)o_block=0;
+ (void)sz_t;
+ /* VERTEXES: cached when they fit (saves ~2 disk reads per seg). */
+ vcached=n_verts<=MAX_VCACHE;
+ for(unsigned i=0;vcached&&i<n_verts;){
+  unsigned k=n_verts-i;if(k>64)k=64;
+  if(!rd(a,o_verts+4u*i,chunk,4u*k))return 0;
+  for(unsigned j=0;j<k;j++,i++){vcache[i].x=s16(chunk+4*j);vcache[i].y=s16(chunk+4*j+2);}
+ }
+ /* SECTORS: heights, light, sky flag. */
+ for(unsigned i=0;i<n_sect;){
+  unsigned k=n_sect-i;if(k>9)k=9;
+  if(!rd(a,o_c+26u*i,chunk,26u*k))return 0;
+  for(unsigned j=0;j<k;j++,i++){
+   const uint8_t *p=chunk+26*j;
+   sec[i].fl=s16(p);sec[i].ce=s16(p+2);
+   unsigned l=rd16(p+20);sec[i].light=(uint8_t)(l>255?255:l);
+   sec[i].sky=match8(p+12,"F_SKY1\0\0");
   }
  }
- player_x=0;player_y=0;
- /* Pick a THINGS player-1 start when available. */
- if(directory_entry(a,(unsigned)map+1,d)&&match8(d+8,"THINGS\0\0")){
-  uint32_t off=rd32(d),bytes=rd32(d+4);
-  for(unsigned i=0;i<bytes/10&&i<32;i++){
-   uint8_t thing[10];if(!read_disk(a,off+i*10,thing,10))return 0;
-   if(rd16(thing+6)==1){player_x=signed16(thing);player_y=signed16(thing+2);break;}
+ /* SIDEDEFS/LINEDEFS are NOT scanned at load (that costs ~10 guest
+  * instructions per byte read); indices are validated lazily on use. */
+ o_sides=o_s;
+ for(unsigned i=0;i<SIDE_CACHE;i++)sc_tag[i]=0xffffu;
+ /* Player 1 start. */
+ px=0;py=0;ang=0;
+ for(unsigned i=0;i*10u<sz_t;){
+  unsigned k=sz_t/10u-i;if(k>25)k=25;
+  if(!rd(a,o_things+10u*i,chunk,10u*k))return 0;
+  for(unsigned j=0;j<k;j++,i++){
+   const uint8_t *p=chunk+10*j;
+   if(rd16(p+6)==1){px=s16(p);py=s16(p+2);ang=((unsigned)(uint16_t)s16(p+4)%360u)*256u/360u;i=sz_t;break;}
   }
  }
  return 1;
 }
-static int get_line(const qos_api *a,unsigned i,int32_t *ax,int32_t *ay,
-                    int32_t *bx,int32_t *by,unsigned *front,unsigned *back){
- if(i>=line_count)return 0;
- if(!stream_mode){
-  unsigned x=lines[i].a,y=lines[i].b;
-  *ax=vertices[x].x;*ay=vertices[x].y;
-  *bx=vertices[y].x;*by=vertices[y].y;
-  *front=lines[i].front;*back=lines[i].back;
-  return 1;
+/* ---- BSP helpers ------------------------------------------------------ */
+static int side_of(int32_t x,int32_t y,const uint8_t *n){
+ int32_t nx=s16(n),ny=s16(n+2),ndx=s16(n+4),ndy=s16(n+6);
+ int32_t l=ndy*(x-nx),r=(y-ny)*ndx;
+ return r<l?0:1;
+}
+/* Sector containing (x,y): BSP descent + first seg of the subsector. */
+static int locate(const qos_api *a,int32_t x,int32_t y){
+ unsigned c=n_nodes?(unsigned)n_nodes-1u:0x8000u;
+ uint8_t nb[28];
+ for(unsigned guard=0;!(c&0x8000u)&&guard<64;guard++){
+  if(c>=n_nodes||!rd(a,o_nodes+28u*c,nb,28))return -1;
+  c=rd16(nb+24+2*side_of(x,y,nb));
  }
- uint8_t d[14],v[4];
- if(!read_disk(a,line_offset+14u*i,d,14))return 0;
- unsigned x=rd16(d),y=rd16(d+2);
- if(x>=vertex_count||y>=vertex_count)return 0;
- if(!read_disk(a,vertex_offset+4u*x,v,4))return 0;
- *ax=signed16(v);*ay=signed16(v+2);
- if(!read_disk(a,vertex_offset+4u*y,v,4))return 0;
- *bx=signed16(v);*by=signed16(v+2);
- *front=rd16(d+10);*back=rd16(d+12);
+ uint8_t ss[4],sg[12],ln[14];
+ if(!rd(a,o_ssec+4u*(c&0x7fffu),ss,4)||!rd(a,o_segs+12u*rd16(ss+2),sg,12))return -1;
+ if(!rd(a,o_lines+14u*rd16(sg+6),ln,14))return -1;
+ return side_sector(a,rd16(ln+10+2*(rd16(sg+8)&1u)));
+}
+/* ---- drawing ---------------------------------------------------------- */
+static unsigned level(int light,int dist){
+ int l=light/4-dist/20;
+ return (unsigned)clampi(l,3,63);
+}
+static int ycoord(int32_t z,int32_t depth){return 12-((z-eye)*16)/depth;}
+static void wall_span(unsigned c,int y0,int y1,int lvl){
+ for(int y=y0;y<y1;y++)frame[y*W+c]=(uint8_t)(lvl);
+}
+static void plane_span(unsigned c,int y0,int y1,int32_t z,unsigned cls,int light){
+ int32_t dz=z-eye;if(dz<0)dz=-dz;
+ for(int y=y0;y<y1;y++){
+  int d=2*y-23;if(d<0)d=-d;
+  frame[y*W+c]=(uint8_t)(cls<<6|level(light,(dz*32)/d));
+ }
+}
+static void column(unsigned c,int32_t depth,const sect_t *f,const sect_t *b,int contrast){
+ int top=ytop[c],bot=ybot[c];
+ if(top>=bot)return;
+ int yc=clampi(ycoord(f->ce,depth),top,bot);
+ int yf=clampi(ycoord(f->fl,depth),yc,bot);
+ int light=f->light;
+ if(f->sky)for(int y=top;y<yc;y++)frame[y*W+c]=(uint8_t)(3u<<6|40);
+ else plane_span(c,top,yc,f->ce,2,light);
+ plane_span(c,yf,bot,f->fl,1,light);
+ unsigned wl=level(light+contrast,depth);
+ int nt,nb;
+ if(!b||b->ce<=f->fl||b->fl>=f->ce||b->ce<=b->fl){
+  wall_span(c,yc,yf,(int)wl);
+  nt=bot;nb=bot; /* closed */
+ }else{
+  nt=yc;nb=yf;
+  if(b->ce<f->ce&&!(b->sky&&f->sky)){
+   nt=clampi(ycoord(b->ce,depth),yc,yf);
+   wall_span(c,yc,nt,(int)wl);
+  }
+  if(b->fl>f->fl){
+   nb=clampi(ycoord(b->fl,depth),nt,yf);
+   wall_span(c,nb,yf,(int)wl);
+  }
+ }
+ ytop[c]=(int8_t)nt;ybot[c]=(int8_t)nb;
+ if(nt>=nb)open_cols--;
+}
+/* Render one seg. Returns 0 on disk error. */
+static int do_seg(const qos_api *a,const uint8_t *sg){
+ unsigned v1=rd16(sg),v2=rd16(sg+2),ld=rd16(sg+6),dir=rd16(sg+8)&1u;
+ uint8_t ln[14];
+ int32_t x1,y1,x2,y2;
+ if(ld>=n_lines||!get_vertex(a,v1,&x1,&y1)||!get_vertex(a,v2,&x2,&y2))return 0;
+ /* Back-face cull in map space: front is on the right of v1->v2. */
+ if((x2-x1)*(py-y1)-(y2-y1)*(px-x1)>=0)return 1;
+ int32_t f1=((x1-px)*cs+(y1-py)*sn)>>8,r1=((x1-px)*sn-(y1-py)*cs)>>8;
+ int32_t f2=((x2-px)*cs+(y2-py)*sn)>>8,r2=((x2-px)*sn-(y2-py)*cs)>>8;
+ if(f1<NEAR&&f2<NEAR)return 1;
+ if(f1<NEAR){int32_t t=(NEAR-f1);int32_t den=f2-f1;r1+=(r2-r1)*t/den;f1=NEAR;}
+ else if(f2<NEAR){int32_t t=(NEAR-f2);int32_t den=f1-f2;r2+=(r1-r2)*t/den;f2=NEAR;}
+ int32_t xs1=16+fdiv(16*r1,f1),xs2=16+fdiv(16*r2,f2);
+ if(xs1>=xs2)return 1;
+ int c0=imax(xs1,0),c1=imin(xs2,(int)W);
+ if(c0>=c1)return 1;
+ if(!rd(a,o_lines+14u*ld,ln,14))return 0;
+ unsigned fs=rd16(ln+10+2*dir),bs=rd16(ln+12-2*dir);
+ int fsec=side_sector(a,fs),bsec=bs==0xffffu?-2:side_sector(a,bs);
+ if(fsec<0||bsec==-1)return 0;
+ const sect_t *F=&sec[fsec],*B=bsec>=0?&sec[bsec]:0;
+ int contrast=(y1==y2)?-16:(x1==x2)?16:0;
+ for(int c=c0;c<c1;c++){
+  if(ytop[c]>=ybot[c])continue;
+  int32_t u2=2*c-31;
+  int32_t den=32*(r2-r1)-u2*(f2-f1);
+  int32_t depth;
+  if(den<=0)depth=imin(f1,f2);
+  else{
+   int32_t t=((u2*f1-32*r1)*256)/den;
+   t=clampi(t,0,256);
+   depth=f1+(((f2-f1)*t)>>8);
+  }
+  if(depth<NEAR)depth=NEAR;
+  column((unsigned)c,depth,F,B,contrast);
+ }
  return 1;
 }
-/* Cross products are exact for the 16-bit test geometry; no host math is used.
- * This is a simple segment collision check, not DOOM's blockmap slide physics. */
-static int cross2(int32_t ax,int32_t ay,int32_t bx,int32_t by){
- int32_t v=ax*by-ay*bx;
- return (v>0)-(v<0);
+static int do_subsector(const qos_api *a,unsigned ss_index){
+ uint8_t ss[4];
+ if(!rd(a,o_ssec+4u*ss_index,ss,4))return 0;
+ unsigned count=rd16(ss),first=rd16(ss+2);
+ while(count&&open_cols>0){
+  unsigned k=count>20?20:count;
+  if(!rd(a,o_segs+12u*first,chunk,12u*k))return 0;
+  for(unsigned i=0;i<k&&open_cols>0;i++)
+   if(!do_seg(a,chunk+12*i))return 0;
+  first+=k;count-=k;
+ }
+ return 1;
 }
-static int blocked_move(const qos_api *q,int32_t nx,int32_t ny){
- for(unsigned i=0;i<line_count;i++){
-  if(has_sector_data && lines[i].back!=0xffffu){
-   int f=sector_at_side(lines[i].front),b=sector_at_side(lines[i].back);
-   if(f>=0 && b>=0 && sectors[f].floor==sectors[b].floor &&
-       sectors[f].ceiling==sectors[b].ceiling)continue;
+static int box_visible(const int16_t *bx){ /* top,bottom,left,right */
+ int allr=1,alll=1,allb=1,lo=W,hi=-1,anyb=0;
+ for(unsigned i=0;i<4;i++){
+  int32_t x=bx[2+(i&1)],y=bx[i>>1];
+  int32_t dx=x-px,dy=y-py;
+  int32_t f=(dx*cs+dy*sn)>>8,r=(dx*sn-dy*cs)>>8;
+  if(r<=f)allr=0;
+  if(r>=-f)alll=0;
+  if(f>0)allb=0;
+  if(f<NEAR)anyb=1;
+  else{int xs=16+(int)fdiv(16*r,f);if(xs<lo)lo=xs;if(xs>hi)hi=xs;}
+ }
+ if(allr||alll||allb)return 0;
+ if(anyb||(px>=bx[2]&&px<=bx[3]&&py>=bx[1]&&py<=bx[0])){lo=0;hi=W-1;}
+ /* Occlusion: skip the box if every column it can touch is already closed. */
+ lo=imax(lo,0);hi=imin(hi,(int)W-1);
+ for(int c=lo;c<=hi;c++)if(ytop[c]<ybot[c])return 1;
+ return 0;
+}
+static int draw(const qos_api *a){
+ int s=locate(a,px,py);
+ if(s<0)return 0;
+ eye=sec[s].fl+EYE;
+ cs=isin(ang+64);sn=isin(ang);
+ for(unsigned i=0;i<W*H;i++)frame[i]=0;
+ for(unsigned c=0;c<W;c++){ytop[c]=0;ybot[c]=H;}
+ open_cols=W;
+ unsigned sp=0,n=n_nodes?(unsigned)n_nodes-1u:0x8000u;
+ uint8_t nb[28];
+ for(;;){
+  while(!(n&0x8000u)){
+   if(n>=n_nodes||!rd(a,o_nodes+28u*n,nb,28))return 0;
+   int near=side_of(px,py,nb);
+   if(sp<48){
+    stk[sp].child=rd16(nb+24+2*(near^1));
+    for(unsigned i=0;i<4;i++)stk[sp].box[i]=s16(nb+8+8*(near^1)+2*i);
+    sp++;
+   }
+   n=rd16(nb+24+2*near);
   }
-  int32_t x1,y1,x2,y2;unsigned front,back;
-  if(!get_line(q,i,&x1,&y1,&x2,&y2,&front,&back))return 1;
-  int32_t a=cross2(x2-x1,y2-y1,player_x-x1,player_y-y1);
-  int32_t b=cross2(x2-x1,y2-y1,nx-x1,ny-y1);
-  int32_t c=cross2(nx-player_x,ny-player_y,x1-player_x,y1-player_y);
-  int32_t d=cross2(nx-player_x,ny-player_y,x2-player_x,y2-player_y);
-  if((a==0||b==0||a!=b) && (c==0||d==0||c!=d))return 1;
+  if(!do_subsector(a,n&0x7fffu))return 0;
+  if(open_cols<=0)break;
+  for(;;){
+   if(!sp)goto done;
+   sp--;
+   if(box_visible(stk[sp].box)){n=stk[sp].child;break;}
+  }
+ }
+done:
+ return qos_doom_present8(a,frame);
+}
+/* ---- movement with BLOCKMAP collision --------------------------------- */
+static int box_hits_line(int32_t x1,int32_t y1,int32_t x2,int32_t y2,int32_t bx,int32_t by){
+ if(imax(x1,x2)<bx-RADIUS||imin(x1,x2)>bx+RADIUS)return 0;
+ if(imax(y1,y2)<by-RADIUS||imin(y1,y2)>by+RADIUS)return 0;
+ int pos=0,neg=0;
+ for(unsigned i=0;i<4;i++){
+  int32_t cx=bx+((i&1)?RADIUS:-RADIUS),cy=by+((i&2)?RADIUS:-RADIUS);
+  int32_t v=(cx-x1)*(y2-y1)-(cy-y1)*(x2-x1);
+  if(v>0)pos=1;else if(v<0)neg=1;else return 1;
+ }
+ return pos&&neg;
+}
+static int blocked(const qos_api *a,int32_t nx,int32_t ny,int32_t curfloor){
+ if(!o_block)return 0;
+ uint8_t hd[8];
+ if(!rd(a,o_block,hd,8))return 1;
+ int32_t ox=s16(hd),oy=s16(hd+2),cols=rd16(hd+4),rows=rd16(hd+6);
+ int32_t bx0=(nx-RADIUS-ox)>>7,bx1=(nx+RADIUS-ox)>>7;
+ int32_t by0=(ny-RADIUS-oy)>>7,by1=(ny+RADIUS-oy)>>7;
+ if(bx0<0||by0<0||bx1>=cols||by1>=rows)return 1; /* off the blockmap */
+ for(int32_t by=by0;by<=by1;by++)for(int32_t bx=bx0;bx<=bx1;bx++){
+  uint8_t w[2];
+  if(!rd(a,o_block+8u+2u*(uint32_t)(by*cols+bx),w,2))return 1;
+  uint32_t lp=o_block+2u*rd16(w);
+  for(unsigned guard=0;guard<256;guard++,lp+=2){
+   if(!rd(a,lp,w,2))return 1;
+   unsigned l=rd16(w);
+   if(l==0xffffu)break;
+   uint8_t ln[14];
+   int32_t x1,y1,x2,y2;
+   if(l>=n_lines||!rd(a,o_lines+14u*l,ln,14))return 1;
+   if(!get_vertex(a,rd16(ln),&x1,&y1)||!get_vertex(a,rd16(ln+2),&x2,&y2))return 1;
+   if(!box_hits_line(x1,y1,x2,y2,nx,ny))continue;
+   unsigned bs=rd16(ln+12);
+   if(bs==0xffffu||(rd16(ln+4)&1u))return 1; /* one-sided or impassable */
+   int fsec=side_sector(a,rd16(ln+10)),bsec=side_sector(a,bs);
+   if(fsec<0||bsec<0)return 1;
+   const sect_t *F=&sec[fsec],*B=&sec[bsec];
+   int32_t top=imin(F->ce,B->ce),bot=imax(F->fl,B->fl);
+   if(top-bot<56||bot-curfloor>24||top-curfloor<56)return 1;
+  }
  }
  return 0;
 }
-/* Project the real WAD LINEDEFS from the player's location. Horizontal
- * direction is one of four cardinal directions. No textures, BSP, sprites,
- * floor heights or engine game loop yet. Avoid 64-bit division helpers. */
-/* One-pass geometry traversal: each streamed linedef and its vertices are
- * fetched ONCE per frame, regardless of the number of framebuffer columns.
- * This supports thousands of lines without holding the whole map in 32KB RAM.
- * This is still a flat-color ray caster, NOT DOOM's BSP renderer. */
-static int draw(const qos_api *a,unsigned direction){
- int32_t nearest[FB_W],wall_height[FB_W];
- uint8_t shades[FB_W];
- for(unsigned col=0;col<FB_W;col++){
-  nearest[col]=0x7fffffff;wall_height[col]=128;shades[col]=10;
- }
- for(unsigned i=0;i<line_count;i++){
-  int32_t x1,y1,x2,y2;unsigned front,back;
-  if(!get_line(a,i,&x1,&y1,&x2,&y2,&front,&back))return 0;
-  int32_t ax=x1-player_x,ay=y1-player_y;
-  int32_t sx=x2-x1,sy=y2-y1;
-  int32_t effective_height=128;
-  unsigned shade=10;
-  if(has_sector_data){
-   int f=sector_at_side(front),b=sector_at_side(back);
-   if(f<0)return 0;
-   if(b>=0){
-    int32_t upper=sectors[f].ceiling-sectors[b].ceiling;
-    int32_t lower=sectors[b].floor-sectors[f].floor;
-    effective_height=upper>lower?upper:lower;
-    if(effective_height<=0)continue; /* an open two-sided portal */
-   }else effective_height=sectors[f].ceiling-sectors[f].floor;
-   shade=10u+(sectors[f].light/32u)%8u;
-  }
-  for(unsigned col=0;col<FB_W;col++){
-   int32_t side=((int32_t)col-(int32_t)FB_W/2)*12;
-   int32_t dx=256,dy=side;
-   switch(direction&3u){case 1:dx=-side;dy=256;break;
-                         case 2:dx=-256;dy=-side;break;
-                         case 3:dx=side;dy=-256;break;}
-   int32_t den=dx*sy-dy*sx;
-   if(!den)continue;
-   int32_t num=ax*sy-ay*sx,edge=ax*dy-ay*dx;
-   if(den<0){den=-den;num=-num;edge=-edge;}
-   if(num<=0||edge>0||edge< -den)continue;
-   int32_t dist=(num/den)*256+((num%den)*256)/den;
-   if(dist>0 && dist<nearest[col]){
-    nearest[col]=dist;wall_height[col]=effective_height;
-    shades[col]=(uint8_t)(has_sector_data?shade:10u+(unsigned)(dist%8));
-   }
-  }
- }
- for(unsigned y=0;y<FB_H;y++)
-  for(unsigned x=0;x<FB_W;x++)frame[y*FB_W+x]=(uint8_t)(y<FB_H/2?2:1);
- for(unsigned col=0;col<FB_W;col++){
-  if(nearest[col]==0x7fffffff)continue;
-  int32_t height=(1200/(nearest[col]+1))*wall_height[col]/128;
-  if(height<1)height=1;
-  if(height>FB_H)height=FB_H;
-  unsigned top=(FB_H-(unsigned)height)/2;
-  for(unsigned y=top;y<top+(unsigned)height;y++)frame[y*FB_W+col]=shades[col];
- }
- if(!qos_doom_present8(a,frame))return 0;
- return 1;
+static int try_move(const qos_api *a,int32_t nx,int32_t ny){
+ int s=locate(a,px,py);
+ int32_t fl=s>=0?sec[s].fl:0;
+ if(!blocked(a,nx,ny,fl)){px=nx;py=ny;return 1;}
+ if(!blocked(a,nx,py,fl)){px=nx;return 1;}
+ if(!blocked(a,px,ny,fl)){py=ny;return 1;}
+ return 0;
 }
 int app_main(const qos_api *a){
  if(!load_map(a)){qputs(a,"doom: no valid E1M1/MAP01 WAD map\n");return 0;}
- unsigned dir=0;
- if(!draw(a,dir)){qputs(a,"doom: geometry read error\n");return 0;}
+ if(!draw(a)){qputs(a,"doom: geometry read error\n");return 0;}
  qputs(a,"doom: frame ready\n");
- /* A bounded interactive loop is important on a transformer CPU: each
-  * frame may take tens of thousands of guest instructions. The host only
-  * supplies key events and WAD pages; all rendering executes in RV32. */
+ /* Bounded interactive loop; the host only supplies keys and WAD pages. */
  for(unsigned tick=0;tick<4;tick++){
   unsigned key=qos_doom_key(a);
   if(!key)break;
-  if(key=='d')dir=(dir+1)&3u;
-  else if(key=='a')dir=(dir+3)&3u;
+  if(key=='d')ang=(ang+256u-16u)&255u;
+  else if(key=='a')ang=(ang+16u)&255u;
   else if(key=='w'||key=='s'){
-   int32_t delta=key=='w'?16:-16;
-   int32_t dx=0,dy=0;
-   switch(dir){case 0:dx=delta;break;case 1:dy=delta;break;
-               case 2:dx=-delta;break;default:dy=-delta;break;}
-   int32_t nx=player_x+dx,ny=player_y+dy;
-   if(!blocked_move(a,nx,ny)){player_x=nx;player_y=ny;}
+   int32_t m=key=='w'?32:-32;
+   int32_t c=isin(ang+64),s=isin(ang);
+   try_move(a,px+((c*m)>>8),py+((s*m)>>8));
   }
-  if(!draw(a,dir)){qputs(a,"doom: geometry read error\n");return 0;}
+  if(!draw(a)){qputs(a,"doom: geometry read error\n");return 0;}
   qputs(a,"doom: frame ready\n");
  }
  qputs(a,"doom: WAD map geometry rendered\n");return 0;
