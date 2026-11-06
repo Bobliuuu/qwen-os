@@ -7,15 +7,15 @@ from merge_elf import parse,merge
 
 class MergeTests(unittest.TestCase):
     def test_all_programs_have_correct_entry_and_segments(self):
-        for name,address in [('kernel',0x40000),('shell',0x60000),('paint',0x68000),('raycast',0x70000),('asset',0x78000),('doom',0x7c000)]:
+        for name,address in [('kernel',0x40000),('shell',0x78000),('paint',0x79000),('raycast',0x7a000),('asset',0x7b000),('doom',0x7c000),('doomd',0x41000)]:
             ent,segs=parse((ROOT/'build'/f'{name}.elf').read_bytes())
             self.assertEqual(ent,address)
             self.assertTrue(any(v<=address<v+len(d) and f&1 for v,d,f in segs))
 
-    def test_combined_image_contains_all_six_executables(self):
+    def test_combined_image_contains_all_seven_executables(self):
         ent,segs=parse((ROOT/'build/qwenos.elf').read_bytes())
         self.assertEqual(ent,0x40000)
-        self.assertTrue(all(any(v<=a<v+len(d) and f&1 for v,d,f in segs) for a in [0x40000,0x60000,0x68000,0x70000,0x78000,0x7c000]))
+        self.assertTrue(all(any(v<=a<v+len(d) and f&1 for v,d,f in segs) for a in [0x40000,0x41000,0x78000,0x79000,0x7a000,0x7b000,0x7c000]))
 
     def test_doom_writable_sections_occupy_guest_ram(self):
         entry,segments=parse((ROOT/'build/doom.elf').read_bytes())

@@ -36,22 +36,29 @@ def doom_fixture() -> bytes:
     things=struct.pack('<hhhhh',0,0,0,1,7)  # player 1 in center
     vertices=b''.join(struct.pack('<hh',x,y) for x,y in
                       [(-64,-64),(128,-64),(128,64),(-64,64)])
+    # Sectors are wound clockwise (DOOM: a linedef's front is on its right).
+    loops=[(1,0),(2,1),(3,2),(0,3)]
     linedefs=b''.join(struct.pack('<7H',a,b,1,0,0,i,0xffff)
-                       for i,(a,b) in enumerate([(0,1),(1,2),(2,3),(3,0)]))
+                       for i,(a,b) in enumerate(loops))
     sidedefs=b''.join(struct.pack('<hh8s8s8sH',0,0,b'-\0'*4,b'-\0'*4,b'WALL\0\0\0\0',0) for _ in range(4))
     sectors=struct.pack('<hh8s8sHHH',0,128,b'FLOOR\0\0\0',b'CEIL\0\0\0\0',192,0,0)
+    segs=b''.join(struct.pack('<6H',a,b,0,i,0,0) for i,(a,b) in enumerate(loops))
+    ssectors=struct.pack('<HH',4,0)
+    # BLOCKMAP: origin (-64,-64), 2x1 blocks of 128 units, each listing all lines.
+    lst=struct.pack('<5H',0,1,2,3,0xffff)
+    blockmap=struct.pack('<4h',-64,-64,2,1)+struct.pack('<2H',6,11)+lst+lst
     lumps=[(b'QOSDEMO\0',DEMO_LUMP_OFFSET,DEMO_DATA),
            (b'E1M1\0\0\0\0',0,b''),
            (b'THINGS\0\0',0x210100,things),
            (b'LINEDEFS',0x210200,linedefs),
            (b'SIDEDEFS',0x210500,sidedefs),
            (b'VERTEXES',0x210300,vertices),
-           (b'SEGS\0\0\0\0',0,b''),
-           (b'SSECTORS',0,b''),
+           (b'SEGS\0\0\0\0',0x210600,segs),
+           (b'SSECTORS',0x210700,ssectors),
            (b'NODES\0\0\0',0,b''),
            (b'SECTORS\0',0x210400,sectors),
            (b'REJECT\0\0',0,b''),
-           (b'BLOCKMAP',0,b'')]
+           (b'BLOCKMAP',0x210800,blockmap)]
     disk[:12]=struct.pack('<4sII',b'IWAD',len(lumps),DEMO_DIRECTORY_OFFSET)
     for i,(name,off,body) in enumerate(lumps):
         if body:disk[off:off+len(body)]=body
