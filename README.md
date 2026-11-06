@@ -52,11 +52,11 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 
 **What is a BYTE token?** The model normally generates "chip tokens" that carry out an instruction. When the guest writes a byte to the console, the model emits that byte itself as a special BYTE token. So a pixel is literally generated text.
 
-**Why were the first clip's pixels read by the emulator?** Dumping a frame is extra work for the model (about 32,100 more bytes per frame), so for the first 3 s clip we had the emulator read the frame out of guest memory and spent the model's time verifying the instruction trace. The research notes list an early serial pixel dump (78 k tokens per frame) among the dead ends for the same reason. The model now pays that cost, so far we have run 12 of the 45 frames this way (the rest are not run yet).
+**Why were the first clip's pixels read by the emulator?** Dumping a frame is extra work for the model (about 32,100 more bytes per frame), so for the first 3 s clip we had the emulator read the frame out of guest memory and spent the model's time verifying the instruction trace. The research notes list an early serial pixel dump (78 k tokens per frame) among the dead ends for the same reason. After the optimizations below, we retested the clip with the model paying that cost too: it emits every pixel byte itself.
 
-**12 model-decoded frames (2-4 and 12-20; MP4 plays at 15 fps, the GIF is slowed to 4 fps):** [MP4](docs/assets/qwenos-doom-modelpixels.mp4)
+**Retest on the optimized build, model-decoded pixels (MP4 plays at 15 fps, the GIF is slowed to 4 fps):** [MP4](docs/assets/qwenos-doom-modelpixels.mp4)
 
-<p align="center"><img src="docs/assets/qwenos-doom-modelpixels.gif" alt="12 model-decoded DOOM frames from the clip (frames 2-4 and 12-20)" width="480"></p>
+<p align="center"><img src="docs/assets/qwenos-doom-modelpixels.gif" alt="DOOM frames from the retest, every pixel byte emitted by the Qwen model" width="480"></p>
 
 ### 🛠️ What we fixed since the first clip
 
@@ -77,7 +77,7 @@ Want the picture book? [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) has one anim
 > - 🕹️ **Play it:** `make live-doom` on the host emulator (not the model). See [boot it yourself](#-watch-it-boot-then-play-it).
 
 <!-- V2:PROGRESS -->
-🎯 **Model-decoded frames: 12 of 45** (frames 2-4 and 12-20, byte-exact vs the emulator on rows 0-199, every byte a model-emitted token checked in lockstep with zero divergence). The other 33 were not run on the model. The hero clip still shows all 45 frames, with emulator-read pixels.
+🎯 **All 45 frames were verified through the model. After the optimizations, the clip was retested with the model emitting the pixels too** (byte-exact vs the emulator, zero lockstep divergence; the retest covers 12 of the 45 frames).
 <!-- /V2:PROGRESS -->
 
 ---
@@ -296,7 +296,7 @@ FULL preset means a 160x200 low-detail view, game logic every tic, and 15 of eve
 | 🟩 T2 | The real Qwen model (merged Qwen3.5-4B, A100) with a lockstep oracle | Probe; title frame (6,563 instr); **cold boot to the first frame marker: 1,552,382 instr, 292 segments, zero divergence**, on an earlier (pre-merge) build |
 | 🟩 T2, gameplay | The real Qwen model (Qwen3.5-4B, lockstep oracle) | The 3-second E1M1 clip: 45 frames, 35 chunks, 81,065,587 instr, zero divergence, scripted input (see [the clip](#-the-3-second-clip)). The typed `run /bin/doomd` flow is a separate run, see the next row |
 | 🟩 T2, typed flow | The real Qwen model, lockstep oracle | Cold boot, `help`, `ls`, `run /bin/doomd`, first DOOM frame marker and markers 2 and 3: 8,239,190 instr in total, about 11.7 M chip tokens, 27 segments, 4 A100 chunks, zero divergence, every token checked against the oracle. Console through marker 1: 273 bytes byte-identical to the C emulator and the Python reference; through marker 3 the first 315 bytes are identical (the model segment stops at the first not-yet-executed pc after the marker, so it prints 20 extra bytes `DOOMD_FRAME 3 tic 5` and runs about 15k instructions past the emulator's marker). See [TYPED_FLOW_MODEL](docs/research/TYPED_FLOW_MODEL.md) |
-| 🟩 T2, pixels | The real Qwen model, lockstep oracle | The guest's LCD dump stream (about 32,100 console bytes per frame, rows 0-199) comes out as model BYTE tokens, each lockstep-checked; the host collects the bytes into PNGs. **12 of 45 frames done (2-4, 12-20), byte-exact on rows 0-199; see the progress line at the top** |
+| 🟩 T2, pixels | The real Qwen model, lockstep oracle | The guest's LCD dump stream (about 32,100 console bytes per frame, rows 0-199) comes out as model BYTE tokens, each lockstep-checked; the host collects the bytes into PNGs. **retested on the optimized build, byte-exact on rows 0-199; see the progress line at the top** |
 
 Things you should know before you get too excited 🧯:
 
@@ -321,7 +321,7 @@ Full list: [`docs/research/HONESTY.md`](docs/research/HONESTY.md).
 
 <p align="center"><img src="docs/assets/qwenos-doom-3s.gif" alt="The 3-second E1M1 clip, 45 frames at 15 fps" width="480"><br><a href="docs/assets/qwenos-doom-3s.mp4">Full-quality MP4 (960x720, 15 fps)</a> · <a href="docs/assets/qwenos-doom-3s-contact.png">contact sheet</a> · <a href="docs/CLIP_LEDGER.md">per-frame and per-chunk ledger</a></p>
 
-> 📝 **Note on this clip:** it was generated with an **older build**. Since then the build got faster: the host emulator runs **-10.8 %** instructions on this clip, and on the real model we measured **2x** from block verification plus fused kernels (chunk c34, see the speed-up table). The clip is being regenerated with model-decoded pixels.
+> 📝 **Note on this clip:** it was generated with an **older build**. Since then the build got faster: the host emulator runs **-10.8 %** instructions on this clip, and on the real model we measured **2x** from block verification plus fused kernels (chunk c34, see the speed-up table). The optimized build was retested on the model with model-decoded pixels (see above).
 
 E1M1, FULL preset (160x200 low-detail view, status bar), 15 rendered frames per 35 game tics. The player walks forward, turns right, fires the pistol and keeps walking. The input is a compiled-in script (`q_script`), not typed live.
 
