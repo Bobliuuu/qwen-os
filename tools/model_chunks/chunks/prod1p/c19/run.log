@@ -1,0 +1,47 @@
+CMD /usr/local/bin/python /bundle/final/tools/model_doom_qwen.py /ckpt/q4-rv1 --elf /bundle/final/build/qwenos-e1m1.elf --kernel-elf /bundle/final/build/kernel-doomd.elf --disk /bundle/final/E1.img --out /results/prod1p/c19/console.bin --result-json /results/prod1p/c19/result.json --target boot-frame --segment-range 22:23 --snapshot-marker 0 --frames 45 --rom-plan build/crx-plan.json --split-markers 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,24,26,28,30,31,32,34,36,38,40,42,44 --split-steps 1708864 --sym-elf build/doomd-sym.elf --load-starts /snaps
+Loading weights:   0%|          | 0/580 [00:00<?, ?it/s]Loading weights:   4%|▍         | 23/580 [00:00<00:03, 163.26it/s]Loading weights:   9%|▉         | 51/580 [00:00<00:02, 204.85it/s]Loading weights:  12%|█▏        | 72/580 [00:00<00:02, 184.25it/s]Loading weights:  16%|█▌        | 91/580 [00:00<00:02, 176.19it/s]Loading weights:  19%|█▉        | 109/580 [00:00<00:02, 163.41it/s]Loading weights:  25%|██▍       | 143/580 [00:00<00:02, 188.13it/s]Loading weights:  28%|██▊       | 162/580 [00:00<00:02, 185.38it/s]Loading weights:  31%|███       | 181/580 [00:00<00:02, 183.53it/s]Loading weights:  34%|███▍      | 200/580 [00:01<00:02, 182.95it/s]Loading weights:  38%|███▊      | 222/580 [00:01<00:01, 182.65it/s]Loading weights:  42%|████▏     | 241/580 [00:01<00:01, 175.60it/s]Loading weights:  45%|████▍     | 259/580 [00:01<00:02, 159.83it/s]Loading weights:  50%|█████     | 291/580 [00:01<00:01, 180.89it/s]Loading weights:  54%|█████▍    | 314/580 [00:01<00:01, 183.77it/s]Loading weights:  57%|█████▋    | 333/580 [00:01<00:01, 177.90it/s]Loading weights:  61%|██████    | 351/580 [00:01<00:01, 176.62it/s]Loading weights:  64%|██████▎   | 369/580 [00:02<00:01, 174.48it/s]Loading weights:  68%|██████▊   | 393/580 [00:02<00:01, 171.72it/s]Loading weights:  73%|███████▎  | 426/580 [00:02<00:00, 207.61it/s]Loading weights:  77%|███████▋  | 448/580 [00:02<00:00, 200.72it/s]Loading weights:  81%|████████  | 469/580 [00:02<00:00, 176.72it/s]Loading weights:  84%|████████▍ | 488/580 [00:02<00:00, 171.80it/s]Loading weights:  87%|████████▋ | 506/580 [00:02<00:00, 171.19it/s]Loading weights:  93%|█████████▎| 537/580 [00:02<00:00, 201.87it/s]Loading weights:  96%|█████████▌| 558/580 [00:03<00:00, 201.44it/s]Loading weights: 100%|██████████| 580/580 [00:03<00:00, 186.22it/s]
+[transformers] The tokenizer you are loading from '/ckpt/q4-rv1' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+{
+  "host": "modal",
+  "model_seconds": 1246.1,
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 2365.0,
+  "instr_per_s": 1634.0,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "22:23",
+  "wall_seconds": 1246.1,
+  "snapshot_marker": 0,
+  "frames": 45,
+  "segments": 1,
+  "total_segments": 22,
+  "first_segment": 22,
+  "instructions": 2036052,
+  "planned_chip_tokens": 2947010,
+  "tok_per_instr": 1.4474,
+  "model_chip_tokens": 2947021,
+  "model_text_tokens": 30,
+  "console_bytes": 1,
+  "extra_full_text_tokens_for_echo": 1,
+  "est_chip_seconds": 920.9,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 1,
+  "out": "/results/prod1p/c19/console.bin",
+  "segments_by_reason": {
+    "split": 1
+  },
+  "rom_plan": "build/crx-plan.json",
+  "segment_detail": [
+    [
+      22,
+      true,
+      1,
+      2036052,
+      2947010
+    ]
+  ]
+}

@@ -1,0 +1,4 @@
+FAIL:
+  chunk 0: failed (MODEL, segments 3/3, markers 0/0)
+  chunk 1: failed (MODEL, segments 1/1, markers 1/1)
+  chunk 2: failed (MODEL, segments 1/1, markers 1/1)

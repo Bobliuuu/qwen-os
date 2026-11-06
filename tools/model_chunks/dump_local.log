@@ -1,0 +1,6 @@
+dumped seg 1 instr=73456 steps=0 (8s)
+dumped seg 2 instr=1527 steps=73457 (8s)
+dumped seg 3 instr=1744913 steps=74985 (101s)
+dumped seg 4 instr=1597830 steps=1819898 (168s)
+dumped seg 5 instr=2432641 steps=3417728 (224s)
+dumped seg 6 instr=2458771 steps=5850370 (292s)

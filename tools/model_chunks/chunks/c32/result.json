@@ -1,0 +1,42 @@
+{
+  "host": "129-146-78-123",
+  "model_seconds": 1576.0,
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 2236.3,
+  "instr_per_s": 1557.8,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "36:37",
+  "wall_seconds": 1576.0,
+  "snapshot_marker": 0,
+  "frames": 45,
+  "segments": 1,
+  "total_segments": 36,
+  "first_segment": 36,
+  "instructions": 2455005,
+  "planned_chip_tokens": 3524400,
+  "tok_per_instr": 1.4356,
+  "model_chip_tokens": 3524411,
+  "model_text_tokens": 31,
+  "console_bytes": 2,
+  "extra_full_text_tokens_for_echo": 2,
+  "est_chip_seconds": 1101.4,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 2,
+  "out": "out/c32/console.bin",
+  "segments_by_reason": {
+    "split": 1
+  },
+  "rom_plan": "build/crx-plan.json",
+  "segment_detail": [
+    [
+      36,
+      true,
+      2,
+      2455005,
+      3524400
+    ]
+  ]
+}

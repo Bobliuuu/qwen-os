@@ -1,0 +1,47 @@
+CMD /usr/local/bin/python /bundle/final/tools/model_doom_qwen.py /ckpt/q4-rv1 --elf /bundle/final/build/qwenos-e1m1.elf --kernel-elf /bundle/final/build/kernel-doomd.elf --disk /bundle/final/E1.img --out /results/prod1p/c26/console.bin --result-json /results/prod1p/c26/result.json --target boot-frame --segment-range 29:30 --snapshot-marker 0 --frames 45 --rom-plan build/crx-plan.json --split-markers 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,24,26,28,30,31,32,34,36,38,40,42,44 --split-steps 1708864 --sym-elf build/doomd-sym.elf --load-starts /snaps
+Loading weights:   0%|          | 0/580 [00:00<?, ?it/s]Loading weights:   9%|▉         | 55/580 [00:00<00:01, 452.88it/s]Loading weights:  17%|█▋        | 101/580 [00:00<00:01, 249.02it/s]Loading weights:  23%|██▎       | 131/580 [00:00<00:02, 199.24it/s]Loading weights:  27%|██▋       | 154/580 [00:00<00:02, 203.26it/s]Loading weights:  31%|███       | 177/580 [00:00<00:02, 195.17it/s]Loading weights:  36%|███▌      | 206/580 [00:00<00:01, 215.44it/s]Loading weights:  39%|███▉      | 229/580 [00:01<00:01, 203.38it/s]Loading weights:  43%|████▎     | 251/580 [00:01<00:01, 196.64it/s]Loading weights:  47%|████▋     | 273/580 [00:01<00:01, 198.67it/s]Loading weights:  51%|█████     | 294/580 [00:01<00:01, 186.50it/s]Loading weights:  54%|█████▍    | 313/580 [00:01<00:01, 172.83it/s]Loading weights:  57%|█████▋    | 331/580 [00:01<00:01, 169.40it/s]Loading weights:  60%|██████    | 349/580 [00:01<00:01, 158.76it/s]Loading weights:  64%|██████▎   | 369/580 [00:01<00:01, 164.66it/s]Loading weights:  68%|██████▊   | 397/580 [00:02<00:01, 182.48it/s]Loading weights:  72%|███████▏  | 417/580 [00:02<00:00, 186.98it/s]Loading weights:  76%|███████▌  | 442/580 [00:02<00:00, 197.89it/s]Loading weights:  80%|███████▉  | 462/580 [00:02<00:00, 178.96it/s]Loading weights:  83%|████████▎ | 484/580 [00:02<00:00, 178.26it/s]Loading weights:  87%|████████▋ | 506/580 [00:02<00:00, 178.29it/s]Loading weights:  91%|█████████▏| 530/580 [00:02<00:00, 188.07it/s]Loading weights:  95%|█████████▍| 549/580 [00:02<00:00, 183.45it/s]Loading weights:  98%|█████████▊| 568/580 [00:02<00:00, 183.19it/s]Loading weights: 100%|██████████| 580/580 [00:02<00:00, 195.07it/s]
+[transformers] The tokenizer you are loading from '/ckpt/q4-rv1' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+{
+  "host": "modal",
+  "model_seconds": 1456.8,
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 2541.6,
+  "instr_per_s": 1750.0,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "29:30",
+  "wall_seconds": 1457.0,
+  "snapshot_marker": 0,
+  "frames": 45,
+  "segments": 1,
+  "total_segments": 29,
+  "first_segment": 29,
+  "instructions": 2549440,
+  "planned_chip_tokens": 3702585,
+  "tok_per_instr": 1.4523,
+  "model_chip_tokens": 3702596,
+  "model_text_tokens": 31,
+  "console_bytes": 2,
+  "extra_full_text_tokens_for_echo": 2,
+  "est_chip_seconds": 1157.1,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 2,
+  "out": "/results/prod1p/c26/console.bin",
+  "segments_by_reason": {
+    "split": 1
+  },
+  "rom_plan": "build/crx-plan.json",
+  "segment_detail": [
+    [
+      29,
+      true,
+      2,
+      2549440,
+      3702585
+    ]
+  ]
+}

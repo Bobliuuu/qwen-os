@@ -1,0 +1,48 @@
+Loading weights:   0%|          | 0/580 [00:00<?, ?it/s]Loading weights:  78%|███████▊  | 450/580 [00:00<00:00, 4483.90it/s]Loading weights: 100%|██████████| 580/580 [00:00<00:00, 4524.65it/s]
+[transformers] The tokenizer you are loading from '../q4-rv1' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+[transformers] `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `fused_recurrent_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+{
+  "host": "129-146-78-123",
+  "model_seconds": 1495.5,
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 2236.3,
+  "instr_per_s": 1547.6,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "35:36",
+  "wall_seconds": 1495.5,
+  "snapshot_marker": 0,
+  "frames": 45,
+  "segments": 1,
+  "total_segments": 35,
+  "first_segment": 35,
+  "instructions": 2314444,
+  "planned_chip_tokens": 3344347,
+  "tok_per_instr": 1.445,
+  "model_chip_tokens": 3344358,
+  "model_text_tokens": 31,
+  "console_bytes": 2,
+  "extra_full_text_tokens_for_echo": 2,
+  "est_chip_seconds": 1045.1,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 2,
+  "out": "out/c31/console.bin",
+  "segments_by_reason": {
+    "split": 1
+  },
+  "rom_plan": "build/crx-plan.json",
+  "segment_detail": [
+    [
+      35,
+      true,
+      2,
+      2314444,
+      3344347
+    ]
+  ]
+}

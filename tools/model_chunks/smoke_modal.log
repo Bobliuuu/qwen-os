@@ -1,0 +1,11 @@
+✓ Initialized. View run at 
+https://modal.com/apps/jerry-zhu/main/ap-8bPd9hVHhmvBNKRf1kt8SP
+✓ Created objects.
+├── ✓ Uploaded /Users/jhome/qwenos-work/out/model/modal_chunks.py
+├── ✓ Uploaded 
+│   /Users/jhome/qwenos-work/out/model/../../qwenputer/experimental/riscv
+├── ✓ Created Function run_chunk_a100_40gb.
+├── ✓ Created Function run_chunk_a100_80gb.
+├── ✓ Created Function run_chunk_h100.
+├── ✓ Created Function run_chunk_l40s.
+└── ✓ Created Function run_chunk_a10g.

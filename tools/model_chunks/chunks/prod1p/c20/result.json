@@ -1,0 +1,42 @@
+{
+  "host": "modal",
+  "model_seconds": 1285.6,
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "executor": true,
+  "keys": "",
+  "chip_tokens_per_s": 2347.9,
+  "instr_per_s": 1629.0,
+  "mode": "MODEL",
+  "target": "boot-frame",
+  "segment_range": "23:24",
+  "wall_seconds": 1285.8,
+  "snapshot_marker": 0,
+  "frames": 45,
+  "segments": 1,
+  "total_segments": 23,
+  "first_segment": 23,
+  "instructions": 2094260,
+  "planned_chip_tokens": 3018521,
+  "tok_per_instr": 1.4413,
+  "model_chip_tokens": 3018532,
+  "model_text_tokens": 30,
+  "console_bytes": 1,
+  "extra_full_text_tokens_for_echo": 1,
+  "est_chip_seconds": 943.3,
+  "tok_per_s_assumed": 3200.0,
+  "frame_markers_in_output": 1,
+  "out": "/results/prod1p/c20/console.bin",
+  "segments_by_reason": {
+    "split": 1
+  },
+  "rom_plan": "build/crx-plan.json",
+  "segment_detail": [
+    [
+      23,
+      true,
+      1,
+      2094260,
+      3018521
+    ]
+  ]
+}

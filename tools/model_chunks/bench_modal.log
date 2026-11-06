@@ -1,0 +1,27 @@
+✓ Initialized. View run at 
+https://modal.com/apps/jerry-zhu/main/ap-qkcxG49IzeZtdYX3TuGmWH
+✓ Created objects.
+├── ✓ Uploaded /Users/jhome/qwenos-work/out/model/modal_chunks.py
+├── ✓ Uploaded 
+│   /Users/jhome/qwenos-work/out/model/../../qwenputer/experimental/riscv
+├── ✓ Created Function run_chunk_a100_40gb.
+├── ✓ Created Function run_chunk_a100_80gb.
+├── ✓ Created Function run_chunk_h100.
+├── ✓ Created Function run_chunk_l40s.
+└── ✓ Created Function run_chunk_a10g.
+Traceback (most recent call last):
+  File "/pkg/modal/_runtime/container_io_manager.py", line 987, in handle_input_exception
+    yield
+  File "/pkg/modal/_container_entrypoint.py", line 189, in run_input_sync
+    values = io_context.call_function_sync()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/pkg/modal/_runtime/container_io_manager.py", line 266, in call_function_sync
+    expected_value_or_values = self.finalized_function.callable(*args, **kwargs)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/modal_chunks.py", line 73, in f
+    return _run_chunk(bundle, tag, name, argv)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/modal_chunks.py", line 66, in _run_chunk
+    raise RuntimeError(f"{name} rc={rc} (see {out}/run.log)")  # triggers retry
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: t rc=1 (see /results/bench100000-A100-40GB/t/run.log)

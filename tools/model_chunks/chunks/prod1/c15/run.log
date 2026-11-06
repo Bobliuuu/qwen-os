@@ -1,0 +1,21 @@
+CMD /usr/local/bin/python /bundle/final/tools/model_doom_qwen.py /ckpt/q4-rv1 --elf /bundle/final/build/qwenos-e1m1.elf --kernel-elf /bundle/final/build/kernel-doomd.elf --disk /bundle/final/E1.img --out /results/prod1/c15/console.bin --result-json /results/prod1/c15/result.json --target boot-frame --segment-range 18:19 --snapshot-marker 0 --frames 45 --rom-plan build/crx-plan.json --split-markers 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,24,26,28,30,31,32,34,36,38,40,42,44 --split-steps 1708864 --sym-elf build/doomd-sym.elf --load-starts /snaps
+Loading weights:   0%|          | 0/580 [00:00<?, ?it/s]Loading weights:   2%|▏         | 11/580 [00:00<00:05, 103.64it/s]Loading weights:   6%|▌         | 33/580 [00:00<00:03, 155.11it/s]Loading weights:   9%|▉         | 55/580 [00:00<00:03, 154.12it/s]Loading weights:  12%|█▏        | 71/580 [00:00<00:03, 147.87it/s]Loading weights:  16%|█▌        | 94/580 [00:00<00:02, 164.83it/s]Loading weights:  19%|█▉        | 111/580 [00:00<00:02, 164.13it/s]Loading weights:  22%|██▏       | 128/580 [00:00<00:02, 155.16it/s]Loading weights:  27%|██▋       | 156/580 [00:00<00:02, 176.36it/s]Loading weights:  30%|███       | 174/580 [00:01<00:02, 162.16it/s]Loading weights:  33%|███▎      | 191/580 [00:01<00:02, 154.02it/s]Loading weights:  37%|███▋      | 212/580 [00:01<00:02, 159.76it/s]Loading weights:  40%|████      | 233/580 [00:01<00:02, 169.42it/s]Loading weights:  43%|████▎     | 251/580 [00:01<00:02, 152.24it/s]Loading weights:  47%|████▋     | 272/580 [00:01<00:01, 165.71it/s]Loading weights:  51%|█████     | 294/580 [00:01<00:01, 173.51it/s]Loading weights:  54%|█████▍    | 312/580 [00:01<00:01, 173.64it/s]Loading weights:  57%|█████▋    | 330/580 [00:02<00:01, 173.84it/s]Loading weights:  60%|██████    | 348/580 [00:02<00:01, 155.51it/s]Loading weights:  64%|██████▍   | 372/580 [00:02<00:01, 165.90it/s]Loading weights:  67%|██████▋   | 389/580 [00:02<00:01, 162.97it/s]Loading weights:  70%|███████   | 406/580 [00:02<00:01, 161.31it/s]Loading weights:  75%|███████▌  | 435/580 [00:02<00:00, 194.59it/s]Loading weights:  78%|███████▊  | 455/580 [00:02<00:00, 171.20it/s]Loading weights:  82%|████████▏ | 473/580 [00:02<00:00, 156.66it/s]Loading weights:  84%|████████▍ | 490/580 [00:03<00:00, 159.61it/s]Loading weights:  87%|████████▋ | 507/580 [00:03<00:00, 158.89it/s]Loading weights:  93%|█████████▎| 538/580 [00:03<00:00, 199.26it/s]Loading weights:  96%|█████████▋| 559/580 [00:03<00:00, 185.39it/s]Loading weights: 100%|██████████| 580/580 [00:03<00:00, 169.97it/s]
+[transformers] The tokenizer you are loading from '/ckpt/q4-rv1' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `causal_conv1d_update` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+Traceback (most recent call last):
+  File "/bundle/final/tools/model_doom_qwen.py", line 514, in <module>
+    main()
+  File "/bundle/final/tools/model_doom_qwen.py", line 466, in main
+    res = chat.generate(ids, cpu, max_new=max_text, max_chip=max_chip, check_head=True,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/qwenputer/chipformer/rv/chat.py", line 412, in generate
+    nxt = (self.code_token(keep[: len(self.code_dims)]) if hc is None
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/qwenputer/chipformer/rv/chat.py", line 175, in code_token
+    if not bool((code != 0).any()):
+           ^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
