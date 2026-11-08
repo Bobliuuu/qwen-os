@@ -17,3 +17,13 @@ __pycache__/
 !docs/assets/*.gif
 .claude/
 .deps/
+
+# --- secrets / infrastructure identifiers: never commit (see skill github-workflow) ---
+*.pem
+*.key
+known_hosts
+.env
+.env.*
+vast_api_key
+sw.sh
+*.local.sh
