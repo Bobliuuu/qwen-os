@@ -23,6 +23,8 @@ badges:
   - {label: "model chunks", message: "{{ n.chunks.text }}", color: 27c8e8}
   - {label: license, message: "MIT + GPL-2.0", color: lightgrey, link: LICENSE}
   - {label: status, message: research demo, color: lightgrey}
+  - {label: release, message: v0.1.0, color: 27c8e8, logo: github, link: "https://github.com/Bobliuuu/qwen-os/releases/tag/v0.1.0"}
+  - {label: "Hugging Face", message: "run ledgers", color: ffd21e, logo: huggingface, link: "https://huggingface.co/datasets/Bobliu/qwen-os"}
 nav:
   - {emoji: "🎬", label: Video, anchor: video}
   - {emoji: "📊", label: At a glance, anchor: results}
