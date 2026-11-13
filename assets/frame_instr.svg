@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 460" width="980" height="460" role="img" aria-label="Guest instructions per displayed frame (millions), 45-frame E1M1 clip">
+<rect width="980" height="460" rx="16" fill="#0b0f17"/>
+<text x="32" y="44" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-weight="700" font-size="22" fill="#e6edf6">Guest instructions per displayed frame (millions), 45-frame E1M1 clip</text>
+<line x1="80" x2="940" y1="380" y2="380" stroke="#263044" stroke-width="1"/>
+<text x="70" y="384" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">0</text>
+<text x="80" y="400" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">1</text>
+<line x1="80" x2="940" y1="309" y2="309" stroke="#263044" stroke-width="1"/>
+<text x="70" y="313" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">0.8972</text>
+<text x="295" y="400" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">12</text>
+<line x1="80" x2="940" y1="238" y2="238" stroke="#263044" stroke-width="1"/>
+<text x="70" y="242" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">1.794</text>
+<text x="510" y="400" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">23</text>
+<line x1="80" x2="940" y1="167" y2="167" stroke="#263044" stroke-width="1"/>
+<text x="70" y="171" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">2.692</text>
+<text x="725" y="400" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">34</text>
+<line x1="80" x2="940" y1="96" y2="96" stroke="#263044" stroke-width="1"/>
+<text x="70" y="100" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">3.589</text>
+<text x="940" y="400" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">45</text>
+<text x="510.0" y="424" text-anchor="middle" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#8a98ad">frame</text>
+<text x="14" y="238.0" transform="rotate(-90 14 238.0)" text-anchor="middle" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#8a98ad">million instructions</text>
+<polyline points="80.0,109.5 99.5,187.5 119.1,185.4 138.6,187.1 158.2,182.1 177.7,179.9 197.3,174.5 216.8,159.9 236.4,167.4 255.9,200.8 275.5,195.1 295.0,201.6 314.5,209.9 334.1,217.9 353.6,215.6 373.2,207.7 392.7,198.5 412.3,212.5 431.8,218.9 451.4,214.3 470.9,222.8 490.5,232.5 510.0,251.9 529.5,263.0 549.1,268.0 568.6,286.1 588.2,275.8 607.7,295.6 627.3,268.9 646.8,289.3 666.4,283.9 685.9,274.1 705.5,274.0 725.0,252.8 744.5,275.8 764.1,282.7 783.6,275.3 803.2,281.6 822.7,293.9 842.3,282.9 861.8,274.7 881.4,291.1 900.9,292.6 920.5,275.9 940.0,293.7" fill="none" stroke="#27c8e8" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="948" y="446" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">source: docs/derived/readme_data.json · lower is better</text>
+</svg>

@@ -27,3 +27,9 @@ known_hosts
 vast_api_key
 sw.sh
 *.local.sh
+
+# README/video generation (video-readme-maker): keep the finished media, ignore scratch
+!video/*.mp4
+!video/*.gif
+!assets/*.gif
+video/.render/

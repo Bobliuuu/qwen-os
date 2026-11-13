@@ -1,0 +1,285 @@
+# Spec for ~/video-readme-maker:  python3 ~/video-readme-maker/vrm.py all README.spec.yml
+# Every number in the generated sections and in the video narration is read from docs/derived/readme_data.json,
+# which tools/readme_data.py builds from docs/CLIP_LEDGER.md and docs/research/typed-flow/*.json, TRACES/model/boot.json.
+# The long technical sections are verbatim markdown in docs/readme/*.md (included with body_file).
+project:
+  name: QwenOS
+  emoji: "🎮"
+  tagline: "A tiny operating system that boots, opens a shell and runs real DOOM on Qwenputer: a 32-bit RISC-V CPU compiled into the weights of Qwen3.5-4B"
+  repo: Bobliuuu/qwen-os
+hero:
+  title: QwenOS
+  subtitle: "a kernel, a shell and DOOM on a CPU that lives inside Qwen3.5-4B"
+  chips: [RV32IM, 32 KiB RAM, DMC100-Doom, Qwen3.5-4B]
+theme: {accent: "#27c8e8", accent2: "#ff6b6b", accent3: "#f2c14e", good: "#3ddc97"}
+readme_out: README.md
+assets_dir: assets
+badges:
+  - {label: CPU, message: RV32IM, color: 5b8def}
+  - {label: RAM, message: 32 KiB, color: f2c14e}
+  - {label: engine, message: DMC100-Doom, color: c0392b}
+  - {label: model, message: "Qwen3.5-4B", color: 7e57c2}
+  - {label: "clip frames model-verified", message: "{{ n.frames_verified.text }} of {{ n.frames.text }}", color: 3ddc97}
+  - {label: "model chunks", message: "{{ n.chunks.text }}", color: 27c8e8}
+  - {label: license, message: "MIT + GPL-2.0", color: lightgrey, link: LICENSE}
+  - {label: status, message: research demo, color: lightgrey}
+nav:
+  - {emoji: "🎬", label: Video, anchor: video}
+  - {emoji: "📊", label: At a glance, anchor: results}
+  - {emoji: "⚡", label: Quick start, anchor: what-you-can-do-in-30-seconds}
+  - {emoji: "🧩", label: How it works, anchor: how-it-works-in-one-picture}
+  - {emoji: "🐢", label: How fast, anchor: how-fast-is-it-really}
+  - {emoji: "🔍", label: What is real, anchor: what-is-real-and-what-is-not}
+  - {emoji: "🎞️", label: The clip, anchor: the-3-second-clip}
+  - {emoji: "🙋", label: FAQ, anchor: faq-for-humans}
+  - {emoji: "🗺️", label: Repo map, anchor: repo-map}
+
+numbers:
+  frames: {file: docs/derived/readme_data.json, path: totals.frames}
+  frames_verified: {file: docs/derived/readme_data.json, path: totals.frames_verified}
+  chunks: {file: docs/derived/readme_data.json, path: totals.chunks}
+  chunks_ok: {file: docs/derived/readme_data.json, path: totals.chunks_ok}
+  instr_m: {expr: "instr_raw / 1e6", fmt: "{:.2f}", unit: " M"}
+  instr_raw: {file: docs/derived/readme_data.json, path: totals.instr, fmt: "{:,.0f}"}
+  tokens_m: {expr: "tokens_raw / 1e6", fmt: "{:.1f}", unit: " M"}
+  tokens_raw: {file: docs/derived/readme_data.json, path: totals.tokens, fmt: "{:,.0f}"}
+  typed_instr: {file: docs/derived/readme_data.json, path: totals.typed_instr, fmt: "{:,.0f}"}
+  typed_tokens_m: {expr: "typed_tokens_raw / 1e6", fmt: "{:.1f}", unit: " M"}
+  typed_tokens_raw: {file: docs/derived/readme_data.json, path: totals.typed_tokens, fmt: "{:,.0f}"}
+  typed_segments: {file: docs/derived/readme_data.json, path: totals.typed_segments}
+  boot_instr: {file: docs/derived/readme_data.json, path: boot.instr, fmt: "{:,.0f}"}
+  boot_segments: {file: docs/derived/readme_data.json, path: boot.segments}
+  first_frame_m: {expr: "first_raw / 1e6", fmt: "{:.2f}", unit: " M"}
+  first_raw: {file: docs/derived/readme_data.json, path: totals.first_frame_instr}
+  min_frame_m: {expr: "min_raw / 1e6", fmt: "{:.2f}", unit: " M"}
+  min_raw: {file: docs/derived/readme_data.json, path: totals.min_frame_instr}
+  max_frame_m: {expr: "max_raw / 1e6", fmt: "{:.2f}", unit: " M"}
+  max_raw: {file: docs/derived/readme_data.json, path: totals.max_frame_instr}
+  modal_chunks: {file: docs/derived/readme_data.json, path: "lanes.lane=Modal A100.chunks"}
+  lambda_chunks: {file: docs/derived/readme_data.json, path: "lanes.lane=Lambda A100.chunks"}
+  aws_chunks: {file: docs/derived/readme_data.json, path: "lanes.lane=AWS A10G.chunks"}
+  wall_h: {expr: "wall_raw / 3600", fmt: "{:.1f}", unit: " h"}
+  wall_raw: {file: docs/derived/readme_data.json, path: totals.wall_s}
+
+intro_file: docs/readme/00-intro.md
+
+video:
+  url: ""   # paste the GitHub user-attachments URL here after dragging the mp4 into a GitHub issue/PR; re-run `vrm.py readme README.spec.yml`
+  caption: "Explainer video (voice-over and subtitles): what QwenOS is, what the Qwen model actually verified, and what is not real"
+  mp4: video/qwenos_explainer.mp4
+  gif: video/preview.gif
+  srt: video/qwenos_explainer.srt
+  poster: video/poster.png
+  out_dir: video/.render
+  fps: 24
+  max_mb: 22
+  render_crf: 20
+  concurrency: 4
+  poster_at: 60
+  music: true
+  voice: {engine: openai, voice: alloy, model: gpt-4o-mini-tts, tempo: 1.2}
+  scenes:
+    - type: title
+      title: QwenOS
+      subtitle: A tiny OS and real DOOM, on a CPU inside a language model
+      chips: [RV32IM, 32 KiB RAM, DMC100-Doom, Qwen3.5-4B]
+      say: "QwenOS. A tiny operating system, and the real DOOM engine, running on a computer that lives inside the weights of a language model. This is a short, honest tour of what it is and what was actually verified."
+    - type: problem
+      heading: The question
+      bullets:
+        - "Qwenputer compiles a 32-bit RISC-V CPU into Qwen3.5-4B"
+        - "Every instruction becomes a few generated tokens"
+        - "Can that CPU run a real operating system, and real DOOM?"
+      say: "Qwenputer is a thirty two bit RISC-V processor compiled into the layers of Qwen three point five, four billion parameters. Every instruction is a few generated tokens, and the RAM is held in the model's recurrent state. We wanted to know whether that processor can run a real operating system, and then a real game."
+    - type: architecture
+      diagram: stack
+      heading: "The stack"
+      say: "On top sits a small kernel and shell in thirty two kibibytes of RAM. The shell starts doomd, which is the DMC100 DOOM engine with Freedoom data, running as ordinary RISC-V code. Below that is the Qwenputer circuit inside Qwen three point five, which executes it one instruction at a time."
+    - type: cards
+      heading: "Three ways to run the same CPU"
+      cards:
+        - {title: T0, sub: "rv32_fast, C emulator", lines: ["Fast host twin of the CPU", "Plans chunks, renders pixels", "The live demo runs here"]}
+        - {title: T1, sub: "reference CPU, the oracle", lines: ["Upstream Qwenputer reference", "Every model token is compared with it", "One wrong token is a divergence"]}
+        - {title: T2, sub: "the real Qwen model on a GPU", lines: ["Executes the instructions in its weights", "About three to four thousand instructions per second", "The point of the project"]}
+      footer: "T0 and T1 plan and check; T2 is the Qwen model itself"
+      say: "The same program can run three ways. T zero is our fast C emulator. T one is the upstream reference CPU, which acts as the oracle. T two is the real Qwen model on a GPU. In a model run, every token the model produces is compared with the oracle, and a single mismatch would count as a divergence."
+    - type: stat
+      number: frames_verified
+      kicker: "frames of the 3-second E1M1 clip with a model-verified instruction trace"
+      label: "of {{ n.frames.text }} frames"
+      sub: "{{ n.chunks.text }} chunks, {{ n.instr_raw.text }} instructions, zero divergence"
+      say: "The headline result is the three second DOOM clip. Forty five frames of E1M1 at fifteen frames per second. Its instruction trace was executed by the Qwen model in {{ n.chunks.numtext }} separate chunks, {{ n.instr_raw.numtext }} instructions in total, in lockstep with the oracle, with zero divergence."
+    - type: chart
+      chart: frame_instr
+      say: "This is the cost of each frame, in millions of instructions. The first frame includes boot and level load, {{ n.first_frame_m.numtext }} million. After that every frame costs between {{ n.min_frame_m.numtext }} and {{ n.max_frame_m.numtext }} million instructions."
+    - type: chart
+      chart: lane_hours
+      gif: assets/lane_hours.gif
+      gif_start: 0.4
+      gif_end: 8
+      gif_width: 900
+      gif_fps: 10
+      say: "The chunks ran in parallel on three lanes: {{ n.modal_chunks.numtext }} on Modal A100s, {{ n.lambda_chunks.numtext }} on Lambda A100s and {{ n.aws_chunks.numtext }} on AWS A10Gs. Together that is about {{ n.wall_h.numtext }} hours of GPU time, for three seconds of game."
+    - type: chart
+      chart: typed_instr
+      say: "A second, separate run typed the commands into the shell: help, ls, and run slash bin slash doomd, then followed the first three DOOM frame markers. That is {{ n.typed_instr.numtext }} instructions across {{ n.typed_segments.numtext }} segments, again with zero divergence."
+    - type: terminal
+      heading: "Try the live demo (host emulator, tier T0)"
+      lines:
+        - {cmd: "make check"}
+        - {out: "kernel, layout, reference CPU, unit tests"}
+        - {cmd: "make live-doom"}
+        - {out: "QwenOS boots, shell prompt, type doom"}
+      say: "You can play with it yourself. Make live doom boots QwenOS in a terminal and drops you at a shell prompt. Be clear about what that is: it is the host emulator, tier T zero, running the same kernel, shell and DOOM, not the Qwen model."
+    - type: caveats
+      heading: "What is real, and what is not"
+      bullets:
+        - "The model verified the instruction trace; the clip's pixels came from the emulator"
+        - "Keys are scripted or injected by the host, the clock is virtual"
+        - "The disk is host-served; {{ n.chunks.text }} boundary instructions run on the host"
+        - "Far from real time: minutes of GPU time per displayed frame"
+      say: "Now what is real and what is not. For the clip, the model verified the instruction trace and the frame markers; the pixels were read out of memory by the emulator. Keys are scripted, the clock is virtual, the disk is served by the host, and thirty five boundary instructions run on the host. And it is nowhere near real time: a displayed frame costs minutes of GPU time."
+    - type: idea
+      heading: "What it does show"
+      bullets:
+        - "A real kernel, shell and DOOM engine fit in 32 KiB of RAM"
+        - "A cold boot to the first frame marker ran on the model: {{ n.boot_instr.text }} instructions"
+        - "The model-driven runs matched the oracle token for token"
+      say: "What it does show is that a real kernel, a shell and the DOOM engine fit into thirty two kibibytes, and that a cold boot to the first frame marker ran on the model, {{ n.boot_instr.numtext }} instructions in {{ n.boot_segments.numtext }} segments. In every model run listed in the repo, the model's tokens matched the oracle."
+    - type: end
+      title: QwenOS
+      subtitle: "Code, ledgers and honest limits are in the repo"
+      say: "The code, the per-chunk ledger and the full list of limits are in the repo."
+
+charts:
+  - id: frame_instr
+    type: line
+    title: "Guest instructions per displayed frame (millions), 45-frame E1M1 clip"
+    xlabel: frame
+    ylabel: "million instructions"
+    better: lower
+    file: docs/derived/readme_data.json
+    rows_path: frames
+    x: frame
+    y: instr_m
+  - id: lane_hours
+    type: bar
+    title: "Model wall time by GPU lane, 35 chunks (hours)"
+    better: lower
+    file: docs/derived/readme_data.json
+    rows_path: lanes
+    label: lane
+    y: wall_h
+    fmt: "{:.2f}"
+    unit: " h"
+  - id: typed_instr
+    type: bar
+    title: "Typed flow on the model: instructions per step (millions)"
+    better: lower
+    file: docs/derived/readme_data.json
+    rows_path: typed
+    label: step
+    y: instr_m
+    fmt: "{:.2f}"
+    unit: " M"
+
+tables:
+  - id: lanes_tbl
+    title: "Where the 35 chunks of the clip ran"
+    file: docs/derived/readme_data.json
+    rows_path: lanes
+    columns:
+      - {key: lane, title: Lane}
+      - {key: chunks, title: Chunks, align: right}
+      - {key: instr, title: Instructions, align: right, fmt: "{:,.0f}"}
+      - {key: wall_h, title: "Model wall time (h)", align: right, fmt: "{:.2f}"}
+  - id: typed_tbl
+    title: "Typed flow on the model (Modal A100): cold boot, help, ls, run /bin/doomd, frame markers 1 to 3"
+    file: docs/derived/readme_data.json
+    rows_path: typed
+    columns:
+      - {key: step, title: Step}
+      - {key: segments, title: Segments, align: right}
+      - {key: instr, title: Instructions, align: right, fmt: "{:,.0f}"}
+      - {key: tokens, title: Chip tokens, align: right, fmt: "{:,.0f}"}
+      - {key: instr_per_s, title: "instr/s", align: right, fmt: "{:,.0f}"}
+      - {key: gpu, title: GPU}
+  - id: chunks_tbl
+    title: "All 35 clip chunks (from the provenance ledger)"
+    file: docs/derived/readme_data.json
+    rows_path: chunks
+    columns:
+      - {key: chunk, title: Chunk}
+      - {key: instr, title: Instructions, align: right, fmt: "{:,.0f}"}
+      - {key: tokens, title: Chip tokens, align: right, fmt: "{:,.0f}"}
+      - {key: lane, title: Lane}
+      - {key: wall_s, title: "Wall s", align: right, fmt: "{:,.1f}"}
+
+diagrams:
+  - id: stack
+    title: "QwenOS on a CPU inside Qwen3.5-4B, checked token by token"
+    nodes:
+      - {id: you, label: "You / host script", sub: "keys, scripted input", col: 0, row: 0, kind: io}
+      - {id: sh, label: "Shell + kernel", sub: "RV32IM, 32 KiB RAM", col: 1, row: 0}
+      - {id: doom, label: "doomd", sub: "DMC100-Doom + Freedoom", col: 2, row: 0, kind: accent}
+      - {id: cpu, label: "Qwenputer in Qwen3.5-4B", sub: "instructions as tokens, RAM in state", col: 2, row: 1, kind: accent}
+      - {id: orc, label: "Lockstep oracle", sub: "every token compared", col: 1, row: 1, kind: store}
+      - {id: out, label: "Frames", sub: "BYTE tokens / emulator pixels", col: 0, row: 1, kind: io}
+    edges:
+      - {from: you, to: sh, label: key ring}
+      - {from: sh, to: doom, label: run /bin/doomd}
+      - {from: doom, to: cpu}
+      - {from: cpu, to: orc, label: tokens}
+      - {from: cpu, to: out}
+
+sections:
+  - title: At a glance
+    emoji: "📊"
+    id: results
+    body: "Measured results of the 3-second E1M1 clip and the typed flow, read from the provenance ledger ([`docs/CLIP_LEDGER.md`](docs/CLIP_LEDGER.md)) and `docs/research/typed-flow/`."
+    highlights:
+      - {label: "Clip frames model-verified", number: frames_verified}
+      - {label: "Model chunks", number: chunks}
+      - {label: "Guest instructions", number: instr_m}
+      - {label: "Chip tokens", number: tokens_m}
+    charts: [frame_instr, lane_hours, typed_instr]
+    images:
+      - {src: video/preview.gif, alt: "animated overview of the explainer video", width: "70%"}
+    tables: [lanes_tbl, typed_tbl]
+    details:
+      - summary: "All {{ n.chunks.text }} clip chunks"
+        tables: [chunks_tbl]
+    diagrams: [stack]
+  - {title: "Watch it boot, then play it", emoji: "🎥", body_file: docs/readme/00-watch-it-boot-then-play-it.md}
+  - {title: "How it works in one picture", emoji: "🧩", body_file: docs/readme/01-how-it-works-in-one-picture.md}
+  - {title: "Where the pixels come from", emoji: "🖼️", body_file: docs/readme/02-where-the-pixels-come-from.md}
+  - {title: "Three ways to run the same CPU (T0, T1, T2)", emoji: "🧬", body_file: docs/readme/03-three-ways-to-run-the-same-cpu-t0-t1-t2.md}
+  - {title: "How a keypress reaches the OS", emoji: "⌨️", body_file: docs/readme/04-how-a-keypress-reaches-the-os.md}
+  - {title: "What is this?", emoji: "💡", body_file: docs/readme/05-what-is-this.md}
+  - {title: "What you can do in 30 seconds", emoji: "⚡", body_file: docs/readme/06-what-you-can-do-in-30-seconds.md}
+  - {title: "How fast is it, really?", emoji: "🐢", body_file: docs/readme/08-how-fast-is-it-really.md}
+  - {title: "The numbers", emoji: "📊", body_file: docs/readme/09-the-numbers.md}
+  - {title: "What is real and what is not", emoji: "🔍", body_file: docs/readme/10-what-is-real-and-what-is-not.md}
+  - {title: "The 3-second clip", emoji: "🎬", body_file: docs/readme/11-the-3-second-clip.md}
+  - {title: "FAQ for humans", emoji: "🙋", body_file: docs/readme/12-faq-for-humans.md}
+  - {title: "Glossary", emoji: "📖", body_file: docs/readme/13-glossary.md}
+  - {title: "Get the engine and Freedoom", emoji: "📦", body_file: docs/readme/15-get-the-engine-and-freedoom.md}
+  - {title: "Tests", emoji: "🧪", body_file: docs/readme/16-tests.md}
+  - {title: "Hardware and toolchain", emoji: "🖥️", body_file: docs/readme/17-hardware-and-toolchain.md}
+  - {title: "License", emoji: "📜", body_file: docs/readme/18-license.md}
+
+repo_map:
+  - {path: kernel/, desc: "the QwenOS kernel (RV32IM)"}
+  - {path: apps/, desc: "shell and user programs, including doomd"}
+  - {path: ports/, desc: "the DOOM engine port (DMC100-Doom + Freedoom data)"}
+  - {path: engine-patches/, desc: "QwenOS edits to the engine"}
+  - {path: tools/, desc: "emulator, model drivers, chunk-ROM planner, regression scripts, readme_data.py"}
+  - {path: tests/, desc: "unit tests and frame/state goldens"}
+  - {path: docs/, desc: "ledgers, research notes, animations, optimization history"}
+  - {path: docs/CLIP_LEDGER.md, desc: "per-frame and per-chunk provenance of the 3-second clip"}
+  - {path: docs/OPTIMIZATION_HISTORY.md, desc: "earlier steps moved out of the README"}
+  - {path: docs/readme/, desc: "the long README sections, included verbatim by README.spec.yml"}
+  - {path: README.spec.yml, desc: "spec for video-readme-maker: README, charts and the explainer video"}
+  - {path: video/, desc: "qwenos_explainer.mp4, .srt, poster.png, preview.gif (generated)", generated: true}
+  - {path: assets/, desc: "generated hero, charts, diagram and GIFs", generated: true}
+footer: "Generated with video-readme-maker from README.spec.yml and the ledgers in docs/."

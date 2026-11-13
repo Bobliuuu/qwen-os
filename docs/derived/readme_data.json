@@ -1,0 +1,783 @@
+{
+ "frames": [
+  {
+   "frame": 1,
+   "tic": 0,
+   "instr": 3417727,
+   "instr_m": 3.418,
+   "chunks": "c00+c01",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 2,
+   "tic": 2,
+   "instr": 2432636,
+   "instr_m": 2.433,
+   "chunks": "c02",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 3,
+   "tic": 4,
+   "instr": 2458771,
+   "instr_m": 2.459,
+   "chunks": "c03",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 4,
+   "tic": 6,
+   "instr": 2437969,
+   "instr_m": 2.438,
+   "chunks": "c04",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 5,
+   "tic": 9,
+   "instr": 2501405,
+   "instr_m": 2.501,
+   "chunks": "c05",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 6,
+   "tic": 11,
+   "instr": 2528685,
+   "instr_m": 2.529,
+   "chunks": "c06",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 7,
+   "tic": 13,
+   "instr": 2596858,
+   "instr_m": 2.597,
+   "chunks": "c07",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 8,
+   "tic": 16,
+   "instr": 2782065,
+   "instr_m": 2.782,
+   "chunks": "c08",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 9,
+   "tic": 18,
+   "instr": 2686905,
+   "instr_m": 2.687,
+   "chunks": "c09",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 10,
+   "tic": 20,
+   "instr": 2264907,
+   "instr_m": 2.265,
+   "chunks": "c10",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 11,
+   "tic": 23,
+   "instr": 2335547,
+   "instr_m": 2.336,
+   "chunks": "c11",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 12,
+   "tic": 25,
+   "instr": 2254038,
+   "instr_m": 2.254,
+   "chunks": "c12",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 13,
+   "tic": 27,
+   "instr": 2148527,
+   "instr_m": 2.149,
+   "chunks": "c13",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 14,
+   "tic": 30,
+   "instr": 2047702,
+   "instr_m": 2.048,
+   "chunks": "c14",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 15,
+   "tic": 32,
+   "instr": 2078255,
+   "instr_m": 2.078,
+   "chunks": "c15",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 16,
+   "tic": 34,
+   "instr": 2176807,
+   "instr_m": 2.177,
+   "chunks": "c16",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 17,
+   "tic": 37,
+   "instr": 2294193,
+   "instr_m": 2.294,
+   "chunks": "c17",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 18,
+   "tic": 39,
+   "instr": 2117038,
+   "instr_m": 2.117,
+   "chunks": "c18",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 19,
+   "tic": 41,
+   "instr": 2036052,
+   "instr_m": 2.036,
+   "chunks": "c19",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 20,
+   "tic": 44,
+   "instr": 2094260,
+   "instr_m": 2.094,
+   "chunks": "c20",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 21,
+   "tic": 46,
+   "instr": 1986855,
+   "instr_m": 1.987,
+   "chunks": "c21",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 22,
+   "tic": 48,
+   "instr": 1864166,
+   "instr_m": 1.864,
+   "chunks": "c22",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 23,
+   "tic": 51,
+   "instr": 1619091,
+   "instr_m": 1.619,
+   "chunks": "c23",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 24,
+   "tic": 53,
+   "instr": 1477824,
+   "instr_m": 1.478,
+   "chunks": "c23",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 25,
+   "tic": 55,
+   "instr": 1415124,
+   "instr_m": 1.415,
+   "chunks": "c24",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 26,
+   "tic": 58,
+   "instr": 1186718,
+   "instr_m": 1.187,
+   "chunks": "c24",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 27,
+   "tic": 60,
+   "instr": 1317294,
+   "instr_m": 1.317,
+   "chunks": "c25",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 28,
+   "tic": 62,
+   "instr": 1066674,
+   "instr_m": 1.067,
+   "chunks": "c25",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 29,
+   "tic": 65,
+   "instr": 1403779,
+   "instr_m": 1.404,
+   "chunks": "c26",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 30,
+   "tic": 67,
+   "instr": 1145661,
+   "instr_m": 1.146,
+   "chunks": "c26",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 31,
+   "tic": 69,
+   "instr": 1215185,
+   "instr_m": 1.215,
+   "chunks": "c27",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 32,
+   "tic": 72,
+   "instr": 1338415,
+   "instr_m": 1.338,
+   "chunks": "c27",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 33,
+   "tic": 74,
+   "instr": 1338636,
+   "instr_m": 1.339,
+   "chunks": "c28",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 34,
+   "tic": 76,
+   "instr": 1607895,
+   "instr_m": 1.608,
+   "chunks": "c28",
+   "lane": "Modal A100",
+   "verified": true
+  },
+  {
+   "frame": 35,
+   "tic": 79,
+   "instr": 1316671,
+   "instr_m": 1.317,
+   "chunks": "c29",
+   "lane": "AWS A10G",
+   "verified": true
+  },
+  {
+   "frame": 36,
+   "tic": 81,
+   "instr": 1229437,
+   "instr_m": 1.229,
+   "chunks": "c29",
+   "lane": "AWS A10G",
+   "verified": true
+  },
+  {
+   "frame": 37,
+   "tic": 83,
+   "instr": 1323023,
+   "instr_m": 1.323,
+   "chunks": "c30",
+   "lane": "Lambda A100",
+   "verified": true
+  },
+  {
+   "frame": 38,
+   "tic": 86,
+   "instr": 1242864,
+   "instr_m": 1.243,
+   "chunks": "c30",
+   "lane": "Lambda A100",
+   "verified": true
+  },
+  {
+   "frame": 39,
+   "tic": 88,
+   "instr": 1087764,
+   "instr_m": 1.088,
+   "chunks": "c31",
+   "lane": "Lambda A100",
+   "verified": true
+  },
+  {
+   "frame": 40,
+   "tic": 90,
+   "instr": 1226680,
+   "instr_m": 1.227,
+   "chunks": "c31",
+   "lane": "Lambda A100",
+   "verified": true
+  },
+  {
+   "frame": 41,
+   "tic": 93,
+   "instr": 1330947,
+   "instr_m": 1.331,
+   "chunks": "c32",
+   "lane": "Lambda A100",
+   "verified": true
+  },
+  {
+   "frame": 42,
+   "tic": 95,
+   "instr": 1124058,
+   "instr_m": 1.124,
+   "chunks": "c32",
+   "lane": "Lambda A100",
+   "verified": true
+  },
+  {
+   "frame": 43,
+   "tic": 97,
+   "instr": 1104527,
+   "instr_m": 1.105,
+   "chunks": "c33",
+   "lane": "AWS A10G",
+   "verified": true
+  },
+  {
+   "frame": 44,
+   "tic": 100,
+   "instr": 1315244,
+   "instr_m": 1.315,
+   "chunks": "c33",
+   "lane": "AWS A10G",
+   "verified": true
+  },
+  {
+   "frame": 45,
+   "tic": 102,
+   "instr": 1090708,
+   "instr_m": 1.091,
+   "chunks": "c34",
+   "lane": "AWS A10G",
+   "verified": true
+  }
+ ],
+ "chunks": [
+  {
+   "chunk": "c00",
+   "instr": 1819896,
+   "tokens": 2564928,
+   "lane": "Modal A100",
+   "wall_s": 2471.1,
+   "ok": true
+  },
+  {
+   "chunk": "c01",
+   "instr": 1597830,
+   "tokens": 2232547,
+   "lane": "Modal A100",
+   "wall_s": 1994.3,
+   "ok": true
+  },
+  {
+   "chunk": "c02",
+   "instr": 2432641,
+   "tokens": 3481364,
+   "lane": "Modal A100",
+   "wall_s": 5493.0,
+   "ok": true
+  },
+  {
+   "chunk": "c03",
+   "instr": 2458771,
+   "tokens": 3518372,
+   "lane": "Modal A100",
+   "wall_s": 4732.6,
+   "ok": true
+  },
+  {
+   "chunk": "c04",
+   "instr": 2437969,
+   "tokens": 3489392,
+   "lane": "Modal A100",
+   "wall_s": 2351.7,
+   "ok": true
+  },
+  {
+   "chunk": "c05",
+   "instr": 2501405,
+   "tokens": 3584517,
+   "lane": "Modal A100",
+   "wall_s": 4957.5,
+   "ok": true
+  },
+  {
+   "chunk": "c06",
+   "instr": 2528685,
+   "tokens": 3632609,
+   "lane": "Modal A100",
+   "wall_s": 2552.2,
+   "ok": true
+  },
+  {
+   "chunk": "c07",
+   "instr": 2596858,
+   "tokens": 3724842,
+   "lane": "Modal A100",
+   "wall_s": 4205.7,
+   "ok": true
+  },
+  {
+   "chunk": "c08",
+   "instr": 2782065,
+   "tokens": 3986282,
+   "lane": "Modal A100",
+   "wall_s": 6034.9,
+   "ok": true
+  },
+  {
+   "chunk": "c09",
+   "instr": 2686905,
+   "tokens": 3826544,
+   "lane": "Modal A100",
+   "wall_s": 5835.4,
+   "ok": true
+  },
+  {
+   "chunk": "c10",
+   "instr": 2264907,
+   "tokens": 3228958,
+   "lane": "Modal A100",
+   "wall_s": 2088.7,
+   "ok": true
+  },
+  {
+   "chunk": "c11",
+   "instr": 2335547,
+   "tokens": 3334059,
+   "lane": "Modal A100",
+   "wall_s": 1350.8,
+   "ok": true
+  },
+  {
+   "chunk": "c12",
+   "instr": 2254038,
+   "tokens": 3225633,
+   "lane": "Modal A100",
+   "wall_s": 1249.6,
+   "ok": true
+  },
+  {
+   "chunk": "c13",
+   "instr": 2148527,
+   "tokens": 3080501,
+   "lane": "Modal A100",
+   "wall_s": 1195.6,
+   "ok": true
+  },
+  {
+   "chunk": "c14",
+   "instr": 2047702,
+   "tokens": 2950102,
+   "lane": "Modal A100",
+   "wall_s": 1143.9,
+   "ok": true
+  },
+  {
+   "chunk": "c15",
+   "instr": 2078255,
+   "tokens": 2990224,
+   "lane": "Modal A100",
+   "wall_s": 1247.6,
+   "ok": true
+  },
+  {
+   "chunk": "c16",
+   "instr": 2176807,
+   "tokens": 3111636,
+   "lane": "Modal A100",
+   "wall_s": 1299.2,
+   "ok": true
+  },
+  {
+   "chunk": "c17",
+   "instr": 2294193,
+   "tokens": 3260708,
+   "lane": "Modal A100",
+   "wall_s": 1392.6,
+   "ok": true
+  },
+  {
+   "chunk": "c18",
+   "instr": 2117038,
+   "tokens": 3035715,
+   "lane": "Modal A100",
+   "wall_s": 1443.0,
+   "ok": true
+  },
+  {
+   "chunk": "c19",
+   "instr": 2036052,
+   "tokens": 2947021,
+   "lane": "Modal A100",
+   "wall_s": 1246.1,
+   "ok": true
+  },
+  {
+   "chunk": "c20",
+   "instr": 2094260,
+   "tokens": 3018532,
+   "lane": "Modal A100",
+   "wall_s": 1285.8,
+   "ok": true
+  },
+  {
+   "chunk": "c21",
+   "instr": 1986855,
+   "tokens": 2860493,
+   "lane": "Modal A100",
+   "wall_s": 1231.4,
+   "ok": true
+  },
+  {
+   "chunk": "c22",
+   "instr": 1864166,
+   "tokens": 2688213,
+   "lane": "Modal A100",
+   "wall_s": 1165.8,
+   "ok": true
+  },
+  {
+   "chunk": "c23",
+   "instr": 3096915,
+   "tokens": 4460668,
+   "lane": "Modal A100",
+   "wall_s": 1984.7,
+   "ok": true
+  },
+  {
+   "chunk": "c24",
+   "instr": 2601842,
+   "tokens": 3770019,
+   "lane": "Modal A100",
+   "wall_s": 1463.6,
+   "ok": true
+  },
+  {
+   "chunk": "c25",
+   "instr": 2383968,
+   "tokens": 3476165,
+   "lane": "Modal A100",
+   "wall_s": 1394.9,
+   "ok": true
+  },
+  {
+   "chunk": "c26",
+   "instr": 2549440,
+   "tokens": 3702596,
+   "lane": "Modal A100",
+   "wall_s": 1457.0,
+   "ok": true
+  },
+  {
+   "chunk": "c27",
+   "instr": 2553600,
+   "tokens": 3677006,
+   "lane": "Modal A100",
+   "wall_s": 1469.9,
+   "ok": true
+  },
+  {
+   "chunk": "c28",
+   "instr": 2946531,
+   "tokens": 4205280,
+   "lane": "Modal A100",
+   "wall_s": 1738.2,
+   "ok": true
+  },
+  {
+   "chunk": "c29",
+   "instr": 2546108,
+   "tokens": 3660576,
+   "lane": "AWS A10G",
+   "wall_s": 1755.7,
+   "ok": true
+  },
+  {
+   "chunk": "c30",
+   "instr": 2565887,
+   "tokens": 3686177,
+   "lane": "Lambda A100",
+   "wall_s": 1641.3,
+   "ok": true
+  },
+  {
+   "chunk": "c31",
+   "instr": 2314444,
+   "tokens": 3344358,
+   "lane": "Lambda A100",
+   "wall_s": 1495.5,
+   "ok": true
+  },
+  {
+   "chunk": "c32",
+   "instr": 2455005,
+   "tokens": 3524411,
+   "lane": "Lambda A100",
+   "wall_s": 1576.0,
+   "ok": true
+  },
+  {
+   "chunk": "c33",
+   "instr": 2419771,
+   "tokens": 3476641,
+   "lane": "AWS A10G",
+   "wall_s": 1678.0,
+   "ok": true
+  },
+  {
+   "chunk": "c34",
+   "instr": 1090708,
+   "tokens": 1575918,
+   "lane": "AWS A10G",
+   "wall_s": 775.0,
+   "ok": true
+  }
+ ],
+ "lanes": [
+  {
+   "lane": "Modal A100",
+   "chunks": 29,
+   "wall_s": 67476.79999999999,
+   "instr": 67673668,
+   "wall_h": 18.74,
+   "label": "Modal A100"
+  },
+  {
+   "lane": "AWS A10G",
+   "chunks": 3,
+   "wall_s": 4208.7,
+   "instr": 6056587,
+   "wall_h": 1.17,
+   "label": "AWS A10G"
+  },
+  {
+   "lane": "Lambda A100",
+   "chunks": 3,
+   "wall_s": 4712.8,
+   "instr": 7335336,
+   "wall_h": 1.31,
+   "label": "Lambda A100"
+  }
+ ],
+ "typed": [
+  {
+   "step": "boot to prompt, help",
+   "instr_m": 1.246,
+   "instr": 1246050,
+   "tokens": 1766142,
+   "segments": 24,
+   "instr_per_s": 2242.4,
+   "gpu": "A100-SXM4-40GB",
+   "mode": "MODEL"
+  },
+  {
+   "step": "ls",
+   "instr_m": 1.031,
+   "instr": 1031152,
+   "tokens": 1460263,
+   "segments": 1,
+   "instr_per_s": 2398.4,
+   "gpu": "A100-SXM4-40GB",
+   "mode": "MODEL"
+  },
+  {
+   "step": "run /bin/doomd, first marker",
+   "instr_m": 1.058,
+   "instr": 1057870,
+   "tokens": 1467197,
+   "segments": 1,
+   "instr_per_s": 2210.2,
+   "gpu": "A100-SXM4-80GB",
+   "mode": "MODEL"
+  },
+  {
+   "step": "frame markers 2 and 3",
+   "instr_m": 4.904,
+   "instr": 4904118,
+   "tokens": 7015050,
+   "segments": 1,
+   "instr_per_s": 2680.0,
+   "gpu": "A100-SXM4-40GB",
+   "mode": "MODEL"
+  }
+ ],
+ "totals": {
+  "frames": 45,
+  "frames_verified": 45,
+  "chunks": 35,
+  "chunks_ok": 35,
+  "instr": 81065591,
+  "tokens": 116333007,
+  "wall_s": 76398.3,
+  "typed_instr": 8239190,
+  "typed_tokens": 11708652,
+  "typed_segments": 27,
+  "min_frame_instr": 1066674,
+  "max_frame_instr": 2782065,
+  "last_frame_instr": 1090708,
+  "first_frame_instr": 3417727
+ },
+ "boot": {
+  "instr": 1552382,
+  "segments": 292,
+  "tokens": 2091327,
+  "tok_per_instr": 1.3451,
+  "instr_per_s": 1079.5,
+  "gpu": "A100-SXM4-40GB"
+ }
+}

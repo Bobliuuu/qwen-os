@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 324" width="980" height="324" role="img" aria-label="Typed flow on the model: instructions per step (millions)">
+<rect width="980" height="324" rx="16" fill="#0b0f17"/>
+<text x="32" y="44" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-weight="700" font-size="22" fill="#e6edf6">Typed flow on the model: instructions per step (millions)</text>
+<text x="270" y="118" text-anchor="end" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#8a98ad" font-weight="400">boot to prompt, help</text>
+<rect x="284" y="96" width="138.7" height="30" rx="6" fill="#263044"/>
+<text x="432.7" y="117" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#e6edf6">1.25 M</text>
+<text x="270" y="164" text-anchor="end" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#8a98ad" font-weight="400">ls</text>
+<rect x="284" y="142" width="114.8" height="30" rx="6" fill="#263044"/>
+<text x="408.8" y="163" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#e6edf6">1.03 M</text>
+<text x="270" y="210" text-anchor="end" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#8a98ad" font-weight="400">run /bin/doomd, first marker</text>
+<rect x="284" y="188" width="117.8" height="30" rx="6" fill="#263044"/>
+<text x="411.8" y="209" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#e6edf6">1.06 M</text>
+<text x="270" y="256" text-anchor="end" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#8a98ad" font-weight="400">frame markers 2 and 3</text>
+<rect x="284" y="234" width="546.0" height="30" rx="6" fill="#263044"/>
+<text x="840.0" y="255" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#e6edf6">4.90 M</text>
+<text x="948" y="310" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">source: docs/derived/readme_data.json · lower is better</text>
+</svg>

@@ -1,0 +1,188 @@
+1
+00:00:00,400 --> 00:00:00,836
+QwenOS.
+
+2
+00:00:00,836 --> 00:00:06,692
+A tiny operating system, and the real DOOM engine, running on a computer that lives inside the
+
+3
+00:00:06,692 --> 00:00:08,436
+weights of a language model.
+
+4
+00:00:08,436 --> 00:00:13,046
+This is a short, honest tour of what it is and what was actually verified.
+
+5
+00:00:14,050 --> 00:00:18,924
+Qwenputer is a thirty two bit RISC-V processor compiled into the layers of Qwen three point
+
+6
+00:00:18,924 --> 00:00:20,531
+five, four billion parameters.
+
+7
+00:00:20,531 --> 00:00:25,672
+Every instruction is a few generated tokens, and the RAM is held in the model's recurrent state.
+
+8
+00:00:25,672 --> 00:00:30,760
+We wanted to know whether that processor can run a real operating system, and then a real game.
+
+9
+00:00:31,760 --> 00:00:35,677
+On top sits a small kernel and shell in thirty two kibibytes of RAM.
+
+10
+00:00:35,677 --> 00:00:41,148
+The shell starts doomd, which is the DMC100 DOOM engine with Freedoom data, running as ordinary
+
+11
+00:00:41,148 --> 00:00:41,839
+RISC-V code.
+
+12
+00:00:41,839 --> 00:00:46,850
+Below that is the Qwenputer circuit inside Qwen three point five, which executes it one
+
+13
+00:00:46,850 --> 00:00:48,117
+instruction at a time.
+
+14
+00:00:49,120 --> 00:00:51,310
+The same program can run three ways.
+
+15
+00:00:51,310 --> 00:00:53,134
+T zero is our fast C emulator.
+
+16
+00:00:53,134 --> 00:00:56,905
+T one is the upstream reference CPU, which acts as the oracle.
+
+17
+00:00:56,905 --> 00:00:59,216
+T two is the real Qwen model on a GPU.
+
+18
+00:00:59,216 --> 00:01:04,569
+In a model run, every token the model produces is compared with the oracle, and a single
+
+19
+00:01:04,569 --> 00:01:06,819
+mismatch would count as a divergence.
+
+20
+00:01:07,820 --> 00:01:11,065
+The headline result is the three second DOOM clip.
+
+21
+00:01:11,065 --> 00:01:14,635
+Forty five frames of E1M1 at fifteen frames per second.
+
+22
+00:01:14,635 --> 00:01:20,217
+Its instruction trace was executed by the Qwen model in 35 separate chunks, 81,065,591
+
+23
+00:01:20,217 --> 00:01:24,955
+instructions in total, in lockstep with the oracle, with zero divergence.
+
+24
+00:01:25,950 --> 00:01:29,749
+This is the cost of each frame, in millions of instructions.
+
+25
+00:01:29,749 --> 00:01:33,484
+The first frame includes boot and level load, 3.42 million.
+
+26
+00:01:33,484 --> 00:01:38,043
+After that every frame costs between 1.07 and 2.78 million instructions.
+
+27
+00:01:39,040 --> 00:01:46,461
+The chunks ran in parallel on three lanes: 29 on Modal A100s, 3 on Lambda A100s and 3 on AWS
+
+28
+00:01:46,461 --> 00:01:46,945
+A10Gs.
+
+29
+00:01:46,945 --> 00:01:52,834
+Together that is about 21.2 hours of GPU time, for three seconds of game.
+
+30
+00:01:53,830 --> 00:02:00,472
+A second, separate run typed the commands into the shell: help, ls, and run slash bin slash
+
+31
+00:02:00,472 --> 00:02:04,559
+doomd, then followed the first three DOOM frame markers.
+
+32
+00:02:04,559 --> 00:02:10,252
+That is 8,239,190 instructions across 27 segments, again with zero divergence.
+
+33
+00:02:11,250 --> 00:02:13,019
+You can play with it yourself.
+
+34
+00:02:13,019 --> 00:02:17,383
+Make live doom boots QwenOS in a terminal and drops you at a shell prompt.
+
+35
+00:02:17,383 --> 00:02:22,691
+Be clear about what that is: it is the host emulator, tier T zero, running the same kernel
+
+36
+00:02:22,691 --> 00:02:24,755
+shell and DOOM, not the Qwen model.
+
+37
+00:02:25,760 --> 00:02:27,624
+Now what is real and what is not.
+
+38
+00:02:27,624 --> 00:02:32,876
+For the clip, the model verified the instruction trace and the frame markers; the pixels were
+
+39
+00:02:32,876 --> 00:02:34,852
+read out of memory by the emulator.
+
+40
+00:02:34,852 --> 00:02:39,822
+Keys are scripted, the clock is virtual, the disk is served by the host, and thirty five
+
+41
+00:02:39,822 --> 00:02:41,968
+boundary instructions run on the host.
+
+42
+00:02:41,968 --> 00:02:46,373
+And it is nowhere near real time: a displayed frame costs minutes of GPU time.
+
+43
+00:02:47,370 --> 00:02:52,878
+What it does show is that a real kernel, a shell and the DOOM engine fit into thirty two
+
+44
+00:02:52,878 --> 00:02:58,198
+kibibytes, and that a cold boot to the first frame marker ran on the model, 1,552,382
+
+45
+00:02:58,198 --> 00:03:00,013
+instructions in 292 segments.
+
+46
+00:03:00,013 --> 00:03:04,833
+In every model run listed in the repo, the model's tokens matched the oracle.
+
+47
+00:03:05,830 --> 00:03:10,200
+The code, the per-chunk ledger and the full list of limits are in the repo.
+

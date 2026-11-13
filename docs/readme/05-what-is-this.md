@@ -1,0 +1,6 @@
+Imagine a computer made of attention layers. That is [Qwenputer](https://github.com/divagr18/qwenputer): a 32-bit RISC-V CPU (RV32IM) compiled into the layers of Qwen3.5, where every instruction is a few generated tokens.
+QwenOS is the little OS we gave it: a kernel, a shell, a keyboard, a 32x24 framebuffer and a block disk, all squeezed into **32 KiB of RAM** 🤏.
+Then we asked it to run a *real* DOOM engine ([DMC100-Doom](https://github.com/ArturBieniek4/DMC100-Doom) on [Freedoom](https://freedoom.github.io) data) as an ordinary program, `/bin/doomd`.
+Architecture is inspired by [bobliu-os](https://github.com/Bobliuuu/bobliu-os).
+
+> **Honest summary:** the whole thing works on an emulator, and the real Qwen model has verified, in lockstep: a cold boot to the first frame marker, the typed flow (`help`, `ls`, `run /bin/doomd`, first DOOM frame marker plus two more: 4 Modal A100 chunks, 8,239,190 instructions, 27 segments, zero divergence, 273 console bytes through marker 1 identical to the emulator; [details](docs/research/TYPED_FLOW_MODEL.md)), and all 45 frames of the first 3 s clip (35 chunks) as an instruction trace. In that clip the emulator read the pixels out of memory; now the model emits them; the number of frames done so far is in the progress line above. We do not claim 45 of 45 model-decoded frames until it is true.
